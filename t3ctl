@@ -132,7 +132,88 @@ async function wait(id, sec = 300) {
 }
 async function printLast(id, n) { const snap = await thread(id); for (const m of messages(snap).slice(-n)) console.log(`[${m.role}] ${m.text}`); }
 
-const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "diff", "files", "status", "raw"];
+// --- runtime requests (questions / approvals) ---
+const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
+function requestInfo(p, r) {
+  const it = (p.turnItems || []).find((i) => i.requestId === r.id && (i.type === "user_input_request" || i.type === "approval_request"));
+  const o = { requestId: r.id, kind: r.kind, status: r.status, createdAt: r.createdAt, answerable: r.status === "pending" && (r.responseCapability || {}).type !== "not_resumable" };
+  if (r.kind === "user_input") {
+    o.responseMode = (it && it.responseMode) || ((r.responseCapability || {}).type === "message" ? "message" : "live");
+    o.questions = ((it && it.questions) || []).map((q) => ({ id: q.id, header: q.header, question: q.question, options: (q.options || []).map((x) => ({ label: x.label, description: x.description, ...(x.value !== undefined ? { value: x.value } : {}) })),
+      multiSelect: !!q.multiSelect, allowCustomAnswer: q.allowCustomAnswer !== false, required: q.required !== false }));
+  } else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, appName: (it && it.appName) || null,
+    options: (it && it.options && it.options.length ? it.options : [{ decision: "accept", label: "Allow" }, { decision: "decline", label: "Deny" }]).map((x) => ({ decision: x.decision, label: x.label, ...(x.warning ? { warning: x.warning } : {}) })) };
+  if (r.answers) o.answers = r.answers; if (r.decision) o.decision = r.decision; if (r.resolvedAt) o.resolvedAt = r.resolvedAt;
+  return o;
+}
+const pendingOf = (p) => (p.runtimeRequests || []).filter((r) => r.status === "pending" && !SKIP_KINDS.has(r.kind)).map((r) => requestInfo(p, r));
+function printRequest(r) {
+  console.log(`request ${r.requestId}\n  kind=${r.kind}  opened ${r.createdAt}${r.answerable ? "" : "  (can't be answered any more)"}`);
+  for (const q of r.questions || []) {
+    console.log(`  [${q.id}] ${q.header}: ${q.question}${q.multiSelect ? "  (pick one or more)" : ""}`);
+    q.options.forEach((x, i) => console.log(`     ${i + 1}. ${x.label}${x.description && x.description !== x.label ? " - " + x.description : ""}`));
+    if (q.allowCustomAnswer) console.log("     (free-text answer allowed)");
+  }
+  if (r.approval) { console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
+}
+function matchOption(q, v) {
+  const s = String(v).trim(), n = norm(s);
+  const hit = q.options.find((x) => x.label === s || (x.value !== undefined && x.value === s)) || q.options.find((x) => norm(x.label) === n || (x.value !== undefined && norm(x.value) === n))
+    || (/^\d+$/.test(s) && q.options[+s - 1]);
+  return hit ? (hit.value ?? hit.label) : null;
+}
+function buildAnswer(q, v, allowText) { // v: string | string[]; returns the wire value or throws
+  const list = Array.isArray(v) ? v : [v];
+  if (q.multiSelect && Array.isArray(v)) { const out = list.map((x) => { const m = matchOption(q, x); if (m === null) throw new Error(`"${x}" is not an option for [${q.id}] (options: ${q.options.map((o) => o.label).join(" | ")})`); return m; }); if (!out.length) throw new Error(`no option picked for [${q.id}]`); return out; }
+  if (list.length !== 1) throw new Error(`[${q.id}] takes a single answer`);
+  const m = matchOption(q, list[0]); if (m !== null) return q.multiSelect ? [m] : m;
+  if (allowText && q.allowCustomAnswer && String(list[0]).trim()) return String(list[0]).trim();
+  throw new Error(`"${list[0]}" is not an option for [${q.id}] (options: ${q.options.map((o) => o.label).join(" | ")})${q.allowCustomAnswer ? "; use --text for a free-text answer" : ""}`);
+}
+async function pickRequest(t, o, wantApproval) {
+  const snap = await thread(t.id), p = snap.projection; let pend = pendingOf(p).filter((r) => (r.kind === "user_input") !== wantApproval);
+  if (o.request) pend = pend.filter((r) => r.requestId === String(o.request) || r.requestId.endsWith(String(o.request)));
+  else if (pend.length > 1 && t.pendingRuntimeRequest) pend = pend.filter((r) => r.requestId === t.pendingRuntimeRequest.id).concat(pend).slice(0, 1);
+  if (!pend.length) throw new Error(`NOT_PENDING: no open ${wantApproval ? "approval" : "question"}${o.request ? " with that --request id" : ""} in "${t.title}" (it may have been answered already)`);
+  if (!pend[0].answerable) throw new Error(`NOT_ANSWERABLE: that request can't be answered any more (the run ended). Send a follow-up instead.`);
+  return pend[0];
+}
+async function answer(o) {
+  const t = await findThread(o.thread);
+  if (o.decision) {
+    const r = await pickRequest(t, o, true); const d = String(o.decision);
+    if (!r.approval.options.some((x) => x.decision === d)) throw new Error(`--decision must be one of: ${r.approval.options.map((x) => x.decision).join(", ")}`);
+    await dispatch("runtime-request.respond", t.id, { requestId: r.requestId, decision: d });
+    return confirm(t, r, `decision=${d}`);
+  }
+  const r = await pickRequest(t, o, false); const qs = r.questions; let answers = {};
+  if (!qs.length) throw new Error("this question has no readable details; answer it in T3");
+  if (o.answers !== undefined) {
+    let a; try { a = JSON.parse(String(o.answers)); } catch { throw new Error("--answers must be JSON, e.g. '{\"<question id>\":\"<option label>\"}'"); }
+    if (typeof a !== "object" || !a || Array.isArray(a)) throw new Error("--answers must be a JSON object keyed by question id");
+    for (const k of Object.keys(a)) if (!qs.some((q) => q.id === k)) throw new Error(`unknown question id "${k}" (ids: ${qs.map((q) => q.id).join(", ")})`);
+    for (const q of qs) if (a[q.id] !== undefined) answers[q.id] = buildAnswer(q, a[q.id], true);
+  } else if (o.pick !== undefined || o.text !== undefined) {
+    if (qs.length !== 1) throw new Error(`this request has ${qs.length} questions; use --answers '{"<id>": ...}' (ids: ${qs.map((q) => q.id).join(", ")})`);
+    const q = qs[0];
+    if (o.text !== undefined) { if (!q.allowCustomAnswer) throw new Error("this question only accepts one of its options (--pick)"); answers[q.id] = String(o.text).trim(); if (!answers[q.id]) throw new Error("--text is empty"); }
+    else { let v = String(o.pick); if (v.startsWith("[")) { try { v = JSON.parse(v); } catch { throw new Error("--pick list must be a JSON array of labels"); } } answers[q.id] = buildAnswer(q, v, false); }
+  } else throw new Error("usage: answer --thread <id|title> [--request <id>] (--pick '<option label>' | --text '<free text>' | --answers '<json>' | --decision <d>)");
+  for (const q of qs) if (answers[q.id] === undefined && q.required) throw new Error(`question [${q.id}] "${q.header}" needs an answer too`);
+  if (r.responseMode === "message") for (const k of Object.keys(answers)) if (Array.isArray(answers[k])) answers[k] = answers[k].join(", ");
+  await dispatch("runtime-request.respond", t.id, { requestId: r.requestId, answers });
+  return confirm(t, r, Object.entries(answers).map(([k, v]) => `${(qs.find((q) => q.id === k) || {}).header || k} = ${Array.isArray(v) ? v.join(", ") : v}`).join("; "));
+}
+async function confirm(t, r, what) {
+  for (let i = 0; i < 10; i++) {
+    const p = (await thread(t.id)).projection; const now = (p.runtimeRequests || []).find((x) => x.id === r.requestId);
+    if (now && now.status !== "pending") { console.log(`answered "${t.title}": ${what}  (request ${now.status})`); return; }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  throw new Error(`SENT_UNCONFIRMED: the answer was sent but the request still shows pending in "${t.title}"; check with: t3ctl pending --thread ${t.id}`);
+}
+
+const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw"];
 (async () => {
   const cmd = process.argv[2], o = args();
   if (CMDS.includes(cmd)) init();
@@ -163,7 +244,9 @@ const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", 
   else if (cmd === "settle" || cmd === "unsettle") { const t = await findThread(o.thread); await dispatch(cmd === "settle" ? "thread.settle" : "thread.unsettle", t.id, cmd === "unsettle" ? { reason: "user" } : {}); const n = (await shell()).threads.find((x) => x.id === t.id); console.log(`${cmd}d "${t.title}"  settledAt=${n.settledAt}  settledOverride=${n.settledOverride}`); }
   else if (cmd === "rename") { const t = await findThread(o.thread); if (!o.title) throw new Error("--title required"); await dispatch("thread.metadata.update", t.id, { title: String(o.title) }); console.log(`renamed "${t.title}" -> "${o.title}"`); }
   else if (cmd === "interrupt") { const t = await findThread(o.thread); if (!t.activeRunId) { console.log("not running"); return; } await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: "t3ctl", holdQueue: !!o.hold }); console.log(`interrupted run in "${t.title}"`); }
-  else if (cmd === "pending") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; for (const r of p.runtimeRequests || []) console.log(JSON.stringify(r).slice(0, 600)); if (!(p.runtimeRequests || []).length) console.log("no runtime requests"); }
+  else if (cmd === "pending") { const t = await findThread(o.thread); const pend = pendingOf((await thread(t.id)).projection);
+    if (o.json) console.log(JSON.stringify(pend)); else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
+  else if (cmd === "answer") await answer(o);
   else if (cmd === "diff") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; const n = p.checkpoints.filter((c) => c.status !== "missing").length;
     const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
   else if (cmd === "files") { const t = await findThread(o.thread); const fl = await changedFiles(t, !!o["last-turn"]);
@@ -180,5 +263,5 @@ const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", 
       lastReply: lastA ? lastA.text.replace(/\s+/g, " ").slice(0, 280) : null, updatedAt: t.updatedAt, lastError: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null, model: t.modelSelection && t.modelSelection.model };
     if (o.json) console.log(JSON.stringify(r)); else console.log(`${r.state}  ${r.title}  (updated ${r.updatedAt}, pending=${r.pendingRequests})\n${r.lastReply || ""}`); }
   else if (cmd === "raw") { if (!o.thread) throw new Error("--thread <id> is required"); console.log(JSON.stringify(await thread(o.thread), null, 1).slice(0, +o.chars || 6000)); }
-  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t | diff --thread t | files --thread t [--last-turn] [--copy no] | new/send ... --attach img1.png,img2.jpg");
+  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | new/send ... --attach img1.png,img2.jpg");
 })().catch((e) => { console.error("error:", e.message); process.exit(1); });

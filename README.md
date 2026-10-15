@@ -2,7 +2,7 @@
 
 Helper scripts for **T3 Tots**, a chat companion for [T3 Code](https://github.com/pingdotgg/t3code). T3 Tots tells you what your coding-agent threads are doing and what's waiting on you, starts threads and follow-ups, makes project reports and digests, watches long runs, and keeps your computers updated and tidy.
 
-Free and open source (MIT). No accounts, no telemetry, nothing phones home.
+Free and open source (MIT). No accounts, no telemetry, nothing phones home. The only thing that ever sends data off your computer is the optional `t3listen`, and only to a webhook you set up yourself.
 
 You normally don't install these by hand: the T3 Tots bot downloads them on its first chat, after you say yes, and checks every file against pinned SHA-256 fingerprints before using it. Agents: see [AGENTS.md](AGENTS.md).
 
@@ -11,8 +11,9 @@ You normally don't install these by hand: the T3 Tots bot downloads them on its 
 | File | Runs on | What it does |
 |---|---|---|
 | `t3q.py` | macOS, Linux, Windows | Read-only queries of T3 Code's local database: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. No token needed. |
-| `t3ctl` | macOS, Linux, Windows | Small client for T3 Code's local API: list projects/threads/models, start a thread, send a follow-up, read replies, settle, rename, interrupt, diff, collect changed files. |
+| `t3ctl` | macOS, Linux, Windows | Small client for T3 Code's local API: list projects/threads/models, start a thread, send a follow-up, read replies, settle, rename, interrupt, diff, collect changed files, show a thread's open questions (`pending`) and answer them (`answer`). |
 | `t3ctl.cmd` | Windows | One-line wrapper so `t3ctl` works from `cmd`/PowerShell. |
+| `t3listen` (+ `t3listen.cmd`) | macOS, Linux, Windows | Optional. Follows T3 Code's live event stream and POSTs each new thread question (and its close) to your webhook, so T3 Tots can show it on your phone and answer it with your choice. No polling. Starts at login with `t3listen install`. |
 | `export.js` | macOS, Linux, Windows | Read-only, redacted JSON export of a project's recent threads (feeds the reports and digests). |
 | `survey.js` | macOS, Linux, Windows | Read-only activity survey: threads per project, models used, waiting and stale threads. |
 | `t3ui`, `ui-*.applescript` | macOS | Optional fallback that drives the T3 Code app UI when the local API is unavailable (needs Accessibility permission). |
@@ -22,18 +23,25 @@ You normally don't install these by hand: the T3 Tots bot downloads them on its 
 
 `manifest.json` lists every file with its size, SHA-256 and target OS; `manifest.sha256` is the same list for `sha256sum -c` / `shasum -a 256 -c`.
 
+## Answering questions from your phone (optional)
+
+1. T3 Tots creates a webhook routine for you and gives you a one-line command. It runs `t3listen setup`, which saves the webhook URL and key into `listen.json` in the tools folder. Only your user account can read that file, and it's never printed.
+2. `node t3listen test` sends one test event. `node t3listen install` then starts the listener at login: a LaunchAgent on macOS, a hidden Task Scheduler logon task on Windows, or a systemd user unit on Linux. `t3listen status` and `t3listen uninstall` do what they say.
+3. When a thread asks a question, `t3listen` POSTs `{"event":"request.opened", "machine", "threadId", "title", "project", "requestId", "kind", "createdAt", "questions":[{"id","header","question","options":[{"label","description"}],"multiSelect","allowCustomAnswer","required"}], "text"}`. When it's answered (here or in T3), cancelled or expired, it POSTs `{"event":"request.resolved", ..., "status", "answers"}`. T3 Tots answers with `t3ctl answer --thread <id> --request <id> --pick "<your choice>"`, using only your exact choice.
+4. Permission prompts (approvals) are never sent unless you add `"approvals": true` to `listen.json`. Questions older than `skipStaleMinutes` (default 1440) at startup are skipped. `node t3listen --dry-run` prints the payloads instead of sending them.
+
 ## Requirements
 
 - **Python 3.8+** for `t3q.py` and `cleanup/scan.py` (3.9+ for `report/report.py`). Windows: use `py -3`.
-- **Node 22+** for `t3ctl` (Node 18+ for `export.js` and `survey.js`).
+- **Node 22+** for `t3ctl` and `t3listen` (Node 18+ for `export.js` and `survey.js`).
 - **T3 Code** installed and opened at least once.
 
 ## Security
 
 - `t3q.py` opens T3 Code's `statev2.sqlite` **read-only** and never writes to it. From `server-runtime.json` it reads only `host`, `port` and `pid`.
 - The scripts never open T3's `secrets/` folder or any auth, token or credential file, with one exception: the node scripts read a file named `token` **next to themselves**. That token is created only if you approve it, via T3 Code's own CLI (`t3 auth session issue --scope orchestration:read --scope orchestration:operate --ttl 90d --label t3-tots`). It expires after 90 days; revoke it any time with `t3 auth session list` and `t3 auth session revoke <id>`. It is never printed.
-- Everything talks only to T3 Code on `127.0.0.1`. Exports redact common API-key patterns and your home path.
-- Without a token, T3 Tots stays read-only.
+- Everything talks only to T3 Code on `127.0.0.1`. The one exception is `t3listen`, which also POSTs question events (thread title, project name, question and options) to the webhook in your `listen.json`, if you set one up. Exports redact common API-key patterns and your home path.
+- Without a token, T3 Tots stays read-only. With one, `t3ctl answer` only ever sends the answer you chose.
 
 ## License
 

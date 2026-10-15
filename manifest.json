@@ -1,11 +1,11 @@
 {
  "name": "t3-tots",
- "version": "v1.0.0",
+ "version": "v1.1.0",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.0.0/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.1.0/",
  "requires": {
   "python": ">=3.8",
-  "node": ">=22 (t3ctl), >=18 (export.js, survey.js)"
+  "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
  },
  "files": [
   {
@@ -22,8 +22,8 @@
   },
   {
    "path": "t3ctl",
-   "bytes": 18330,
-   "sha256": "181e86a337d0df34d0966b73ea8e9688c17b05b0d93c17a2a6eb34e7b4c7ef93",
+   "bytes": 26339,
+   "sha256": "163930ab761e0eda1fbba8fdd46d0eb652087cf3c12fbfa6b4faa320c08a2f8b",
    "targets": [
     "macos",
     "linux",
@@ -41,6 +41,28 @@
     "box"
    ],
    "purpose": "Windows wrapper for t3ctl"
+  },
+  {
+   "path": "t3listen",
+   "bytes": 27510,
+   "sha256": "ac0e3652c910a25cf123ddb0049b2cc3e2c93f9e44d533475f514716acf8bd7b",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "pushes T3 questions to your webhook as they open and close (Node 22+, optional)"
+  },
+  {
+   "path": "t3listen.cmd",
+   "bytes": 26,
+   "sha256": "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5",
+   "targets": [
+    "windows",
+    "box"
+   ],
+   "purpose": "Windows wrapper for t3listen"
   },
   {
    "path": "export.js",

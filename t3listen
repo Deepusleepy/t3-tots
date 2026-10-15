@@ -1,0 +1,265 @@
+#!/usr/bin/env node
+// t3listen - tells T3 Tots the moment a T3 Code thread asks a question (and when it's answered or closed),
+// by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
+// The webhook URL and headers live only in listen.json next to this script and are never printed.
+const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
+const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
+const LABEL = process.env.T3LISTEN_LABEL || "com.t3tots.listen", TASK = process.env.T3LISTEN_LABEL || "T3 Tots listener";
+const argv = process.argv.slice(2), cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "run", flag = (f) => argv.includes(f);
+const optv = (f) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : undefined; };
+const DRY = flag("--dry-run"), ONCE = flag("--once"), TOLOG = flag("--log"), VERBOSE = flag("--verbose");
+function log(...a) {
+  const line = `${new Date().toISOString()} ${a.join(" ")}`;
+  if (!TOLOG) return console.log(line);
+  try { if (fs.existsSync(LOG) && fs.statSync(LOG).size > 1e6) fs.renameSync(LOG, LOG + ".1"); fs.appendFileSync(LOG, line + "\n"); } catch {}
+}
+const die = (code, msg) => { console.error(`${code}: ${msg}`); process.exit(1); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
+
+// ---------- config ----------
+function loadConfig() {
+  const c = readJSON(CONF, null);
+  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: +(optv("--skip-stale") ?? 0) };
+    die("NO_LISTEN_CONFIG", `no listen.json next to t3listen. Create it with: node "${path.join(DIR, "t3listen")}" setup  (or use --dry-run)`); }
+  if (!DRY && !/^https:\/\//.test(c.url || "") && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(c.url || "")) die("BAD_LISTEN_CONFIG", "listen.json url must start with https:// (http only for localhost)");
+  return { url: c.url, headers: c.headers || {}, machine: c.machine || os.hostname().replace(/\.local$/, ""), approvals: c.approvals === true || flag("--approvals"),
+    skipStaleMinutes: Number.isFinite(+c.skipStaleMinutes) ? +c.skipStaleMinutes : 0 };
+}
+function lockDown(f) {
+  if (process.platform !== "win32") { fs.chmodSync(f, 0o600); return; }
+  try { cp.execFileSync("icacls", [f, "/inheritance:r", "/grant:r", `${process.env.USERNAME}:F`], { stdio: "ignore" }); } catch { console.error("note: couldn't restrict listen.json permissions (icacls)"); }
+}
+async function setup() { // stdin: line 1 = webhook URL, then optional "Header-Name: value" lines
+  const lines = [], rl = require("readline").createInterface({ input: process.stdin, output: process.stdin.isTTY ? process.stderr : undefined, terminal: !!process.stdin.isTTY });
+  if (process.stdin.isTTY) process.stderr.write("Webhook URL, then any headers as 'Name: value' (blank line to finish):\n");
+  for await (const l of rl) { if (!l.trim()) { if (lines.length) break; else continue; } lines.push(l.trim()); }
+  const url = lines.shift() || ""; if (!/^https:\/\//.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(url)) die("BAD_URL", "the first line must be the webhook URL (https://...)");
+  const headers = {}; for (const l of lines) { const m = l.match(/^([A-Za-z0-9-]+):\s*(.+)$/); if (!m) die("BAD_HEADER", "header lines must look like 'Name: value'"); headers[m[1]] = m[2]; }
+  const old = readJSON(CONF, {}), c = { ...old, url, headers, machine: optv("--machine") || old.machine || os.hostname().replace(/\.local$/, ""), approvals: old.approvals === true, skipStaleMinutes: old.skipStaleMinutes ?? 1440 };
+  const tmp = CONF + ".part"; fs.writeFileSync(tmp, JSON.stringify(c, null, 1) + "\n", { mode: 0o600 }); fs.renameSync(tmp, CONF); lockDown(CONF);
+  console.log(`saved listen.json (url set, ${Object.keys(headers).length} header(s), machine "${c.machine}", approvals ${c.approvals ? "on" : "off"}). Test it with: node "${path.join(DIR, "t3listen")}" test`);
+}
+
+// ---------- T3 connection (same discovery as t3ctl) ----------
+function t3Dir() {
+  for (let v of [process.env.T3_HOME, process.env.T3CODE_HOME]) {
+    v = (v || "").trim(); if (!v) continue; if (v.startsWith("~")) v = path.join(HOME, v.slice(1));
+    return fs.existsSync(path.join(v, "server-runtime.json")) || fs.existsSync(path.join(v, "statev2.sqlite")) ? v : path.join(v, "userdata");
+  }
+  const base = path.join(HOME, ".t3");
+  return ["userdata", "dev"].map((d) => path.join(base, d)).find((d) => fs.existsSync(path.join(d, "server-runtime.json"))) || path.join(base, "userdata");
+}
+function endpoint() {
+  const rt = readJSON(path.join(t3Dir(), "server-runtime.json"), null); if (!rt) return null;
+  const h = rt.host; const base = `http://${!h || h === "0.0.0.0" || h === "::" ? "127.0.0.1" : h.includes(":") ? `[${h}]` : h}:${rt.port}`;
+  let token = ""; try { token = fs.readFileSync(path.join(DIR, "token"), "utf8").trim(); } catch {}
+  return { base, H: { Authorization: "Bearer " + token, "x-t3-orchestration-protocol": "2" }, token };
+}
+async function threadSnap(ep, id) {
+  const r = await fetch(`${ep.base}/api/orchestration/threads/${encodeURIComponent(id)}`, { headers: ep.H });
+  if (r.status === 404) return null; if (!r.ok) throw new Error(`thread fetch HTTP ${r.status}`); return (await r.json()).projection;
+}
+
+// ---------- request details (same shape as `t3ctl pending --json`) ----------
+const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
+function requestInfo(p, r) {
+  const it = (p.turnItems || []).find((i) => i.requestId === r.id && (i.type === "user_input_request" || i.type === "approval_request"));
+  const o = { requestId: r.id, kind: r.kind, createdAt: r.createdAt, answerable: (r.responseCapability || {}).type !== "not_resumable" };
+  if (r.kind === "user_input") o.questions = ((it && it.questions) || []).map((q) => ({ id: q.id, header: q.header, question: q.question,
+    options: (q.options || []).map((x) => ({ label: x.label, description: x.description, ...(x.value !== undefined ? { value: x.value } : {}) })), multiSelect: !!q.multiSelect, allowCustomAnswer: q.allowCustomAnswer !== false, required: q.required !== false }));
+  else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, appName: (it && it.appName) || null,
+    options: (it && it.options && it.options.length ? it.options : [{ decision: "accept", label: "Allow" }, { decision: "decline", label: "Deny" }]).map((x) => ({ decision: x.decision, label: x.label, ...(x.warning ? { warning: x.warning } : {}) })) };
+  return o;
+}
+function summary(e) {
+  const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
+  if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
+  if (e.questions) return `T3 question in ${where}:\n` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
+  return `T3 approval in ${where}: ${e.approval.requestKind}${e.approval.prompt ? " - " + e.approval.prompt : ""}\n` + e.approval.options.map((x) => `  - ${x.label}`).join("\n");
+}
+
+// ---------- delivery ----------
+let C, queue = [], delivered = 0;
+async function deliver(e) {
+  e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${e.requestId}`).digest("hex").slice(0, 16);
+  if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(C.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...C.headers }, body: JSON.stringify(e), signal: AbortSignal.timeout(20000) });
+      if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)} -> HTTP ${r.status}`); delivered++; return true; }
+      log(`webhook answered HTTP ${r.status} for ${e.event}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}`);
+      if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
+    } catch (err) { log(`webhook not reachable (${(err.cause && err.cause.code) || err.name})`); }
+    await sleep(2000 * 3 ** i);
+  }
+  if (queue.length < 100) queue.push(e); return false;
+}
+setInterval(async () => { if (!queue.length) return; const q = queue; queue = []; for (const e of q) { delete e.text; await deliver(e); } }, 60000).unref();
+
+// ---------- state: which requests the phone has been told about ----------
+let S = { sent: {} };
+const saveState = () => { if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S)); fs.renameSync(t, STATE); };
+const known = new Map(); // threadId -> pendingRuntimeRequest.id last seen (null = none)
+const meta = { projects: new Map(), threads: new Map() };
+const wanted = (r) => r.status === "pending" && !SKIP_KINDS.has(r.kind) && (r.kind === "user_input" || C.approvals) && (r.responseCapability || {}).type !== "not_resumable";
+
+async function reconcile(ep, threadId, opts = {}) {
+  const t = meta.threads.get(threadId) || {}; let p = null;
+  if (!opts.gone) { try { p = await threadSnap(ep, threadId); } catch (err) { log(`couldn't read thread ${threadId.slice(0, 40)}: ${err.message}`); return; } }
+  const base = { machine: C.machine, threadId, title: t.title || threadId, project: meta.projects.get(t.projectId) || null };
+  const all = p ? p.runtimeRequests || [] : [];
+  const open = all.filter(wanted);
+  for (const r of open) {
+    if (S.sent[r.id]) continue;
+    const ageMin = (Date.now() - Date.parse(r.createdAt)) / 60000;
+    if (opts.startup && C.skipStaleMinutes > 0 && ageMin > C.skipStaleMinutes) { S.sent[r.id] = { threadId, skipped: true }; continue; }
+    const e = { event: "request.opened", ...base, ...requestInfo(p, r) };
+    if (e.questions && !e.questions.length) e.note = "question details not readable; answer it in T3";
+    S.sent[r.id] = { threadId, at: Date.now() }; saveState(); await deliver(e);
+  }
+  for (const [id, s] of Object.entries(S.sent)) {
+    if (s.threadId !== threadId || open.some((r) => r.id === id)) continue;
+    const r = all.find((x) => x.id === id);
+    if (!s.skipped) await deliver({ event: "request.resolved", ...base, requestId: id, kind: r ? r.kind : "user_input", status: opts.gone || (r ? r.status : "gone"),
+      ...(r && r.answers ? { answers: r.answers } : {}), ...(r && r.decision ? { decision: r.decision } : {}), resolvedAt: (r && r.resolvedAt) || new Date().toISOString() });
+    delete S.sent[id]; saveState();
+  }
+}
+
+function connect(ep) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`${ep.base.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: ep.H });
+    let first = true, last = Date.now(), busy = Promise.resolve(); const id = String(Date.now());
+    const work = (fn) => { busy = busy.then(fn).catch((err) => log("error:", err.message)); };
+    const hb = setInterval(() => { if (Date.now() - last > 75000) { log("T3 stopped answering; reconnecting"); ws.close(); } else try { ws.send(JSON.stringify({ _tag: "Ping" })); } catch {} }, 25000);
+    ws.onopen = () => { log(`connected to T3 at ${ep.base}`); ws.send(JSON.stringify({ _tag: "Request", id, tag: "orchestration.subscribeShell", payload: {}, headers: [] })); };
+    ws.onmessage = (ev) => {
+      last = Date.now(); let msgs; try { msgs = JSON.parse(ev.data); } catch { return; } if (!Array.isArray(msgs)) msgs = [msgs];
+      for (const m of msgs) {
+        if (m._tag === "Ping") { ws.send(JSON.stringify({ _tag: "Pong" })); continue; }
+        if (m._tag === "Exit" || m._tag === "Defect") { log("T3 ended the stream:", JSON.stringify(m.exit || m).slice(0, 300)); ws.close(); continue; }
+        if (m._tag !== "Chunk") continue;
+        ws.send(JSON.stringify({ _tag: "Ack", requestId: m.requestId }));
+        for (const v of m.values || []) work(() => onItem(ep, v, first && v.kind === "snapshot" && (first = false, true)));
+      }
+    };
+    ws.onerror = () => {}; ws.onclose = () => { clearInterval(hb); busy.then(() => resolve(!first)); };
+  });
+}
+async function onItem(ep, v, full) {
+  if (v.kind === "snapshot") {
+    for (const p of v.snapshot.projects || []) meta.projects.set(p.id, p.title);
+    if (!full) return; // later snapshots are project-metadata refreshes with no threads
+    const live = new Set();
+    for (const t of v.snapshot.threads || []) { live.add(t.id); meta.threads.set(t.id, { title: t.title, projectId: t.projectId }); known.set(t.id, t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null); }
+    const check = new Set([...v.snapshot.threads.filter((t) => t.pendingRuntimeRequest).map((t) => t.id), ...Object.values(S.sent).map((s) => s.threadId)]);
+    for (const tid of check) await reconcile(ep, tid, { startup: true, ...(live.has(tid) ? {} : { gone: "archived-or-deleted" }) });
+    log(`watching ${live.size} threads; ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped`);
+  } else if (v.kind === "project.updated") meta.projects.set(v.project.id, v.project.title);
+  else if (v.kind === "thread.updated") {
+    const t = v.thread; meta.threads.set(t.id, { title: t.title, projectId: t.projectId });
+    if (v.location === "archive") { if (Object.values(S.sent).some((s) => s.threadId === t.id)) await reconcile(ep, t.id, { gone: "archived" }); known.delete(t.id); return; }
+    const now = t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null, before = known.has(t.id) ? known.get(t.id) : null; known.set(t.id, now);
+    const tracked = Object.values(S.sent).filter((s) => s.threadId === t.id && !s.skipped).length;
+    if (VERBOSE && (tracked || now !== before)) log(`thread.updated "${t.title}" pending ${before ? before.slice(-12) : "-"} -> ${now ? now.slice(-12) : "-"} (tracked ${tracked})`);
+    if (now !== before || tracked > 1 || (tracked === 1 && !now)) await reconcile(ep, t.id);
+  } else if (v.kind === "thread.removed") { known.delete(v.threadId); if (Object.values(S.sent).some((s) => s.threadId === v.threadId)) await reconcile(ep, v.threadId, { gone: "deleted" }); }
+}
+
+async function run() {
+  C = loadConfig(); if (+process.versions.node.split(".")[0] < 22 || typeof WebSocket === "undefined") die("NODE_TOO_OLD", `t3listen needs Node 22 or newer (found ${process.version})`);
+  if (!DRY) {
+    const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
+    fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
+    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {};
+  }
+  for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
+  log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
+  if (ONCE) { const t0 = Date.now(), limit = (+(optv("--timeout")) || 600) * 1000; setInterval(() => { if (delivered > 0) process.exit(0); if (Date.now() - t0 > limit) { log("--once: nothing happened before the timeout"); process.exit(2); } }, 500); }
+  let delay = 2000, warned = "";
+  for (;;) {
+    const ep = endpoint();
+    if (!ep) { if (warned !== "nort") log("T3 Code isn't running here; waiting for it"); warned = "nort"; await sleep(30000); continue; }
+    if (!ep.token) die("NO_TOKEN", "no `token` file next to t3listen. Ask T3 Tots to issue one first.");
+    const ok = await connect(ep);
+    if (ok) { delay = 2000; warned = ""; }
+    else {
+      try { const r = await fetch(`${ep.base}/api/orchestration/threads/t3listen-auth-check`, { headers: ep.H, signal: AbortSignal.timeout(5000) }); if (r.status === 401 || r.status === 403) { if (warned !== "tok") log("TOKEN_REJECTED: the T3 Tots token expired or was revoked; ask T3 Tots to reissue it"); warned = "tok"; delay = 300000; } }
+      catch { if (warned !== "down") log(`can't reach T3 at ${ep.base}; retrying`); warned = "down"; }
+    }
+    await sleep(delay); delay = Math.min(delay * 2, 60000);
+  }
+}
+
+// ---------- login autostart ----------
+const sh = (c, a, o = {}) => cp.execFileSync(c, a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...o });
+const tryRun = (c, a) => { try { return { ok: true, out: sh(c, a) }; } catch (e) { return { ok: false, out: String(e.stdout || "") + String(e.stderr || e.message) }; } };
+const SELF = path.join(DIR, "t3listen"), extra = argv.filter((a) => a === "--dry-run" || a === "--approvals");
+const xml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const plistPath = () => path.join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`), unitName = () => `${LABEL.replace(/^com\./, "").replace(/\./g, "-")}.service`;
+const unitPath = () => path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, ".config"), "systemd", "user", unitName());
+const startupLnk = () => path.join(process.env.APPDATA || "", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `${TASK}.lnk`);
+function ps(script) { return sh("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]); }
+const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
+function winProcs() { // node processes running THIS t3listen (never touches other node processes)
+  try { return ps(`Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like ${psq("*" + SELF + "*")} -and $_.CommandLine -like '* run*' } | ForEach-Object { $_.ProcessId }`).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
+}
+function install() {
+  if (!fs.existsSync(CONF) && !extra.includes("--dry-run")) die("NO_LISTEN_CONFIG", `run setup first: node "${SELF}" setup`);
+  const node = process.execPath, args = [SELF, "run", "--log", ...extra];
+  if (process.platform === "darwin") {
+    const env = ["T3_HOME", "T3CODE_HOME"].filter((k) => process.env[k]).map((k) => `<key>${k}</key><string>${xml(process.env[k])}</string>`).join("");
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>Label</key><string>${LABEL}</string>\n<key>ProgramArguments</key><array>${[node, ...args].map((a) => `<string>${xml(a)}</string>`).join("")}</array>\n<key>WorkingDirectory</key><string>${xml(DIR)}</string>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>30</integer>\n<key>ProcessType</key><string>Background</string>\n<key>StandardErrorPath</key><string>${xml(path.join(DIR, "listen.err.log"))}</string>\n${env ? `<key>EnvironmentVariables</key><dict>${env}</dict>\n` : ""}</dict></plist>\n`;
+    fs.mkdirSync(path.dirname(plistPath()), { recursive: true }); fs.writeFileSync(plistPath(), plist);
+    const dom = `gui/${process.getuid()}`; tryRun("launchctl", ["bootout", `${dom}/${LABEL}`]);
+    let r = tryRun("launchctl", ["bootstrap", dom, plistPath()]); if (!r.ok) { cp.spawnSync("sleep", ["1"]); r = tryRun("launchctl", ["bootstrap", dom, plistPath()]); }
+    if (!r.ok) die("INSTALL_FAILED", r.out.trim());
+    console.log(`installed: LaunchAgent ${plistPath()} (starts at login, restarts if it crashes; log ${LOG})`);
+  } else if (process.platform === "win32") {
+    for (const p of winProcs()) try { process.kill(p); } catch {}
+    const action = `New-ScheduledTaskAction -Execute ${psq(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "conhost.exe"))} -Argument ${psq(["--headless", node, ...args].map((a) => `"${a}"`).join(" "))} -WorkingDirectory ${psq(DIR)}`;
+    const r = tryRun("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+      `$ErrorActionPreference='Stop'; $a=${action}; $t=New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\\$env:USERNAME"; $s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew; $p=New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\\$env:USERNAME" -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName ${psq(TASK)} -Action $a -Trigger $t -Settings $s -Principal $p -Force | Out-Null; Start-ScheduledTask -TaskName ${psq(TASK)}`]);
+    if (r.ok) { console.log(`installed: Task Scheduler task "${TASK}" (runs hidden at logon; log ${LOG})`); return; }
+    // no permission for a logon task: fall back to a hidden Startup-folder shortcut
+    ps(`$w=New-Object -ComObject WScript.Shell; $l=$w.CreateShortcut(${psq(startupLnk())}); $l.TargetPath=${psq(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "conhost.exe"))}; $l.Arguments=${psq(["--headless", node, ...args].map((a) => `"${a}"`).join(" "))}; $l.WorkingDirectory=${psq(DIR)}; $l.WindowStyle=7; $l.Save(); Start-Process -WindowStyle Hidden -FilePath $l.TargetPath -ArgumentList $l.Arguments -WorkingDirectory ${psq(DIR)}`);
+    console.log(`installed: Startup shortcut "${startupLnk()}" (Task Scheduler said: ${r.out.trim().split("\n")[0].slice(0, 160)}); log ${LOG}`);
+  } else {
+    const unit = `[Unit]\nDescription=T3 Tots listener (T3 Code questions to webhook)\n\n[Service]\nExecStart=${[node, ...args].map((a) => `"${a}"`).join(" ")}\nWorkingDirectory=${DIR}\nRestart=on-failure\nRestartSec=30\n${["T3_HOME", "T3CODE_HOME"].filter((k) => process.env[k]).map((k) => `Environment=${k}=${process.env[k]}\n`).join("")}\n[Install]\nWantedBy=default.target\n`;
+    fs.mkdirSync(path.dirname(unitPath()), { recursive: true }); fs.writeFileSync(unitPath(), unit);
+    sh("systemctl", ["--user", "daemon-reload"]); sh("systemctl", ["--user", "enable", "--now", unitName()]); tryRun("systemctl", ["--user", "restart", unitName()]);
+    console.log(`installed: systemd user unit ${unitPath()} (log ${LOG})`);
+  }
+}
+function uninstall() {
+  if (process.platform === "darwin") { tryRun("launchctl", ["bootout", `gui/${process.getuid()}/${LABEL}`]); const had = fs.existsSync(plistPath()); if (had) fs.unlinkSync(plistPath()); console.log(had ? `removed LaunchAgent ${LABEL}` : "not installed"); }
+  else if (process.platform === "win32") {
+    const r = tryRun("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `if (Get-ScheduledTask -TaskName ${psq(TASK)} -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName ${psq(TASK)}; Unregister-ScheduledTask -TaskName ${psq(TASK)} -Confirm:$false; 'task' }`]);
+    const lnk = fs.existsSync(startupLnk()); if (lnk) fs.unlinkSync(startupLnk()); const procs = winProcs(); for (const p of procs) try { process.kill(p); } catch {}
+    console.log(r.out.includes("task") || lnk ? `removed ${r.out.includes("task") ? `task "${TASK}"` : ""}${lnk ? " startup shortcut" : ""}${procs.length ? `, stopped ${procs.length} listener process(es)` : ""}` : `not installed${procs.length ? `; stopped ${procs.length} listener process(es)` : ""}`);
+  } else { tryRun("systemctl", ["--user", "disable", "--now", unitName()]); const had = fs.existsSync(unitPath()); if (had) fs.unlinkSync(unitPath()); tryRun("systemctl", ["--user", "daemon-reload"]); console.log(had ? `removed ${unitName()}` : "not installed"); }
+  try { fs.unlinkSync(PID); } catch {}
+}
+function status() {
+  let inst = "not installed", running = false, pid = null;
+  if (process.platform === "darwin") { if (fs.existsSync(plistPath())) inst = "LaunchAgent"; const r = tryRun("launchctl", ["print", `gui/${process.getuid()}/${LABEL}`]); const m = r.ok && r.out.match(/\bpid = (\d+)/); if (m) { running = true; pid = +m[1]; } }
+  else if (process.platform === "win32") { const r = tryRun("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-ScheduledTask -TaskName ${psq(TASK)} -ErrorAction SilentlyContinue).State`]); if (r.ok && r.out.trim()) inst = `Task Scheduler (${r.out.trim()})`; else if (fs.existsSync(startupLnk())) inst = "Startup shortcut"; const ps_ = winProcs(); if (ps_.length) { running = true; pid = ps_[0]; } }
+  else { if (fs.existsSync(unitPath())) inst = "systemd user unit"; const r = tryRun("systemctl", ["--user", "show", "-p", "MainPID", "--value", unitName()]); if (r.ok && +r.out.trim() > 0) { running = true; pid = +r.out.trim(); } }
+  if (!running) { const p = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (p) try { process.kill(p, 0); running = true; pid = p; } catch {} }
+  const st = readJSON(STATE, { sent: {} }), open = Object.values(st.sent || {}).filter((s) => !s.skipped).length;
+  let tail = ""; try { tail = fs.readFileSync(LOG, "utf8").trim().split("\n").slice(-3).join("\n"); } catch {}
+  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
+}
+async function test() {
+  C = loadConfig(); const e = { event: "test", machine: C.machine, threadId: "test", title: "t3listen test", project: null, requestId: "test-" + Date.now(), kind: "test" };
+  if (DRY) { console.log("DRY-RUN payload " + JSON.stringify({ ...e, text: `t3listen test from ${C.machine}` })); return; }
+  const r = await fetch(C.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...C.headers }, body: JSON.stringify({ ...e, text: `t3listen test from ${C.machine}: the webhook works`, sentAt: new Date().toISOString() }), signal: AbortSignal.timeout(20000) }).catch((err) => die("WEBHOOK_UNREACHABLE", (err.cause && err.cause.code) || err.message));
+  if (!r.ok) die("WEBHOOK_REJECTED", `HTTP ${r.status}${r.status === 401 || r.status === 403 ? " (check the key)" : ""}`); console.log(`OK: webhook answered HTTP ${r.status}`);
+}
+
+const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
+t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
+t3listen test [--dry-run]         send one test event to the webhook
+t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
+({ run, setup, test, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
