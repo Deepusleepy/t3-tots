@@ -178,12 +178,25 @@ async function pickRequest(t, o, wantApproval) {
   if (!pend[0].answerable) throw new Error(`NOT_ANSWERABLE: that request can't be answered any more (the run ended). Send a follow-up instead.`);
   return pend[0];
 }
+// answered-here.json: requests answered through t3ctl (short sha256 of the request id -> time), so t3listen can tell the webhook "answeredHere"
+const HERE = path.join(__dirname, "answered-here.json"), hereKey = (id) => crypto.createHash("sha256").update(String(id)).digest("hex").slice(0, 16);
+function markHere(id, on) {
+  let m = {}; try { m = JSON.parse(fs.readFileSync(HERE, "utf8")) || {}; } catch {}
+  const cut = Date.now() - 7 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k];
+  if (on) m[hereKey(id)] = new Date().toISOString(); else delete m[hereKey(id)];
+  const t = HERE + "." + process.pid + ".part";
+  try { fs.writeFileSync(t, JSON.stringify(m)); fs.renameSync(t, HERE); } catch { try { fs.writeFileSync(HERE, JSON.stringify(m)); fs.rmSync(t, { force: true }); } catch {} } // Windows: rename can hit a brief lock
+}
+async function respond(t, requestId, body) { // mark first: t3listen may see the close before this returns
+  markHere(requestId, true);
+  try { await dispatch("runtime-request.respond", t.id, { requestId, ...body }); } catch (e) { markHere(requestId, false); throw e; }
+}
 async function answer(o) {
   const t = await findThread(o.thread);
   if (o.decision) {
     const r = await pickRequest(t, o, true); const d = String(o.decision);
     if (!r.approval.options.some((x) => x.decision === d)) throw new Error(`--decision must be one of: ${r.approval.options.map((x) => x.decision).join(", ")}`);
-    await dispatch("runtime-request.respond", t.id, { requestId: r.requestId, decision: d });
+    await respond(t, r.requestId, { decision: d });
     return confirm(t, r, `decision=${d}`);
   }
   const r = await pickRequest(t, o, false); const qs = r.questions; let answers = {};
@@ -201,7 +214,7 @@ async function answer(o) {
   } else throw new Error("usage: answer --thread <id|title> [--request <id>] (--pick '<option label>' | --text '<free text>' | --answers '<json>' | --decision <d>)");
   for (const q of qs) if (answers[q.id] === undefined && q.required) throw new Error(`question [${q.id}] "${q.header}" needs an answer too`);
   if (r.responseMode === "message") for (const k of Object.keys(answers)) if (Array.isArray(answers[k])) answers[k] = answers[k].join(", ");
-  await dispatch("runtime-request.respond", t.id, { requestId: r.requestId, answers });
+  await respond(t, r.requestId, { answers });
   return confirm(t, r, Object.entries(answers).map(([k, v]) => `${(qs.find((q) => q.id === k) || {}).header || k} = ${Array.isArray(v) ? v.join(", ") : v}`).join("; "));
 }
 async function confirm(t, r, what) {

@@ -3,7 +3,7 @@
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
-const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
+const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), HERE = path.join(DIR, "answered-here.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
 const LABEL = process.env.T3LISTEN_LABEL || "com.t3tots.listen", TASK = process.env.T3LISTEN_LABEL || "T3 Tots listener";
 const argv = process.argv.slice(2), cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "run", flag = (f) => argv.includes(f);
 const optv = (f) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : undefined; };
@@ -68,9 +68,22 @@ async function threadSnap(ep, id) {
 
 // ---------- request details (same shape as `t3ctl pending --json`) ----------
 const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
+// short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
+const RED = /(sk-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{10,}|gh[ousr]_[A-Za-z0-9]{10,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{12,}|AIza[0-9A-Za-z_-]{20,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S{8,})/gi;
+const trim = (t, n) => { t = String(t).replace(RED, "[redacted]").split(HOME).join("~").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t; };
+function contextOf(p, it) {
+  const items = p.turnItems || [], end = it ? items.indexOf(it) : items.length; let user = null;
+  for (let i = (end < 0 ? items.length : end) - 1; i >= 0; i--) {
+    const x = items[i], role = String(x.role || x.kind || x.type || ""), text = x.text ?? x.content ?? (x.message && x.message.text);
+    if (typeof text !== "string" || !text.trim() || !/user|assistant|message/i.test(role)) continue;
+    if (!/user/i.test(role)) return trim(text, 400); if (!user) user = text;
+  }
+  return user ? "Task: " + trim(user, 394) : null;
+}
 function requestInfo(p, r) {
   const it = (p.turnItems || []).find((i) => i.requestId === r.id && (i.type === "user_input_request" || i.type === "approval_request"));
   const o = { requestId: r.id, kind: r.kind, createdAt: r.createdAt, answerable: (r.responseCapability || {}).type !== "not_resumable" };
+  try { const c = contextOf(p, it); if (c) o.context = c; } catch {}
   if (r.kind === "user_input") o.questions = ((it && it.questions) || []).map((q) => ({ id: q.id, header: q.header, question: q.question,
     options: (q.options || []).map((x) => ({ label: x.label, description: x.description, ...(x.value !== undefined ? { value: x.value } : {}) })), multiSelect: !!q.multiSelect, allowCustomAnswer: q.allowCustomAnswer !== false, required: q.required !== false }));
   else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, appName: (it && it.appName) || null,
@@ -79,10 +92,13 @@ function requestInfo(p, r) {
 }
 function summary(e) {
   const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
-  if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
-  if (e.questions) return `T3 question in ${where}:\n` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
+  if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed${e.answeredHere ? " (answered from chat)" : ""}: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
+  if (e.questions) return `T3 question in ${where}:\n${e.context ? `Context: ${e.context}\n` : ""}` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
   return `T3 approval in ${where}: ${e.approval.requestKind}${e.approval.prompt ? " - " + e.approval.prompt : ""}\n` + e.approval.options.map((x) => `  - ${x.label}`).join("\n");
 }
+
+// answered through `t3ctl answer` on this computer? (t3ctl writes answered-here.json before it responds)
+const answeredHere = (id) => { const m = readJSON(HERE, {}) || {}; return !!m[crypto.createHash("sha256").update(String(id)).digest("hex").slice(0, 16)]; };
 
 // ---------- delivery ----------
 let C, queue = [], delivered = 0;
@@ -100,13 +116,17 @@ async function post(e) { // one attempt; returns { ok, status, body, retry }
     return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body) };
   } catch (err) { return { ok: false, status: 0, body: (err.cause && err.cause.code) || err.name, retry: true }; }
 }
-function markDelivered(e) { if (e.event === "request.opened" && S.sent[e.requestId]) { S.sent[e.requestId].delivered = true; saveState(); } }
+function markDelivered(e) {
+  const s = S.sent[e.requestId]; if (!s) return;
+  if (e.event === "request.opened") s.delivered = true; else if (e.event === "request.resolved" && s.closing) delete S.sent[e.requestId];
+  saveState();
+}
 async function deliver(e) {
   e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${e.requestId}`).digest("hex").slice(0, 16);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
     const r = await post(e);
-    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)} -> HTTP ${r.status}`); delivered++; markDelivered(e); return true; }
+    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status}`); delivered++; markDelivered(e); return true; }
     if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${e.requestId.slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}`);
     else log(`webhook not reachable (${r.body})`);
     if (!r.retry) break; if (i < 2) await sleep((/rate.?limit/i.test(r.body || "") ? 20000 : 2000) * 3 ** i);
@@ -119,7 +139,7 @@ setInterval(async () => {
   for (const item of q) {
     const { e } = item; item.rounds++; e.sentAt = new Date().toISOString();
     const r = await post(e);
-    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
+    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
     log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${e.requestId.slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
     if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) { if (queue.length < 100) queue.push(item); }
     else log(`giving up on ${e.event} ${e.requestId.slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
@@ -150,8 +170,9 @@ async function reconcile(ep, threadId, opts = {}) {
   for (const [id, s] of Object.entries(S.sent)) {
     if (s.threadId !== threadId || open.some((r) => r.id === id)) continue;
     const r = all.find((x) => x.id === id);
-    if (!s.skipped) await deliver({ event: "request.resolved", ...base, requestId: id, kind: r ? r.kind : "user_input", status: opts.gone || (r ? r.status : "gone"),
-      ...(r && r.answers ? { answers: r.answers } : {}), ...(r && r.decision ? { decision: r.decision } : {}), resolvedAt: (r && r.resolvedAt) || new Date().toISOString() });
+    if (s.closing && !opts.startup) continue; // already queued for retry
+    if (!s.skipped && !(await deliver({ event: "request.resolved", ...base, requestId: id, kind: r ? r.kind : "user_input", status: opts.gone || (r ? r.status : "gone"), answeredHere: answeredHere(id),
+      ...(r && r.answers ? { answers: r.answers } : {}), ...(r && r.decision ? { decision: r.decision } : {}), resolvedAt: (r && r.resolvedAt) || new Date().toISOString() }))) { s.closing = true; saveState(); continue; } // kept so a restart resends it
     delete S.sent[id]; saveState();
   }
 }
