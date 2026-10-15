@@ -1,0 +1,160 @@
+{
+ "name": "t3-tots",
+ "version": "v1.0.0",
+ "repo": "https://github.com/Deepusleepy/t3-tots",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.0.0/",
+ "requires": {
+  "python": ">=3.8",
+  "node": ">=22 (t3ctl), >=18 (export.js, survey.js)"
+ },
+ "files": [
+  {
+   "path": "t3q.py",
+   "bytes": 19608,
+   "sha256": "5b639bbb3114c0e6cbfbbdc2a3c1edd1137d8c8a3322f166084eb02ec7418275",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "read-only T3 database queries"
+  },
+  {
+   "path": "t3ctl",
+   "bytes": 18330,
+   "sha256": "181e86a337d0df34d0966b73ea8e9688c17b05b0d93c17a2a6eb34e7b4c7ef93",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "T3 local API client (Node 22+)"
+  },
+  {
+   "path": "t3ctl.cmd",
+   "bytes": 23,
+   "sha256": "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e",
+   "targets": [
+    "windows",
+    "box"
+   ],
+   "purpose": "Windows wrapper for t3ctl"
+  },
+  {
+   "path": "export.js",
+   "bytes": 4996,
+   "sha256": "9a4a829c925bcf6d997a7f995da4950a3c4b5aef57b4110f1007175178da6ea4",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "redacted project export"
+  },
+  {
+   "path": "survey.js",
+   "bytes": 3963,
+   "sha256": "f5ea8235ffe5dbfeccbf2450d056ff79a96cb9b1e7f9b2a8f8a3109ca80bed53",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "thread activity survey"
+  },
+  {
+   "path": "t3ui",
+   "bytes": 1710,
+   "sha256": "0c14305ecdff61bf126592ba403db9b9ca7662efad1662df5638c836061c0b8b",
+   "targets": [
+    "macos",
+    "box"
+   ],
+   "purpose": "macOS UI fallback"
+  },
+  {
+   "path": "ui-dump.applescript",
+   "bytes": 1301,
+   "sha256": "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1",
+   "targets": [
+    "macos",
+    "box"
+   ],
+   "purpose": "macOS UI fallback helper"
+  },
+  {
+   "path": "ui-menuitem.applescript",
+   "bytes": 1154,
+   "sha256": "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111",
+   "targets": [
+    "macos",
+    "box"
+   ],
+   "purpose": "macOS UI fallback helper"
+  },
+  {
+   "path": "ui-model.applescript",
+   "bytes": 1072,
+   "sha256": "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae",
+   "targets": [
+    "macos",
+    "box"
+   ],
+   "purpose": "macOS UI fallback helper"
+  },
+  {
+   "path": "ui-press.applescript",
+   "bytes": 1075,
+   "sha256": "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858",
+   "targets": [
+    "macos",
+    "box"
+   ],
+   "purpose": "macOS UI fallback helper"
+  },
+  {
+   "path": "ui-type.applescript",
+   "bytes": 1074,
+   "sha256": "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125",
+   "targets": [
+    "macos",
+    "box"
+   ],
+   "purpose": "macOS UI fallback helper"
+  },
+  {
+   "path": "cleanup/scan.py",
+   "bytes": 9791,
+   "sha256": "a5781f6217e1647e1162b5cd361ec7c1504f50e981e43ce9efbe5e19feeb54c2",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "read-only disk scan"
+  },
+  {
+   "path": "cleanup/make_report.py",
+   "bytes": 15071,
+   "sha256": "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca",
+   "targets": [
+    "box"
+   ],
+   "purpose": "cleanup report builder"
+  },
+  {
+   "path": "report/report.py",
+   "bytes": 7633,
+   "sha256": "4de739e0eef04198de4a05147b06860c57feb53428b7daaa3b663e23ffd74209",
+   "targets": [
+    "box"
+   ],
+   "purpose": "project report builder"
+  }
+ ]
+}

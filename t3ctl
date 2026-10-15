@@ -1,0 +1,184 @@
+#!/usr/bin/env node
+// t3ctl - tiny client for the local T3 Code server (T3 Tots). Needs Node 22+.
+// Token: the `token` file next to this script (never printed). T3 data: T3CODE_HOME (default ~/.t3) + /userdata.
+const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto");
+const HOME = os.homedir();
+const die = (code, msg) => { console.error(`${code}: ${msg}`); process.exit(1); };
+function t3Dir() { // same for stable and Nightly; T3_HOME may point at the base or the userdata folder
+  for (let v of [process.env.T3_HOME, process.env.T3CODE_HOME]) {
+    v = (v || "").trim(); if (!v) continue; if (v.startsWith("~")) v = path.join(HOME, v.slice(1));
+    return fs.existsSync(path.join(v, "server-runtime.json")) || fs.existsSync(path.join(v, "statev2.sqlite")) ? v : path.join(v, "userdata");
+  }
+  const base = path.join(HOME, ".t3");
+  return ["userdata", "dev"].map((d) => path.join(base, d)).find((d) => fs.existsSync(path.join(d, "server-runtime.json"))) || path.join(base, "userdata");
+}
+let BASE = "", H = {};
+function init() {
+  if (+process.versions.node.split(".")[0] < 22 || typeof WebSocket === "undefined" || typeof fetch === "undefined")
+    die("NODE_TOO_OLD", `t3ctl needs Node 22 or newer (found ${process.version}). Install the current LTS from https://nodejs.org`);
+  let rt; try { rt = JSON.parse(fs.readFileSync(path.join(t3Dir(), "server-runtime.json"), "utf8")); }
+  catch { die("T3_NOT_RUNNING", "T3 Code isn't running on this computer (no server-runtime.json). Open T3 Code and try again."); }
+  const h = rt.host; BASE = `http://${!h || h === "0.0.0.0" || h === "::" ? "127.0.0.1" : h.includes(":") ? `[${h}]` : h}:${rt.port}`;
+  let token = ""; try { token = fs.readFileSync(path.join(__dirname, "token"), "utf8").trim(); } catch {}
+  if (!token) die("NO_TOKEN", "no `token` file next to t3ctl yet. Ask T3 Tots to issue one (setup step), then retry.");
+  H = { Authorization: "Bearer " + token, "x-t3-orchestration-protocol": "2" };
+}
+const netErr = (e) => new Error(`T3_NOT_REACHABLE: can't reach T3 at ${BASE} (${(e.cause && e.cause.code) || e.message}). Is T3 Code open?`);
+const uuid = () => crypto.randomUUID();
+
+function args() { const a = process.argv.slice(3), o = {}; for (let i = 0; i < a.length; i++) { if (a[i].startsWith("--")) { const k = a[i].slice(2); const v = a[i + 1] && !a[i + 1].startsWith("--") ? a[++i] : true; o[k] = v; } } return o; }
+async function get(p) {
+  let r; try { r = await fetch(BASE + p, { headers: H }); } catch (e) { throw netErr(e); }
+  if (r.status === 401 || r.status === 403) throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (t3-tots-rules rule 8).`);
+  if (!r.ok) throw new Error(`${p} -> HTTP ${r.status} ${(await r.text()).slice(0, 300)}`); return r.json();
+}
+const shell = () => get("/api/orchestration/shell");
+
+function rpc(tag, payload) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: H });
+    const t = setTimeout(() => { ws.close(); reject(new Error("rpc timeout")); }, 60000);
+    ws.onopen = () => ws.send(JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] }));
+    ws.onmessage = (ev) => {
+      let msgs = JSON.parse(ev.data); if (!Array.isArray(msgs)) msgs = [msgs];
+      for (const m of msgs) {
+        if (m._tag === "Ping") ws.send(JSON.stringify({ _tag: "Pong" }));
+        if (m._tag === "Exit" && m.requestId === "1") { clearTimeout(t); ws.close(); m.exit._tag === "Success" ? resolve(m.exit.value) : reject(new Error(JSON.stringify(m.exit.cause || m.exit).slice(0, 1500))); }
+        if (m._tag === "Defect") { clearTimeout(t); ws.close(); reject(new Error("defect " + JSON.stringify(m).slice(0, 800))); }
+      }
+    };
+    ws.onerror = (e) => { clearTimeout(t); reject(new Error(`ws error ${e.message || ""} (T3 not reachable at ${BASE}, or the token was rejected)`)); };
+  });
+}
+
+const norm = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
+const normp = (s) => norm(s).replace(/\\/g, "/").replace(/\/+$/, "");
+async function findProject(q) {
+  q = String(q); const s = await shell(); const ap = q.startsWith("~") ? path.join(HOME, q.slice(1)) : q;
+  const p = s.projects.find((p) => p.id === q || normp(p.workspaceRoot) === normp(path.resolve(ap)) || norm(p.title) === norm(q))
+    || s.projects.filter((p) => norm(p.title).includes(norm(q)))[0];
+  if (!p) throw new Error(`project not found: ${q} (add it with: t3 project add <path>)`);
+  return p;
+}
+async function findThread(q) {
+  if (!q || q === true) throw new Error("--thread <id|title> is required");
+  q = String(q); const s = await shell(); const all = s.threads;
+  const exact = all.find((t) => t.id === q || t.id.startsWith(q)); if (exact) return exact;
+  const m = all.filter((t) => norm(t.title).includes(norm(q))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (!m.length) throw new Error(`thread not found: ${q}`);
+  if (m.length > 1) console.error(`note: ${m.length} matches, using newest: ${m.map((t) => `${t.id.slice(0, 8)} ${t.title}`).slice(0, 5).join(" | ")}`);
+  return m[0];
+}
+const recentSel = (s, pid) => { const t = s.threads.filter((t) => t.modelSelection && (!pid || t.projectId === pid)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; return t && t.modelSelection; };
+function modelSel(o, fallback, s) {
+  if (!o.model) { if (!fallback) throw new Error("no default model found for this project; pass --model (list them with: t3ctl models)"); return fallback; }
+  const used = s ? [...new Set(s.threads.filter((t) => t.modelSelection).map((t) => t.modelSelection.model))] : [];
+  const short = norm(o.model).replace(/[ .]/g, "-"); // alias like "haiku" or "sonnet 4.6" -> newest matching model already used in T3
+  const model = used.includes(o.model) ? o.model : (/^(haiku|sonnet|opus)/.test(short) && used.filter((m) => m.includes(short)).sort().at(-1)) || { haiku: "claude-haiku-5-5", sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5" }[short] || o.model;
+  const seen = s && s.threads.find((t) => t.modelSelection && t.modelSelection.model === model);
+  const inst = o.provider || (seen && seen.modelSelection.instanceId) || (model.startsWith("claude") ? "claudeAgent" : /^(gpt|o\d|codex)/.test(model) ? "codex" : model.startsWith("grok") ? "cursor" : "claudeAgent");
+  const seenEff = seen && seen.modelSelection.instanceId === inst && (seen.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id));
+  const effKey = seenEff ? seenEff.id : inst === "codex" ? "reasoningEffort" : inst === "cursor" ? "reasoning_effort" : inst === "opencode" ? "variant" : "effort";
+  const sel = { instanceId: inst, model }; if (o.effort) sel.options = [{ id: effKey, value: o.effort }];
+  return sel;
+}
+
+const dispatch = (type, threadId, extra = {}) => rpc("orchestration.dispatchCommand", { type, commandId: uuid(), threadId, ...extra });
+const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
+async function uploadImages(list) {
+  const out = [];
+  for (const f of String(list || "").split(",").filter(Boolean)) {
+    const fp = path.resolve(f.replace(/^~/, HOME)); const buf = fs.readFileSync(fp); const mimeType = MIME[path.extname(fp).toLowerCase()];
+    if (!mimeType) throw new Error(`unsupported image type: ${fp} (png/jpg/gif/webp)`);
+    const name = path.basename(fp);
+    const u = await rpc("attachments.createUploadUrl", { type: "image", name, mimeType, sizeBytes: buf.length });
+    const r = await fetch(BASE + u.relativeUrl, { method: "POST", headers: { ...H, "content-type": mimeType }, body: buf });
+    if (r.status !== 204 && !r.ok) throw new Error(`upload failed ${r.status} ${await r.text()}`);
+    out.push({ type: "image", id: u.attachmentId, name, mimeType, sizeBytes: buf.length });
+  }
+  return out;
+}
+async function changedFiles(t, lastTurn) {
+  const p = (await thread(t.id)).projection; const proj = (await shell()).projects.find((x) => x.id === t.projectId);
+  const root = t.worktreePath || (proj && proj.workspaceRoot);
+  let runs = p.runs.filter((r) => r.startedAt); if (lastTurn) runs = runs.slice(-1); if (!runs.length) return [];
+  const runIds = new Set(runs.map((r) => r.id)); const found = new Map();
+  const add = (f, why) => { if (!f) return; const a = path.isAbsolute(f) ? f : path.join(root || "", f); if (!found.has(a)) found.set(a, why); };
+  for (const c of p.checkpoints || []) if (!lastTurn || runIds.has(c.runId) || runs.some((r) => r.checkpointId === c.id)) for (const f of c.files || []) add(f.path || f.filePath || f, "checkpoint");
+  for (const it of p.turnItems) { if (!runIds.has(it.runId)) continue;
+    if (it.type === "file_change") add(it.fileName, "file_change");
+    if (it.type === "command_execution" || it.type === "assistant_message") for (const m of String(it.input || it.text || "").matchAll(/((?:[A-Za-z]:[\\/]|\/)[\w .@+~-]+(?:[\\/][\w .@+~-]+)*\.\w{1,6})/g)) if (root && normp(m[1]).startsWith(normp(root))) add(m[1].trim(), it.type === "assistant_message" ? "mentioned" : "command"); }
+  // non-git projects have no checkpoints: also scan the project for files modified during these runs
+  if (root && fs.existsSync(root)) { const from = Math.min(...runs.map((r) => Date.parse(r.startedAt))) - 2000, to = Math.max(...runs.map((r) => Date.parse(r.completedAt || new Date().toISOString()))) + 5000;
+    const walk = (d, depth) => { if (depth > 6) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (/^(\.git|node_modules|\.next|dist|build|\.venv|__pycache__)$/.test(e.name)) continue; const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f, depth + 1); else { try { const m = fs.statSync(f).mtimeMs; if (m >= from && m <= to) add(f, "modified-during-run"); } catch {} } } };
+    try { walk(root, 0); } catch {} }
+  return [...found].map(([f, why]) => ({ path: f, why, exists: fs.existsSync(f) }));
+}
+async function thread(id) { return get(`/api/orchestration/threads/${encodeURIComponent(id)}`); }
+function messages(snap) {
+  const items = (snap.projection && snap.projection.turnItems) || snap.turnItems || [];
+  const out = [];
+  for (const it of Array.isArray(items) ? items : Object.values(items)) {
+    const role = it.role || it.kind || it.type; const text = it.text ?? it.content ?? (it.message && it.message.text);
+    if (typeof text === "string" && text.trim() && /user|assistant|message/i.test(String(role))) out.push({ role: /user/i.test(String(role)) ? "user" : "assistant", text, at: it.createdAt });
+  }
+  return out;
+}
+async function wait(id, sec = 300) {
+  const end = Date.now() + sec * 1000; await new Promise((r) => setTimeout(r, 3000));
+  while (Date.now() < end) { const s = await shell(); const t = s.threads.find((t) => t.id === id); if (t && !t.activeRunId && t.status !== "running" && t.status !== "starting") return t; await new Promise((r) => setTimeout(r, 3000)); }
+  throw new Error("timed out waiting for reply");
+}
+async function printLast(id, n) { const snap = await thread(id); for (const m of messages(snap).slice(-n)) console.log(`[${m.role}] ${m.text}`); }
+
+const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "diff", "files", "status", "raw"];
+(async () => {
+  const cmd = process.argv[2], o = args();
+  if (CMDS.includes(cmd)) init();
+  if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
+  else if (cmd === "models") { const m = new Map(); for (const t of (await shell()).threads) if (t.modelSelection) m.set(`${t.modelSelection.instanceId} ${t.modelSelection.model}`, (t.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id))?.id || "-"); for (const [k, v] of [...m].sort()) console.log(`${k}  (effort key: ${v})`); }
+  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } for (const t of ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15)) console.log(`${t.id}  ${t.status}  ${t.title}`); }
+  else if (cmd === "new") {
+    if (!o.project || !o.prompt) throw new Error("usage: new --project <path|name|id> --prompt <text> [--model m] [--effort e] [--title t] [--mode plan] [--wait]");
+    const p = await findProject(o.project); const s0 = await shell(); const sel = modelSel(o, p.defaultModelSelection || recentSel(s0, p.id) || recentSel(s0), s0);
+    const title = o.title || String(o.prompt).slice(0, 60);
+    const res = await rpc("orchestration.launchThread", { commandId: uuid(), creationSource: "web", projectId: p.id, title, generateTitle: !o.title,
+      modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: { type: "root" },
+      initialMessage: { messageId: uuid(), text: String(o.prompt), attachments: await uploadImages(o.attach) } });
+    console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}`);
+    if (o.wait) { const t = await wait(res.threadId, +o.timeout || 300); console.log(`title: ${t.title}  status: ${t.status}`); await printLast(res.threadId, 2); }
+  }
+  else if (cmd === "send") {
+    if (!o.thread || !o.prompt) throw new Error("usage: send --thread <id|title> --prompt <text> [--wait]");
+    const t = await findThread(o.thread);
+    const busy = !!t.activeRunId;
+    await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId: uuid(),
+      text: String(o.prompt), attachments: await uploadImages(o.attach), dispatchMode: busy ? { type: "queue_after_active" } : { type: "start_immediately" } });
+    console.log(`sent to ${t.id}  "${t.title}"${busy ? " (queued after current run)" : ""}`);
+    if (o.wait) { await wait(t.id, +o.timeout || 300); await printLast(t.id, 2); }
+  }
+  else if (cmd === "read") { const t = await findThread(o.thread); console.log(`${t.id}  ${t.title}  status=${t.status}`); await printLast(t.id, +o.last || 6); }
+
+  else if (cmd === "settle" || cmd === "unsettle") { const t = await findThread(o.thread); await dispatch(cmd === "settle" ? "thread.settle" : "thread.unsettle", t.id, cmd === "unsettle" ? { reason: "user" } : {}); const n = (await shell()).threads.find((x) => x.id === t.id); console.log(`${cmd}d "${t.title}"  settledAt=${n.settledAt}  settledOverride=${n.settledOverride}`); }
+  else if (cmd === "rename") { const t = await findThread(o.thread); if (!o.title) throw new Error("--title required"); await dispatch("thread.metadata.update", t.id, { title: String(o.title) }); console.log(`renamed "${t.title}" -> "${o.title}"`); }
+  else if (cmd === "interrupt") { const t = await findThread(o.thread); if (!t.activeRunId) { console.log("not running"); return; } await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: "t3ctl", holdQueue: !!o.hold }); console.log(`interrupted run in "${t.title}"`); }
+  else if (cmd === "pending") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; for (const r of p.runtimeRequests || []) console.log(JSON.stringify(r).slice(0, 600)); if (!(p.runtimeRequests || []).length) console.log("no runtime requests"); }
+  else if (cmd === "diff") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; const n = p.checkpoints.filter((c) => c.status !== "missing").length;
+    const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
+  else if (cmd === "files") { const t = await findThread(o.thread); const fl = await changedFiles(t, !!o["last-turn"]);
+    const outDir = path.join(__dirname, "out"); if (o.copy !== "no") fs.mkdirSync(outDir, { recursive: true });
+    for (const f of fl) { let note = ""; if (f.exists && o.copy !== "no") { const dst = path.join(outDir, path.basename(f.path)); fs.copyFileSync(f.path, dst); note = ` -> ${dst}`; } console.log(`${f.exists ? "" : "(gone) "}${f.path}  [${f.why}]${note}`); }
+    if (!fl.length) console.log("no files found"); }
+
+  else if (cmd === "status") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection;
+    const pend = (p.runtimeRequests || []).filter((r) => !r.resolvedAt && !/resolved|answered|cancel|expired|dismiss/i.test(String(r.status || "")));
+    const lastA = p.turnItems.filter((i) => i.type === "assistant_message" && i.text).at(-1);
+    const asks = !!lastA && /\?\s*[*_`)]*\s*$/.test(lastA.text);
+    const state = t.activeRunId ? "running" : (pend.length || t.pendingRuntimeRequest) ? "waiting" : t.hasActionableProposedPlan ? "plan-ready" : t.lastError ? "error" : asks ? "asked-you" : "idle";
+    const r = { id: t.id, title: t.title, state, status: t.status, settled: !!(t.settledAt || t.settledOverride === "settled"), pendingRequests: pend.length, lastReplyAt: lastA ? (lastA.completedAt || lastA.updatedAt) : null,
+      lastReply: lastA ? lastA.text.replace(/\s+/g, " ").slice(0, 280) : null, updatedAt: t.updatedAt, lastError: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null, model: t.modelSelection && t.modelSelection.model };
+    if (o.json) console.log(JSON.stringify(r)); else console.log(`${r.state}  ${r.title}  (updated ${r.updatedAt}, pending=${r.pendingRequests})\n${r.lastReply || ""}`); }
+  else if (cmd === "raw") { if (!o.thread) throw new Error("--thread <id> is required"); console.log(JSON.stringify(await thread(o.thread), null, 1).slice(0, +o.chars || 6000)); }
+  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t | diff --thread t | files --thread t [--last-turn] [--copy no] | new/send ... --attach img1.png,img2.jpg");
+})().catch((e) => { console.error("error:", e.message); process.exit(1); });

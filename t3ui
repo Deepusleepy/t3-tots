@@ -1,0 +1,27 @@
+#!/bin/zsh
+# t3ui - macOS fallback: drive the T3 Code app UI (stable or Nightly; set T3_APP to pick one) with System Events (needs Accessibility for the calling app).
+#   t3ui new  <project search> <model search> <effort label> <prompt>   e.g. t3ui new MyProject "haiku 5.5" Low "hi"
+#   t3ui send <exact sidebar thread title> <prompt>
+set -e
+D=${0:A:h}
+[[ "$(uname)" == Darwin ]] || { echo "t3ui only works on macOS"; exit 1; }
+ks(){ local s=${1//\\/\\\\}; s=${s//\"/\\\"}; osascript -e "tell application \"System Events\" to keystroke \"$s\""; }
+ret(){ osascript -e 'tell application "System Events" to key code 36'; }
+case "$1" in
+  new)
+    osascript "$D/ui-press.applescript" AXButton "New thread"; sleep 1.2
+    ks "$2"; sleep 0.6; ret; sleep 1.5
+    osascript "$D/ui-model.applescript"; sleep 1; ks "$3"; sleep 0.6; ret; sleep 1
+    eff=$(osascript "$D/ui-dump.applescript" | awk -F' \\| ' '$1=="AXPopUpButton" && $3 ~ /^6[0-9][0-9],/ {print $2; exit}')
+    osascript "$D/ui-press.applescript" AXPopUpButton "$eff"; sleep 0.8
+    osascript "$D/ui-menuitem.applescript" "$4"; sleep 0.8
+    osascript "$D/ui-dump.applescript" | grep -q 'AXStaticText | New thread' || { echo "not on a new-thread draft, aborting"; exit 1; }
+    osascript "$D/ui-type.applescript" "$5"; sleep 0.5
+    osascript "$D/ui-press.applescript" AXButton "Submit message" ;;
+  send)
+    osascript "$D/ui-press.applescript" AXButton "$2,"; sleep 1.5
+    osascript "$D/ui-dump.applescript" | grep -qF "Thread actions for $2" || { echo "thread '$2' not open, aborting"; exit 1; }
+    osascript "$D/ui-type.applescript" "$3"; sleep 0.5
+    osascript "$D/ui-press.applescript" AXButton "Submit message" ;;
+  *) sed -n '2,5p' "$0" ;;
+esac
