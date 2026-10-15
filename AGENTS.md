@@ -48,7 +48,7 @@ The scripts print these instead of stack traces. Relay them in plain words.
 | `NOT_PENDING` / `NOT_ANSWERABLE` | The question was already answered or closed, or its run ended. |
 | `SENT_UNCONFIRMED` | The answer was sent but T3 still shows the question open; check `t3ctl pending`. |
 | `NO_LISTEN_CONFIG` / `BAD_LISTEN_CONFIG` | `listen.json` is missing or invalid: run `t3listen setup`. |
-| `WEBHOOK_REJECTED` / `WEBHOOK_UNREACHABLE` | The webhook refused the key or can't be reached. |
+| `WEBHOOK_REJECTED` / `WEBHOOK_UNREACHABLE` | The webhook refused the event or can't be reached. The message (and `listen.log`) includes the webhook's reply with the URL and key redacted: 401/403 means a wrong key (redo setup), a rate-limit reply clears on its own (the listener keeps retrying). |
 | `ALREADY_RUNNING` | A listener is already running on this computer. |
 
 ## Updating

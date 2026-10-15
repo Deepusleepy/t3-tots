@@ -25,10 +25,10 @@ You normally don't install these by hand: the T3 Tots bot downloads them on its 
 
 ## Answering questions from your phone (optional)
 
-1. T3 Tots creates a webhook routine for you and gives you a one-line command. It runs `t3listen setup`, which saves the webhook URL and key into `listen.json` in the tools folder. Only your user account can read that file, and it's never printed.
+1. T3 Tots creates a webhook routine for you, then opens a Terminal (macOS) or PowerShell window (Windows) with `t3listen setup` already running. You paste two lines from the routine panel: line 1 the Webhook URL (`https://...`), line 2 the Authorization header (`Authorization: ...`). It saves them into `listen.json` in the tools folder. Only your user account can read that file, and it's never printed.
 2. `node t3listen test` sends one test event. `node t3listen install` then starts the listener at login: a LaunchAgent on macOS, a hidden Task Scheduler logon task on Windows, or a systemd user unit on Linux. `t3listen status` and `t3listen uninstall` do what they say.
 3. When a thread asks a question, `t3listen` POSTs `{"event":"request.opened", "machine", "threadId", "title", "project", "requestId", "kind", "createdAt", "questions":[{"id","header","question","options":[{"label","description"}],"multiSelect","allowCustomAnswer","required"}], "text"}`. When it's answered (here or in T3), cancelled or expired, it POSTs `{"event":"request.resolved", ..., "status", "answers"}`. T3 Tots answers with `t3ctl answer --thread <id> --request <id> --pick "<your choice>"`, using only your exact choice.
-4. Permission prompts (approvals) are never sent unless you add `"approvals": true` to `listen.json`. Questions older than `skipStaleMinutes` (default 1440) at startup are skipped. `node t3listen --dry-run` prints the payloads instead of sending them.
+4. Permission prompts (approvals) are never sent unless you add `"approvals": true` to `listen.json`. Questions older than `skipStaleMinutes` (default 1440) at startup are skipped. `node t3listen --dry-run` prints the payloads instead of sending them. If the webhook refuses an event, `listen.log` shows the status and the webhook's reply (URL and key redacted); rate limits, network errors and 5xx are retried every minute for up to 24 hours, and anything still undelivered is resent when the listener restarts.
 
 ## Requirements
 

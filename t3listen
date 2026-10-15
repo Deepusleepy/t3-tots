@@ -30,10 +30,15 @@ function lockDown(f) {
   if (process.platform !== "win32") { fs.chmodSync(f, 0o600); return; }
   try { cp.execFileSync("icacls", [f, "/inheritance:r", "/grant:r", `${process.env.USERNAME}:F`], { stdio: "ignore" }); } catch { console.error("note: couldn't restrict listen.json permissions (icacls)"); }
 }
-async function setup() { // stdin: line 1 = webhook URL, then optional "Header-Name: value" lines
+async function setup() { // stdin: line 1 = webhook URL, then "Header-Name: value" lines (stops after an Authorization line, or at a blank line)
   const lines = [], rl = require("readline").createInterface({ input: process.stdin, output: process.stdin.isTTY ? process.stderr : undefined, terminal: !!process.stdin.isTTY });
-  if (process.stdin.isTTY) process.stderr.write("Webhook URL, then any headers as 'Name: value' (blank line to finish):\n");
-  for await (const l of rl) { if (!l.trim()) { if (lines.length) break; else continue; } lines.push(l.trim()); }
+  if (process.stdin.isTTY) process.stderr.write("T3 Tots listener setup: paste two lines from the routine panel, pressing Enter after each.\n  Line 1: Webhook URL starting https://\n  Line 2: Authorization header starting Authorization:\n");
+  for await (const l of rl) {
+    const t = l.trim().replace(/^POST\s+/i, ""); if (!t) { if (lines.length) break; else continue; }
+    lines.push(t); if (lines.length > 1 && /^authorization:/i.test(t)) break;
+    if (process.stdin.isTTY && lines.length === 1) process.stderr.write(/^https?:\/\//.test(t) ? "  got the URL. Now line 2 (Authorization: ...):\n" : "  that doesn't start with https:// - run setup again and paste the Webhook URL first.\n");
+  }
+  rl.close();
   const url = lines.shift() || ""; if (!/^https:\/\//.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(url)) die("BAD_URL", "the first line must be the webhook URL (https://...)");
   const headers = {}; for (const l of lines) { const m = l.match(/^([A-Za-z0-9-]+):\s*(.+)$/); if (!m) die("BAD_HEADER", "header lines must look like 'Name: value'"); headers[m[1]] = m[2]; }
   const old = readJSON(CONF, {}), c = { ...old, url, headers, machine: optv("--machine") || old.machine || os.hostname().replace(/\.local$/, ""), approvals: old.approvals === true, skipStaleMinutes: old.skipStaleMinutes ?? 1440 };
@@ -81,21 +86,45 @@ function summary(e) {
 
 // ---------- delivery ----------
 let C, queue = [], delivered = 0;
+const RETRYABLE = (st, body = "") => st === 408 || st === 429 || st >= 500 || /rate.?limit|too many|try again/i.test(body); // some webhook hosts send rate limits as 400
+function redact(s) { // never let the webhook URL or header values reach the log
+  s = String(s || ""); const secrets = [C && C.url, ...Object.values((C && C.headers) || {}).flatMap((v) => [v, ...String(v).split(/\s+/)])].filter((v) => v && String(v).length > 7);
+  for (const v of secrets.sort((a, b) => String(b).length - String(a).length)) s = s.split(String(v)).join("[redacted]");
+  return s.replace(/\s+/g, " ").trim().slice(0, 500);
+}
+async function post(e) { // one attempt; returns { ok, status, body, retry }
+  try {
+    const r = await fetch(C.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...C.headers }, body: JSON.stringify(e), signal: AbortSignal.timeout(20000) });
+    if (r.ok) return { ok: true, status: r.status };
+    let body = ""; try { body = await r.text(); } catch {}
+    return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body) };
+  } catch (err) { return { ok: false, status: 0, body: (err.cause && err.cause.code) || err.name, retry: true }; }
+}
+function markDelivered(e) { if (e.event === "request.opened" && S.sent[e.requestId]) { S.sent[e.requestId].delivered = true; saveState(); } }
 async function deliver(e) {
   e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${e.requestId}`).digest("hex").slice(0, 16);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
-    try {
-      const r = await fetch(C.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...C.headers }, body: JSON.stringify(e), signal: AbortSignal.timeout(20000) });
-      if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)} -> HTTP ${r.status}`); delivered++; return true; }
-      log(`webhook answered HTTP ${r.status} for ${e.event}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}`);
-      if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
-    } catch (err) { log(`webhook not reachable (${(err.cause && err.cause.code) || err.name})`); }
-    await sleep(2000 * 3 ** i);
+    const r = await post(e);
+    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)} -> HTTP ${r.status}`); delivered++; markDelivered(e); return true; }
+    if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${e.requestId.slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}`);
+    else log(`webhook not reachable (${r.body})`);
+    if (!r.retry) break; if (i < 2) await sleep((/rate.?limit/i.test(r.body || "") ? 20000 : 2000) * 3 ** i);
   }
-  if (queue.length < 100) queue.push(e); return false;
+  // keep it queued and retry every 60s: retryable failures (network, 408, 429, 5xx) for up to 24h, other 4xx 10 times
+  if (queue.length < 100) queue.push({ e, rounds: 0, since: Date.now() }); return false;
 }
-setInterval(async () => { if (!queue.length) return; const q = queue; queue = []; for (const e of q) { delete e.text; await deliver(e); } }, 60000).unref();
+setInterval(async () => {
+  if (!queue.length) return; const q = queue; queue = [];
+  for (const item of q) {
+    const { e } = item; item.rounds++; e.sentAt = new Date().toISOString();
+    const r = await post(e);
+    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
+    log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${e.requestId.slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
+    if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) { if (queue.length < 100) queue.push(item); }
+    else log(`giving up on ${e.event} ${e.requestId.slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
+  }
+}, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
 let S = { sent: {} };
@@ -111,12 +140,12 @@ async function reconcile(ep, threadId, opts = {}) {
   const all = p ? p.runtimeRequests || [] : [];
   const open = all.filter(wanted);
   for (const r of open) {
-    if (S.sent[r.id]) continue;
+    if (S.sent[r.id] && (S.sent[r.id].delivered !== false || !opts.startup)) continue;
     const ageMin = (Date.now() - Date.parse(r.createdAt)) / 60000;
     if (opts.startup && C.skipStaleMinutes > 0 && ageMin > C.skipStaleMinutes) { S.sent[r.id] = { threadId, skipped: true }; continue; }
     const e = { event: "request.opened", ...base, ...requestInfo(p, r) };
     if (e.questions && !e.questions.length) e.note = "question details not readable; answer it in T3";
-    S.sent[r.id] = { threadId, at: Date.now() }; saveState(); await deliver(e);
+    S.sent[r.id] = { threadId, at: (S.sent[r.id] && S.sent[r.id].at) || Date.now(), delivered: false }; saveState(); await deliver(e);
   }
   for (const [id, s] of Object.entries(S.sent)) {
     if (s.threadId !== threadId || open.some((r) => r.id === id)) continue;
@@ -254,8 +283,9 @@ function status() {
 async function test() {
   C = loadConfig(); const e = { event: "test", machine: C.machine, threadId: "test", title: "t3listen test", project: null, requestId: "test-" + Date.now(), kind: "test" };
   if (DRY) { console.log("DRY-RUN payload " + JSON.stringify({ ...e, text: `t3listen test from ${C.machine}` })); return; }
-  const r = await fetch(C.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...C.headers }, body: JSON.stringify({ ...e, text: `t3listen test from ${C.machine}: the webhook works`, sentAt: new Date().toISOString() }), signal: AbortSignal.timeout(20000) }).catch((err) => die("WEBHOOK_UNREACHABLE", (err.cause && err.cause.code) || err.message));
-  if (!r.ok) die("WEBHOOK_REJECTED", `HTTP ${r.status}${r.status === 401 || r.status === 403 ? " (check the key)" : ""}`); console.log(`OK: webhook answered HTTP ${r.status}`);
+  const r = await post({ ...e, text: `t3listen test from ${C.machine}: the webhook works`, sentAt: new Date().toISOString() });
+  if (!r.ok) die(r.status ? "WEBHOOK_REJECTED" : "WEBHOOK_UNREACHABLE", r.status ? `HTTP ${r.status}${r.status === 401 || r.status === 403 ? " (check the key)" : ""}${r.body ? `: ${r.body}` : ""}` : r.body);
+  console.log(`OK: webhook answered HTTP ${r.status}`);
 }
 
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
