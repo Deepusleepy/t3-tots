@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // t3listen - tells T3 Tots the moment a T3 Code thread asks a question (and when it's answered or closed),
+// and when a thread's run finishes, fails or is cancelled (sub-task threads only when they fail),
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
@@ -92,6 +93,8 @@ function requestInfo(p, r) {
 }
 function summary(e) {
   const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
+  if (END_WORD[e.event]) { const d = e.durationSec, dur = d == null ? "" : ` after ${d >= 3600 ? `${Math.floor(d / 3600)}h ${Math.round((d % 3600) / 60)}m` : d >= 60 ? `${Math.round(d / 60)}m` : `${d}s`}`;
+    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
   if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed${e.answeredHere ? " (answered from chat)" : ""}: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
   if (e.questions) return `T3 question in ${where}:\n${e.context ? `Context: ${e.context}\n` : ""}` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
   return `T3 approval in ${where}: ${e.approval.requestKind}${e.approval.prompt ? " - " + e.approval.prompt : ""}\n` + e.approval.options.map((x) => `  - ${x.label}`).join("\n");
@@ -116,18 +119,20 @@ async function post(e) { // one attempt; returns { ok, status, body, retry }
     return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body) };
   } catch (err) { return { ok: false, status: 0, body: (err.cause && err.cause.code) || err.name, retry: true }; }
 }
+const ref = (e) => String(e.requestId || e.runId || "");
 function markDelivered(e) {
+  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && f.e) { delete f.e; saveState(); } return; }
   const s = S.sent[e.requestId]; if (!s) return;
   if (e.event === "request.opened") s.delivered = true; else if (e.event === "request.resolved" && s.closing) delete S.sent[e.requestId];
   saveState();
 }
 async function deliver(e) {
-  e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${e.requestId}`).digest("hex").slice(0, 16);
+  e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
     const r = await post(e);
-    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status}`); delivered++; markDelivered(e); return true; }
-    if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${e.requestId.slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}`);
+    if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status}`); delivered++; markDelivered(e); return true; }
+    if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${ref(e).slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}`);
     else log(`webhook not reachable (${r.body})`);
     if (!r.retry) break; if (i < 2) await sleep((/rate.?limit/i.test(r.body || "") ? 20000 : 2000) * 3 ** i);
   }
@@ -139,15 +144,15 @@ setInterval(async () => {
   for (const item of q) {
     const { e } = item; item.rounds++; e.sentAt = new Date().toISOString();
     const r = await post(e);
-    if (r.ok) { log(`sent ${e.event} "${e.title}" ${e.requestId.slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
-    log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${e.requestId.slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
+    if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
+    log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
     if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) { if (queue.length < 100) queue.push(item); }
-    else log(`giving up on ${e.event} ${e.requestId.slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
+    else log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
   }
 }, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
-let S = { sent: {} };
+let S = { sent: {}, finished: {} };
 const saveState = () => { if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S)); fs.renameSync(t, STATE); };
 const known = new Map(); // threadId -> pendingRuntimeRequest.id last seen (null = none)
 const meta = { projects: new Map(), threads: new Map() };
@@ -177,6 +182,64 @@ async function reconcile(ep, threadId, opts = {}) {
   }
 }
 
+// ---------- run ends: finished / failed / cancelled ----------
+// One event per run (keyed by run id in listen-state.json "finished", kept 14 days), so restarts never repeat one.
+// "finished"/"cancelled" only when the thread is left idle (a queued message starting next is not an end); "failed" always.
+// Sub-task threads (id "thread:delegated-task:...") are reported only when they fail.
+const DELEGATED = "thread:delegated-task:", ACTIVE = new Set(["running", "starting"]);
+const END = { completed: "thread.finished", failed: "thread.failed", error: "thread.failed", cancelled: "thread.cancelled", interrupted: "thread.cancelled" };
+const END_WORD = { "thread.finished": "finished", "thread.failed": "failed", "thread.cancelled": "was cancelled" };
+const runSeen = new Map(); // threadId -> { status, activeRunId } last seen
+const localTime = (iso) => { try { return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" }); } catch { return iso; } };
+const noteRun = (t) => { const prev = runSeen.get(t.id); runSeen.set(t.id, { status: t.status, activeRunId: t.activeRunId || null }); return prev; };
+const isActive = (t) => !!(t && (t.activeRunId || ACTIVE.has(t.status)));
+const isBusy = (t) => isActive(t) || (t && t.status === "queued"); // a queued message is about to start
+async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason }
+  let p = null;
+  for (let i = 0; i < 3; i++) { // the projection can trail the shell update by a moment
+    try { p = await threadSnap(ep, t.id); } catch (err) { return { skip: `couldn't read thread: ${err.message}` }; }
+    if (!p) return { skip: "thread gone" };
+    const r = runId && (p.runs || []).find((x) => x.id === runId);
+    if (!runId || !r || END[r.status] || !opts.live) break; await sleep(1500);
+  }
+  const ended = (p.runs || []).filter((r) => r.startedAt && END[r.status]).sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
+  let run = (runId && (p.runs || []).find((r) => r.id === runId)) || ended.at(-1);
+  if (!run) return { skip: "no run" };
+  if (!run.startedAt) return { skip: "run never started (removed from the queue)" };
+  const event = END[run.status] || (!isBusy(t) && END[t.status]); if (!event) return { skip: `run status ${run.status}` };
+  const delegated = t.id.startsWith(DELEGATED);
+  if (delegated && event !== "thread.failed") return { skip: "sub-task thread that didn't fail" };
+  if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
+  if (opts.since && Date.parse(run.completedAt || 0) < opts.since) return { skip: "ended before the listener's last run" };
+  const items = p.turnItems || [], txt = (x) => x.text ?? x.content ?? (x.message && x.message.text);
+  const said = items.filter((x) => x.type === "assistant_message" && typeof txt(x) === "string" && txt(x).trim());
+  const reply = said.filter((x) => x.runId === run.id).at(-1) || said.at(-1);
+  const errItem = items.filter((x) => x.type === "error" && x.runId === run.id).at(-1);
+  const errText = errItem ? (txt(errItem) || errItem.message || errItem.title) : t.lastError ? (t.lastError.message || "error") : null;
+  const done = run.completedAt || new Date().toISOString(), m = meta.threads.get(t.id) || {};
+  const e = { event, kind: event.replace(".", "-"), machine: C.machine, threadId: t.id, title: t.title || m.title || t.id, project: meta.projects.get(t.projectId || m.projectId) || null,
+    delegated, runId: run.id, status: run.status, threadStatus: t.status || null, startedAt: run.startedAt, completedAt: done, completedAtLocal: localTime(done),
+    durationSec: run.startedAt ? Math.max(0, Math.round((Date.parse(done) - Date.parse(run.startedAt)) / 1000)) : null,
+    lastReply: reply ? trim(txt(reply), 600) : null, ...(event === "thread.failed" && errText ? { error: trim(String(errText), 300) } : {}) };
+  return { e };
+}
+async function reportEnd(ep, t, runId, opts = {}) {
+  if (runId && S.finished[runId]) return;
+  const { e, skip } = await buildEnd(ep, t, runId, opts);
+  if (!e) { if (VERBOSE) log(`run end in "${t.title}" not reported: ${skip}`); return; }
+  if (S.finished[e.runId]) return;
+  S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
+}
+async function checkFinish(ep, t, prev) {
+  if (!prev || !isActive(prev)) return; // only a run that we saw running or starting
+  const now = t.activeRunId || null;
+  if (prev.activeRunId && prev.activeRunId === now) return; // same run still going
+  if (!prev.activeRunId && isBusy(t)) return; // still starting
+  await reportEnd(ep, t, prev.activeRunId, { live: true });
+}
+function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k]; }
+setInterval(() => { if (DRY || !C) return; S.lastAlive = Date.now(); try { saveState(); } catch {} }, 60000).unref();
+
 function connect(ep) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${ep.base.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: ep.H });
@@ -205,16 +268,27 @@ async function onItem(ep, v, full) {
     for (const t of v.snapshot.threads || []) { live.add(t.id); meta.threads.set(t.id, { title: t.title, projectId: t.projectId }); known.set(t.id, t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null); }
     const check = new Set([...v.snapshot.threads.filter((t) => t.pendingRuntimeRequest).map((t) => t.id), ...Object.values(S.sent).map((s) => s.threadId)]);
     for (const tid of check) await reconcile(ep, tid, { startup: true, ...(live.has(tid) ? {} : { gone: "archived-or-deleted" }) });
-    log(`watching ${live.size} threads; ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped`);
+    for (const t of v.snapshot.threads || []) noteRun(t);
+    if (!DRY) {
+      pruneFinished();
+      for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); // not delivered before the restart
+      const since = S.lastAlive ? S.lastAlive - 120000 : 0; // first run with this feature: nothing to catch up on
+      if (since) for (const t of v.snapshot.threads || []) if (!isBusy(t) && END[t.status] && Date.parse(t.updatedAt || 0) > since && Date.now() - Date.parse(t.updatedAt) < 36e5) await reportEnd(ep, t, null, { since });
+      S.lastAlive = Date.now(); saveState();
+    }
+    log(`watching ${live.size} threads (${[...runSeen.values()].filter(isActive).length} running); ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped; run ends on`);
   } else if (v.kind === "project.updated") meta.projects.set(v.project.id, v.project.title);
   else if (v.kind === "thread.updated") {
     const t = v.thread; meta.threads.set(t.id, { title: t.title, projectId: t.projectId });
-    if (v.location === "archive") { if (Object.values(S.sent).some((s) => s.threadId === t.id)) await reconcile(ep, t.id, { gone: "archived" }); known.delete(t.id); return; }
+    if (v.location === "archive") { if (Object.values(S.sent).some((s) => s.threadId === t.id)) await reconcile(ep, t.id, { gone: "archived" }); known.delete(t.id); runSeen.delete(t.id); return; }
+    const prevRun = noteRun(t);
+    if (VERBOSE && prevRun && (prevRun.status !== t.status || prevRun.activeRunId !== (t.activeRunId || null))) log(`thread.updated "${t.title}" status ${prevRun.status} -> ${t.status}, run ${prevRun.activeRunId ? prevRun.activeRunId.slice(-12) : "-"} -> ${t.activeRunId ? t.activeRunId.slice(-12) : "-"}`);
+    await checkFinish(ep, t, prevRun);
     const now = t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null, before = known.has(t.id) ? known.get(t.id) : null; known.set(t.id, now);
     const tracked = Object.values(S.sent).filter((s) => s.threadId === t.id && !s.skipped).length;
     if (VERBOSE && (tracked || now !== before)) log(`thread.updated "${t.title}" pending ${before ? before.slice(-12) : "-"} -> ${now ? now.slice(-12) : "-"} (tracked ${tracked})`);
     if (now !== before || tracked > 1 || (tracked === 1 && !now)) await reconcile(ep, t.id);
-  } else if (v.kind === "thread.removed") { known.delete(v.threadId); if (Object.values(S.sent).some((s) => s.threadId === v.threadId)) await reconcile(ep, v.threadId, { gone: "deleted" }); }
+  } else if (v.kind === "thread.removed") { known.delete(v.threadId); runSeen.delete(v.threadId); if (Object.values(S.sent).some((s) => s.threadId === v.threadId)) await reconcile(ep, v.threadId, { gone: "deleted" }); }
 }
 
 async function run() {
@@ -222,7 +296,7 @@ async function run() {
   if (!DRY) {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
-    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {};
+    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {};
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
@@ -309,8 +383,19 @@ async function test() {
   console.log(`OK: webhook answered HTTP ${r.status}`);
 }
 
+async function previewFinish() { // print the run-end event the listener would send for a thread's latest ended run; posts nothing, saves nothing
+  C = loadConfig(); const id = optv("--thread"); if (!id) die("USAGE", "preview-finish --thread <thread id>");
+  const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
+  const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", "no such thread");
+  const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
+  const { e, skip } = await buildEnd(ep, t, null, { preview: true });
+  if (!e) { console.log(`would not report: ${skip}`); return; }
+  e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
+}
+
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
 t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
 t3listen test [--dry-run]         send one test event to the webhook
+t3listen preview-finish --thread id   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-({ run, setup, test, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
+({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

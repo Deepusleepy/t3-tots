@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.1.2",
+ "version": "v1.2.0",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.1.2/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.2.0/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -22,8 +22,8 @@
   },
   {
    "path": "t3ctl",
-   "bytes": 27399,
-   "sha256": "4d0d9c4640e875172fb087a37c27bed90f14de2aab27e4a2fd1dabee9a162075",
+   "bytes": 29035,
+   "sha256": "e57b9283c7ba1a2fbc778360c931c5ba47d02e96857e3d2c302b42935ab74100",
    "targets": [
     "macos",
     "linux",
@@ -44,15 +44,15 @@
   },
   {
    "path": "t3listen",
-   "bytes": 32075,
-   "sha256": "a33908614b8d0e593a16ba4bbfc9768e31bea58eec7c145d7c0cf7caeec0e46b",
+   "bytes": 39769,
+   "sha256": "5c533cebc69bcb00f8c535b585604d27e0df80b1a30de6bdbda86698deb15362",
    "targets": [
     "macos",
     "linux",
     "windows",
     "box"
    ],
-   "purpose": "pushes T3 questions to your webhook as they open and close (Node 22+, optional)"
+   "purpose": "pushes T3 questions (open and close) and thread finish, fail and cancel events to your webhook (Node 22+, optional)"
   },
   {
    "path": "t3listen.cmd",

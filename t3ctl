@@ -226,7 +226,7 @@ async function confirm(t, r, what) {
   throw new Error(`SENT_UNCONFIRMED: the answer was sent but the request still shows pending in "${t.title}"; check with: t3ctl pending --thread ${t.id}`);
 }
 
-const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw"];
+const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw"];
 (async () => {
   const cmd = process.argv[2], o = args();
   if (CMDS.includes(cmd)) init();
@@ -248,9 +248,26 @@ const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", 
     const t = await findThread(o.thread);
     const busy = !!t.activeRunId;
     await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId: uuid(),
-      text: String(o.prompt), attachments: await uploadImages(o.attach), dispatchMode: busy ? { type: "queue_after_active" } : { type: "start_immediately" } });
-    console.log(`sent to ${t.id}  "${t.title}"${busy ? " (queued after current run)" : ""}`);
+      text: String(o.prompt), attachments: await uploadImages(o.attach), dispatchMode: !busy ? { type: "start_immediately" } : o.queue ? { type: "queue_after_active" } : { type: "steer_active", targetRunId: t.activeRunId } });
+    console.log(`sent to ${t.id}  "${t.title}"${busy ? (o.queue ? " (queued after current run)" : " (steered into the running run)") : ""}`);
     if (o.wait) { await wait(t.id, +o.timeout || 300); await printLast(t.id, 2); }
+  }
+  else if (cmd === "queue") {
+    const t = await findThread(o.thread); const snap = await thread(t.id); const pr = snap.projection || snap;
+    const runs = (pr.runs || []).filter((r) => r.status === "queued"); const msgs = messages(snap);
+    const all = (Array.isArray(pr.turnItems) ? pr.turnItems : Object.values(pr.turnItems || {}));
+    const textOf = (r) => { const m = all.find((x) => x.id === r.userMessageId || x.messageId === r.userMessageId); return m ? String(m.text ?? m.content ?? (m.message && m.message.text) ?? "") : ""; };
+    if (o.steer || o.cancel) {
+      const pick = String(o.steer || o.cancel); const targets = pick === "all" ? runs : runs.filter((r) => r.id === pick || r.id.startsWith(pick));
+      if (!targets.length) throw new Error(`no queued run matches ${pick}`);
+      for (const r of targets) {
+        if (o.steer) { if (!t.activeRunId) throw new Error("thread is not running; nothing to steer into"); await dispatch("queued-message.promote-to-steer", t.id, { queuedRunId: r.id, targetRunId: t.activeRunId }); console.log(`steered ${r.id}`); }
+        else { await dispatch("queued-run.cancel", t.id, { runId: r.id }); console.log(`cancelled queued ${r.id}`); }
+      }
+      return;
+    }
+    console.log(`${t.title}  active=${t.activeRunId || "none"}  queued=${runs.length}`);
+    for (const r of runs) console.log(`${r.id}  ${(textOf(r) || "(text not found)").replace(/\s+/g, " ").slice(0, 140)}`);
   }
   else if (cmd === "read") { const t = await findThread(o.thread); console.log(`${t.id}  ${t.title}  status=${t.status}`); await printLast(t.id, +o.last || 6); }
 
@@ -276,5 +293,5 @@ const CMDS = ["projects", "models", "threads", "new", "send", "read", "settle", 
       lastReply: lastA ? lastA.text.replace(/\s+/g, " ").slice(0, 280) : null, updatedAt: t.updatedAt, lastError: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null, model: t.modelSelection && t.modelSelection.model };
     if (o.json) console.log(JSON.stringify(r)); else console.log(`${r.state}  ${r.title}  (updated ${r.updatedAt}, pending=${r.pendingRequests})\n${r.lastReply || ""}`); }
   else if (cmd === "raw") { if (!o.thread) throw new Error("--thread <id> is required"); console.log(JSON.stringify(await thread(o.thread), null, 1).slice(0, +o.chars || 6000)); }
-  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | new/send ... --attach img1.png,img2.jpg");
+  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | new/send ... --attach img1.png,img2.jpg");
 })().catch((e) => { console.error("error:", e.message); process.exit(1); });
