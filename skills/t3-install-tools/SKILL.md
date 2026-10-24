@@ -6,7 +6,7 @@ description: >-
   onto the box and the user's T3 computers. Use during setup, when a skill says the
   tools are missing or differ, or for "update T3 Tots tools".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.1` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.2` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder.
 
@@ -29,15 +29,15 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.1"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.2"
 PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN release; a changed repo can't change what gets installed
- "tools/t3q.py": ["t3q.py", "0e298a606626dec4895d06828b304755cca3a03bdd2f190b56326860c64355d3"],
- "tools/t3ctl": ["t3ctl", "f8973b22a4b19723bafe1fe7f7cd208245d91361cd1834498a5358a568daa999"],
+ "tools/t3q.py": ["t3q.py", "0d457279efd3f56ec3cb5b20a5b9910fdea5fed6b239a37fab890bcc8300d5b5"],
+ "tools/t3ctl": ["t3ctl", "06ff14e04deefee12711e60a362ccf0498dbfaa6a4ab7c7ecfe13516245e88ad"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "57f23776a46ccdc7d9702c832fd9288d91ab6c4de26c3e5cd1acdffa1f6106be"],
+ "tools/t3listen": ["t3listen", "829a7439bbf50a89154639d92602f43326f3279f90c777e886dced60205cc82d"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "fdfa0cc128c5b345dfc243f4b4c9f2f676e8f4a4c36cc96568c20ebbefae74be"],
- "tools/survey.js": ["survey.js", "49a21096cc9c2b4674456bb68eafc4d8e4343ef7a3cd2b638f0d79b3d9494e0c"],
+ "tools/export.js": ["export.js", "6a53bb7672dbfd2bcf3c59cd0f39a63b043b73393a405b43b620fee7546de4e1"],
+ "tools/survey.js": ["survey.js", "63917f69d6118d9a751614a175b26059bd4a76befd0a8e006ed752c33b99a5c7"],
  "tools/t3ui": ["t3ui", "9ff2e0e5a3d1f0817bdd0443bbf6dae88c478c91fdc08dca85d096c88bdf412a"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],
@@ -46,7 +46,7 @@ PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN rele
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
  "tools/cleanup/scan.py": ["cleanup/scan.py", "a5781f6217e1647e1162b5cd361ec7c1504f50e981e43ce9efbe5e19feeb54c2"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
- "tools/report/report.py": ["report/report.py", "4de739e0eef04198de4a05147b06860c57feb53428b7daaa3b663e23ffd74209"]
+ "tools/report/report.py": ["report/report.py", "cbc0f9af0a8429e5e86b48e56f31b872982c6d22aa4d6ec64eb391317a59601b"]
 }
 DST = pathlib.Path(os.environ.get("T3TOTS_DST", "/workspace/t3-tots-tools"))
 raw = lambda tag, p: os.environ.get("T3TOTS_RAW_BASE", f"https://raw.githubusercontent.com/{REPO}/{tag}/") + p
@@ -162,7 +162,7 @@ else: print(__doc__)
 
 ## Private repo
 The box can't download from a private repo. Pick the first option that works:
-1. A computer where `gh auth status` shows a signed-in account with access: run `gh release download <tag> -R Deepusleepy/t3-tots --archive tar.gz -D <temp folder>` there and unpack it. It holds one folder named for the tag without its leading `v` (`v1.4.1` unpacks to `t3-tots-1.4.1`). CopyToBox the folder with `box_path` set to `/workspace/uploads/t3-tots-<tag>`, then run `python3 /workspace/t3tots_fetch.py box --from /workspace/uploads/t3-tots-<tag>`. The pinned hashes still decide what gets installed.
+1. A computer where `gh auth status` shows a signed-in account with access: run `gh release download <tag> -R Deepusleepy/t3-tots --archive tar.gz -D <temp folder>` there and unpack it. It holds one folder named for the tag without its leading `v` (`v1.4.1` unpacks to `t3-tots-1.4.1`). CopyToBox that folder with `box_path` set to `/workspace/uploads/<folder>` (for `v1.4.1`, `/workspace/uploads/t3-tots-1.4.1`), then run `python3 /workspace/t3tots_fetch.py box --from /workspace/uploads/<folder>`. The pinned hashes still decide what gets installed.
 2. A local checkout of the repo at that tag: CopyToBox it the same way and use `--from`.
 3. For computers: `python3 /workspace/t3tots_fetch.py emit <os> '<tools folder>' --gh` prints an install command that downloads with `gh api` instead of the public URL. It needs `gh` signed in on that computer. Otherwise use step 3 of "Install on a computer".
 

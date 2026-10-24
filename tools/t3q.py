@@ -4,7 +4,7 @@ Settings via env: T3_DAYS, T3_ALL=1, T3_Q (thread name or id), T3_LAST, T3_WEEK=
 Data folder: T3CODE_HOME (T3 Code's own setting, default ~/.t3) + /userdata; T3_HOME may point at either folder.
 Needs Python 3.8+. Opens statev2.sqlite read-only; never reads secrets/token/auth files."""
 import sqlite3, os, json, sys, datetime as dt, difflib
-if sys.version_info < (3, 8): print("PYTHON_TOO_OLD: t3q.py needs Python 3.8 or newer"); sys.exit(0)
+if sys.version_info < (3, 8): print("PYTHON_TOO_OLD: t3q.py needs Python 3.8 or newer"); sys.exit(1)
 try: sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
 except Exception: pass
 def t3_dir():  # T3 Code stores state in <T3CODE_HOME or ~/.t3>/userdata (dev builds: /dev), same for stable and Nightly
@@ -31,6 +31,10 @@ def ago_h(s):
     try: return (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(s.replace("Z", "+00:00"))).total_seconds() / 3600
     except Exception: return 0
 def flat(s, n): s = " ".join((s or "").replace(os.path.expanduser("~"), "~").split()); return s if len(s) <= n else s[:n] + "…"
+def env_int(name, default):  # whole-number settings; anything else stops with BAD_SETTING instead of a traceback
+    v = os.environ.get(name, "").strip() or str(default)
+    if not v.isdigit() or int(v) < 1: print(f"BAD_SETTING: {name} must be a whole number of 1 or more (got {v!r})"); sys.exit(1)
+    return int(v)
 def since(days): return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
 LIVE = ("queued", "preparing", "starting", "running")
 TH = "orchestration_v2_projection_threads"; RU = "orchestration_v2_projection_runs"
@@ -57,11 +61,14 @@ if CMD != "usage":
     db = sqlite3.connect("file:" + P.replace("\\", "/") + "?mode=ro", uri=True)
 q = lambda s, a=(): db.execute(s, a).fetchall()
 # Older T3 builds kept approvals in their own table; newer ones keep them in runtime_requests (already counted)
-APPROVALS = "(select count(*) from projection_pending_approvals a where a.thread_id=t.thread_id and a.status='pending')" \
-    if CMD != "usage" and q("select 1 from sqlite_master where type='table' and name='projection_pending_approvals'") else "0"
+APPROVALS = "0"
+def legacy_approvals():
+    global APPROVALS
+    if CMD != "usage" and q("select 1 from sqlite_master where type='table' and name='projection_pending_approvals'"):
+        APPROVALS = "(select count(*) from projection_pending_approvals a where a.thread_id=t.thread_id and a.status='pending')"
 
 def overview():
-    DAYS = int(os.environ.get("T3_DAYS", "7")); ALL = os.environ.get("T3_ALL") == "1"
+    DAYS = env_int("T3_DAYS", 7); ALL = os.environ.get("T3_ALL") == "1"
     rows = q(f"""select * from (select t.thread_id, coalesce(p.title,'(no project)'), t.title, {ACT} act,
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
      (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
@@ -83,7 +90,7 @@ def overview():
     if spawned: print("agent-spawned by project:", ", ".join(f"{k} {v}" for k, v in spawned.items()))
 
 def waiting():
-    DAYS = int(os.environ.get("T3_DAYS", "14"))
+    DAYS = env_int("T3_DAYS", 14)
     rows = q(f"""select * from (select t.thread_id, coalesce(p.title,'(no project)'), t.title, {ACT} act,
      (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
      (select group_concat(kind||'@'||created_at) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
@@ -156,7 +163,7 @@ def thread():  # fuzzy match a user thread; prints state, git context, goal, las
             f = os.path.join(wt, n); print(f"{n}: {'exists, ' + str(os.path.getsize(f)) + ' bytes' if os.path.exists(f) else 'missing'}")
     first = q(f"select coalesce(json_extract(payload_json,'$.text'),'') from {MS} where thread_id=? and role='user' order by created_at limit 1", (tid,))
     print("\nGOAL (first user message):", flat(first[0][0] if first else "", 1500))
-    for role, at, text in reversed(q(f"select role, created_at, coalesce(json_extract(payload_json,'$.text'),'') from {MS} where thread_id=? order by created_at desc limit ?", (tid, int(os.environ.get("T3_LAST", "8"))))):
+    for role, at, text in reversed(q(f"select role, created_at, coalesce(json_extract(payload_json,'$.text'),'') from {MS} where thread_id=? order by created_at desc limit ?", (tid, env_int("T3_LAST", 8)))):
         print(f"\n[{role} {loc(at)}] {flat(text, 900)}")
 
 def projects():  # T3 projects with folder, thread count and last activity; also guesses the common projects folder
@@ -174,13 +181,17 @@ def projects():  # T3 projects with folder, thread count and last activity; also
 def health():
     import socket, subprocess, shutil, platform
     OS = platform.system()
-    def sh(cmd):
-        try: return subprocess.run(cmd, capture_output=True, text=True, timeout=20, shell=isinstance(cmd, str)).stdout
-        except Exception as e: return ""
+    def sh(cmd):  # argument lists only, never a shell string
+        try: return subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout
+        except Exception: return ""
     rt = {}
     try: rt = json.load(open(os.path.join(D, "server-runtime.json"), encoding="utf-8"))
     except Exception: pass
     host, port, pid = rt.get("host"), rt.get("port"), rt.get("pid")   # only these keys are read
+    def whole(v, hi):  # the runtime file is untrusted input: accept only a plain integer in range
+        return v if type(v) is int and 0 < v <= hi else int(v) if isinstance(v, str) and v.isdigit() and 0 < int(v) <= hi else None
+    port, pid = whole(port, 65535), whole(pid, 2**31 - 1)
+    if not isinstance(host, str) or len(host) > 64: host = None
     alive = False
     if pid:
         alive = str(pid) in sh(["tasklist", "/FI", f"PID eq {pid}", "/NH"]) if OS == "Windows" else bool(sh(["ps", "-p", str(pid), "-o", "pid="]).strip())
@@ -190,7 +201,8 @@ def health():
         except Exception: pass
     binds = set()
     if port:
-        out = sh(["netstat", "-ano", "-p", "TCP"]) if OS == "Windows" else sh(f"lsof -nP -iTCP:{port} -sTCP:LISTEN 2>/dev/null || ss -ltn 2>/dev/null || netstat -an 2>/dev/null")
+        if OS == "Windows": out = sh(["netstat", "-ano", "-p", "TCP"])
+        else: out = next((o for o in (sh([c, *a]) for c, *a in (["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"], ["ss", "-ltn"], ["netstat", "-an"]) if shutil.which(c)) if o.strip()), "")
         for line in out.splitlines():
             if f":{port}" in line and "LISTEN" in line.upper():
                 for tok in line.split():
@@ -221,7 +233,7 @@ def health():
         mem = int(sh(["sysctl", "-n", "hw.memsize"]).strip() or 0); vm = sh(["vm_stat"]); pg = 16384 if "16384" in (vm.splitlines() or [""])[0] else 4096
         g = lambda k: int(next((l.split(":")[1].strip(" .") for l in vm.splitlines() if l.startswith(k)), "0") or 0)
         avail = (g("Pages free") + g("Pages inactive") + g("Pages speculative") + g("Pages purgeable")) * pg
-        print(f"memory: ~{avail/1e9:.1f} GB available of {mem/1e9:.0f} GB | pressure: {sh('memory_pressure 2>/dev/null | tail -1').strip()}")
+        print(f"memory: ~{avail/1e9:.1f} GB available of {mem/1e9:.0f} GB | pressure: {(sh(['memory_pressure']).strip().splitlines() or [''])[-1]}")
         print("load avg:", os.getloadavg(), "cores", os.cpu_count())
     elif OS == "Windows":
         import ctypes
@@ -235,7 +247,7 @@ def health():
 
 def usage():
     import glob, collections
-    DAYS = int(os.environ.get("T3_DAYS", "7"))
+    DAYS = env_int("T3_DAYS", 7)
     caches = sorted(glob.glob(os.path.join(D, "usage-scan-cache*.json")), key=lambda p: int("".join(c for c in os.path.basename(p) if c.isdigit()) or 0))  # v5 > v4 > unversioned
     if not caches: print("NO_USAGE_CACHE in", tilde(D), "- open T3's Usage view once so it builds the cache."); sys.exit(0)
     src = caches[-1]; u = json.load(open(src, encoding="utf-8"))
@@ -279,9 +291,10 @@ def usage():
     print("\nnote: API-list-price estimate; subscriptions (Max/Pro/Plus) do not bill per token.")
 
 CMDS = {"overview": overview, "waiting": waiting, "thread": thread, "projects": projects, "health": health, "usage": usage}
-try: CMDS[CMD]()
+try: legacy_approvals(); CMDS[CMD]()
 except sqlite3.OperationalError as e:
     msg = str(e)
     if "locked" in msg or "busy" in msg: print("T3_DB_BUSY: T3's database is busy; try again in a few seconds.")
     else: print("T3_SCHEMA_CHANGED:", msg, "- this T3 Code version stores data differently; update the T3 Tots tools or report it.")
+    sys.exit(1)
 except KeyboardInterrupt: pass

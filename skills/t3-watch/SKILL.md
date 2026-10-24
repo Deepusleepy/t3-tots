@@ -7,7 +7,7 @@ description: >-
   me", "let me know when <X> is done", "monitor <X>", "keep it going overnight",
   "I'm away, handle it".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). A watch is a routine you create only when the user asks for one. It reports by default. In delegated mode (t3-tots-rules "Decisions") it may also answer, approve, nudge and resume.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". A watch is a routine you create only when the user asks for one. It reports by default. In delegated mode (t3-tots-rules "Decisions") it may also answer, approve, nudge and resume.
 
 ## Pick the check
 - A T3 thread on a computer where `t3listen` runs with phone answers on: finished, failed and cancelled events already reach chat (t3-phone-answers). A watch is still useful for stalls, approvals and queue problems, which t3listen doesn't report.

@@ -20,6 +20,6 @@ const m={};for(const t of user.filter(t=>d(t.updatedAt)<30)){const k=t.modelSele
 console.log("\nmodels 30d");for(const [k,v] of Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,12))console.log(v,k);
 console.log("\nstatus");const st={};for(const t of user)st[t.status]=(st[t.status]||0)+1;console.log(st);
 console.log("\nwaiting (pending request / actionable plan / error)");for(const t of user)if(t.pendingRuntimeRequest||t.hasActionableProposedPlan||t.lastError)console.log("-",P[t.projectId],"|",t.title,"|",t.pendingRuntimeRequest?"request":t.hasActionableProposedPlan?"plan":"error",t.updatedAt.slice(0,10));
-console.log("\nstale active (not settled, idle 3-30d)");for(const t of user)if(t.settledOverride!=="settled"&&!t.settledAt&&!t.archivedAt&&d(t.updatedAt)>3&&d(t.updatedAt)<30)console.log("-",P[t.projectId],"|",t.title,"|",t.updatedAt.slice(0,10));
+console.log("\nstale active (not settled, idle 3-30d)");for(const t of user)if(!(t.settledOverride==="settled"||(!!t.settledAt&&t.settledOverride!=="unsettled"))&&!t.archivedAt&&d(t.updatedAt)>3&&d(t.updatedAt)<30)console.log("-",P[t.projectId],"|",t.title,"|",t.updatedAt.slice(0,10));
 console.log("\nrecent titles 30d");for(const t of user.filter(t=>d(t.updatedAt)<30).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).slice(0,70))console.log(t.updatedAt.slice(5,10),P[t.projectId],"|",t.title);
 })().catch(e=>{console.error("error:",e.message);process.exit(1)});

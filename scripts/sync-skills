@@ -8,7 +8,7 @@ Usage: scripts/sync-skills [--from DIR] [--dry-run] [--prune]
 
 It never edits a skill's wording. The only changes are CRLF to LF and a final newline.
 Exits 1, copying nothing, if any skill has a private detail (see scan-private.py) or bad frontmatter;
-fix the live skill and run it again. Replaced or pruned folders are moved to a temp folder, not deleted.
+fix the live skill and run it again. Replaced or pruned folders are moved to a temp folder, not deleted. Its own staging copy is removed when it finishes.
 """
 import importlib.util, os, pathlib, re, shutil, subprocess, sys, tempfile
 
@@ -61,6 +61,13 @@ def main():
         print(f"NO_SKILLS: no t3-*/SKILL.md in {src}")
         return 1
     stage = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-sync-"))
+    try:
+        return sync(src, live, stage, dry, prune)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)  # only the temp folder this run made
+
+
+def sync(src, live, stage, dry, prune):
     problems = []
     for d in live:
         for f in live_files(d):
@@ -70,7 +77,10 @@ def main():
         bad = frontmatter_problem(d.name, (stage / d.name / "SKILL.md").read_text(encoding="utf-8"))
         if bad:
             problems.append(f"{d / 'SKILL.md'}: {bad}")
-    leaks = [h.replace(str(stage), str(src)) for h in scan_private.scan(list(scan_private.files([stage])), scan_private.private_words())]
+    words = scan_private.private_words()
+    if not words:
+        print(scan_private.NO_WORDS_WARNING)
+    leaks = [h.replace(str(stage), str(src)) for h in scan_private.scan(list(scan_private.files([stage])), words)]
     if problems or leaks:
         print("\n".join(problems + leaks))
         print(f"SYNC_BLOCKED: {len(leaks)} private details, {len(problems)} frontmatter problems. Fix the live skills; nothing was copied.")

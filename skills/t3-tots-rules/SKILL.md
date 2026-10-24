@@ -68,10 +68,23 @@ Never invent the user's preferences. The thread decides how to do the work. The 
 - After answering a request, t3ctl lists the requests still open in that thread. Clear leftovers in T3 or tell the user.
 
 ## Finding a thread
-Many skills start from words the user typed. Run `T3_Q='<words>' python3 t3q.py thread` on every computer and take the best score overall. `T3_Q` also takes a thread id or an id prefix of 8 or more characters. Threads that agents spawned match only with `T3_ALL=1`. t3q.py exits 1 with `AMBIGUOUS` when the top two are within 0.1 and with `NO_GOOD_MATCH` when the best is under 0.6; list the closest ones it prints and ask. If you act on the best and another match scored 0.6 or more, name it in one line so the user can correct you. If `worktreePath` is empty and the messages name another working folder, use that folder and say which one. A thread lives on one computer: search all, act only on the owner. With a token, `t3ctl search --query '<words>'` also finds a thread by content.
+Many skills start from words the user typed. Run `T3_Q='<words>' python3 t3q.py thread` on every computer and take the best score overall. `T3_Q` also takes a thread id or an id prefix of 8 or more characters. Threads that agents spawned match only with `T3_ALL=1`. t3q.py exits 1 with `AMBIGUOUS` when the top two are within 0.1 and with `NO_GOOD_MATCH` when the best is under 0.6; list the closest ones it prints and ask. If you act on the best and another match scored 0.6 or more, name it in one line so the user can correct you. If `worktreePath` is empty and the messages name another working folder, use that folder and say which one. A thread lives on one computer: search all, act only on the owner. With a token, `t3ctl search --query '<words>'` also finds a thread by content. `t3ctl --thread` takes a full id, an id prefix of 8 or more characters, an exact title, or words found in exactly one title. More than one match exits 1 with `AMBIGUOUS` and the candidates, so pass the full id.
+
+## Grok Bot only
+These steps need tools only Grok Bot has. A skill that uses them points here in one line. Any other agent (Claude Code, Codex, Cursor and so on) runs on one computer and does this instead:
+
+| Grok Bot step | Other agents |
+|---|---|
+| ListMachines, every connected computer | Only the computer you run on |
+| The box (`/workspace`, `/workspace/t3-tots-tools`, its `google-chrome`), CopyToBox, CopyFromBox | Run the same script from the tools folder and write to `<tools folder>/out/` (report helpers need local Python 3.9+; skip screenshots) |
+| SendToUser | Give the file path |
+| Routines (scheduled or webhook) and watches | Run the check once when asked; schedule it only with the user's own tools if they ask |
+| Tap-to-answer cards | Ask in plain text with numbered options; answers still follow "Decisions" |
+| Memory | Ask, or use the notes file the user names |
+| Phone answers (`t3listen` to a chat webhook) | Skip unless the user gives their own webhook |
 
 ## Computers
-Call ListMachines every run. Never hard-code machine ids or home paths. The default scope is every connected computer with T3 data, run in parallel and labelled by name. Narrow it only when the user names one ("mac only"). To create things, use the computer the user names, else the one their message came from. Say which computers were offline, once per outage, then check quietly until each is back. Keep a Mac awake (`caffeinate -dimsu -w <pid>` tied to the job, or ask the user to change the setting) when a watch or delegated run must last overnight.
+Grok Bot only (see "Grok Bot only"). Call ListMachines every run. Never hard-code machine ids or home paths. The default scope is every connected computer with T3 data, run in parallel and labelled by name. Narrow it only when the user names one ("mac only"). To create things, use the computer the user names, else the one their message came from. Say which computers were offline, once per outage, then check quietly until each is back. Keep a Mac awake (`caffeinate -dimsu -w <pid>` tied to the job, or ask the user to change the setting) when a watch or delegated run must last overnight.
 
 ## Shells
 macOS zsh: wrap commands in a function, `f(){ ...; }; f`, and use quoted heredocs. Windows: PowerShell. Linux: bash. Examples in skills are POSIX. On Windows, translate them:
@@ -154,6 +167,8 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NODE_TOO_OLD`, `PYTHON_TOO_OLD` | Upgrade (t3-getting-started lists per-OS commands) |
 | `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Updating"); use `t3ctl` meanwhile |
 | `T3_DB_BUSY` | Retry in a few seconds |
+| `BAD_SETTING` | A number setting such as `T3_DAYS` or `T3_LAST` isn't a whole number of 1 or more. Fix it and rerun |
+| `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
 | `NO_USAGE_CACHE` | Ask the user to open T3's Usage view once |
 | `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread" |
 | `NOT_FOUND` | No thread matches. List the closest ones and ask |
@@ -167,11 +182,12 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `WEBHOOK_UNREACHABLE` | The webhook can't be reached. The listener keeps retrying |
 | `ALREADY_RUNNING` | A listener already runs there |
 | `INSTALL_FAILED` | `t3listen install` couldn't register the autostart. Relay the message |
-| `HASH_MISMATCH`, `MANIFEST_MISMATCH`, `BAD_MANIFEST` | A file or manifest didn't match the pinned release. Install nothing and tell the user |
+| `HASH_MISMATCH`, `MANIFEST_MISMATCH`, `BAD_MANIFEST` | A file or manifest didn't match the pinned release, or `t3ctl skills install` found no `manifest.json` to check. Install nothing and tell the user |
 | `REPO_PRIVATE_OR_MISSING` | The box can't download the release. Use t3-install-tools "Private repo" |
 | `DOWNLOAD_FAILED`, `MISSING_IN_FROM`, `NO_BOX_COPY` | The download failed, the `--from` folder lacks a file, or the box copy is missing. Nothing was installed |
 | `NO_SKILLS_SOURCE` | `t3ctl skills` found no skills. Pass `--from <repo checkout or unpacked release>` |
 | `NO_SKILLS`, `SYNC_BLOCKED` | Repo checks: `scripts/sync-skills` needs a source folder (`--from` or `T3TOTS_SKILLS_SRC`), or it found a private detail or bad frontmatter and copied nothing |
+| `NO_PRIVATE_WORDS` | Repo checks: no private-word list, so `scripts/check.sh` fails. Add one (see `scripts/scan-private.py`) or set `T3TOTS_NO_PRIVATE_WORDS=1` to skip it on purpose |
 | `MANIFEST_STALE`, `UNLISTED_TOOL` | Repo checks: a file changed without `scripts/make-manifest.py`, or a new tool isn't listed in it |
 
 The T3 CLI is `~/.t3/bin/t3` (Windows `%USERPROFILE%\.t3\bin\t3.cmd`, or under `T3CODE_HOME/bin`). T3 Code writes it when the app starts.

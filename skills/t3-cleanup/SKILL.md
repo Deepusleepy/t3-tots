@@ -5,7 +5,7 @@ description: >-
   Safe / Ask / Never cleanup list and deletes only what the user picks. Use for
   "clean up my mac/pc", "free up space", "what is using my disk", "disk is full".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Scanning is read-only. Nothing is deleted, moved, or pruned without the user's explicit pick.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Scanning is read-only. Nothing is deleted, moved, or pruned without the user's explicit pick.
 
 ## 0. Set up
 - Call ListMachines. "my mac" / "my pc" = that one; otherwise every connected computer, in parallel.

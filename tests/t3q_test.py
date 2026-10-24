@@ -119,4 +119,31 @@ class T3qTest(unittest.TestCase):
         self.assertNotIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task"))
         self.assertIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task", T3_ALL="1"))
 
+    def test_health_never_runs_the_runtime_port_through_a_shell(self):
+        make_db(self.dir)
+        canary = os.path.join(self.dir, "pwned")
+        for port in (f"1; touch {canary}", f"$(touch {canary})", [1], True, 70000):
+            with open(os.path.join(self.dir, "server-runtime.json"), "w") as f: json.dump({"host": "127.0.0.1", "port": port, "pid": f"1; touch {canary}"}, f)
+            out, code = run(self.dir, "health", rc=True)
+            self.assertFalse(os.path.exists(canary), port); self.assertEqual(code, 0, out)
+            self.assertIn("port None reachable: False", out)
+
+    def test_bad_number_settings_stop_with_a_status_word(self):
+        make_db(self.dir, extra_threads=True)
+        for cmd, env in (("overview", {"T3_DAYS": "abc"}), ("waiting", {"T3_DAYS": "-3"}), ("thread", {"T3_Q": "Finished work", "T3_LAST": "x"})):
+            out, code = run(self.dir, cmd, rc=True, **env)
+            self.assertIn("BAD_SETTING", out); self.assertNotIn("Traceback", out); self.assertEqual(code, 1)
+        self.assertEqual(run(self.dir, "overview", rc=True, T3_DAYS="3")[1], 0)
+
+    def test_schema_change_and_busy_database_exit_1(self):
+        db = sqlite3.connect(os.path.join(self.dir, "statev2.sqlite")); db.execute("create table other (x)"); db.commit(); db.close()
+        out, code = run(self.dir, "overview", rc=True)
+        self.assertIn("T3_SCHEMA_CHANGED", out); self.assertEqual(code, 1)
+        make_db(self.dir)
+        lock = sqlite3.connect(os.path.join(self.dir, "statev2.sqlite"), isolation_level=None); lock.execute("pragma journal_mode=delete"); lock.execute("begin exclusive")
+        try:
+            out, code = run(self.dir, "overview", rc=True)
+            self.assertIn("T3_DB_BUSY", out); self.assertEqual(code, 1)
+        finally: lock.execute("rollback"); lock.close()
+
 if __name__ == "__main__": unittest.main(verbosity=1)

@@ -11,7 +11,9 @@ const H={Authorization:"Bearer "+T,"x-t3-orchestration-protocol":"2"};const B=`h
 const get=async p=>{let r;try{r=await fetch(B+p,{headers:H})}catch(e){throw new Error(`T3_NOT_REACHABLE: can't reach T3 at ${B} (${(e.cause&&e.cause.code)||e.message}). Is T3 Code open?`)}
  if(r.status===401||r.status===403)throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (see Token in t3-tots-rules).`);if(!r.ok)throw new Error(p+" "+r.status);return r.json()};
 const a={};for(let i=2;i<process.argv.length;i++)if(process.argv[i].startsWith("--"))a[process.argv[i].slice(2)]=process.argv[i+1];
-const RED=/(sk-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{10,}|gh[ousr]_[A-Za-z0-9]{10,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{12,}|AIza[0-9A-Za-z_-]{20,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S{8,})/gi;
+// SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
+const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
+const RED=new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S{8,})`, "gi");
 const red=s=>String(s??"").replace(RED,"[redacted]").replaceAll(os.homedir(),"~");
 const np=s=>String(s||"").toLowerCase().replace(/\\/g,"/").replace(/\/+$/,"");
 const cut=(s,n)=>{s=red(s);return s.length>n?s.slice(0,n)+"…":s};
@@ -24,6 +26,6 @@ for(const t of ts){const p=(await get("/api/orchestration/threads/"+encodeURICom
  for(const c of p.checkpoints||[])for(const f of c.files||[])files.set(red(f.path||f),1);
  const conv=items.filter(i=>(i.type==="user_message"||i.type==="assistant_message")&&i.text).map(i=>({role:i.type==="user_message"?"user":"assistant",at:i.createdAt||i.startedAt,text:cut(i.text,i.type==="user_message"?700:900)}));
  out.threads.push({title:red(t.title),project:projs.find(x=>x.id===t.projectId).title,spawned:/^(mcp|provider)$/.test(t.creationSource),model:t.modelSelection?.model,effort:(t.modelSelection?.options||[]).find(o=>/effort|variant/i.test(o.id))?.value||null,
-  status:t.activeRunId?"running":t.status,settled:!!(t.settledAt||t.settledOverride==="settled"),pendingRequest:!!t.pendingRuntimeRequest,actionablePlan:!!t.hasActionableProposedPlan,lastError:t.lastError?cut(t.lastError.message||JSON.stringify(t.lastError),200):null,
+  status:t.activeRunId?"running":t.status,settled:t.settledOverride==="settled"||(!!t.settledAt&&t.settledOverride!=="unsettled"),pendingRequest:!!t.pendingRuntimeRequest,actionablePlan:!!t.hasActionableProposedPlan,lastError:t.lastError?cut(t.lastError.message||JSON.stringify(t.lastError),200):null,
   createdAt:t.createdAt,updatedAt:t.updatedAt,runs:p.runs.length,commands:items.filter(i=>i.type==="command_execution").length,files:[...files].map(([f,n])=>({file:f,edits:n})).slice(0,60),conversation:conv.slice(0,4).concat(conv.length>8?[{role:"gap",text:`… ${conv.length-8} more messages …`}]:[],conv.slice(Math.max(4,conv.length-4)))});}
 const s=JSON.stringify(out,null,1);if(a.out){fs.mkdirSync(path.dirname(path.resolve(a.out)),{recursive:true});fs.writeFileSync(a.out,s);console.log("wrote",a.out,out.threads.length,"threads")}else console.log(s);})().catch(e=>{console.error("error:",e.message);process.exit(1)});

@@ -104,3 +104,10 @@ test("the repo's own skills verify against manifest.json", () => {
   const r = run("list", "--from", path.join(__dirname, ".."));
   assert.equal(r.code, 0, r.out); assert.match(r.out, /hashes verified/); assert.match(r.out, new RegExp(`${fs.readdirSync(path.join(__dirname, "..", "skills")).length} skills`));
 });
+
+test("install refuses a folder with no manifest.json (BAD_MANIFEST) and writes nothing", () => {
+  const src = release({ "t3-a": "a1\n" }); fs.renameSync(path.join(src, "manifest.json"), path.join(src, "manifest.json.off"));
+  const to = path.join(tmp(), "skills"), r = run("install", "--from", src, "--to", to);
+  assert.equal(r.code, 1, r.out); assert.match(r.out, /BAD_MANIFEST/); assert.equal(fs.existsSync(to), false);
+  assert.match(run("list", "--from", src).out, /unverified|unversioned/); // listing still works and says so
+});

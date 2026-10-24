@@ -26,7 +26,7 @@ The repo is private for now. It is licensed under MIT ([LICENSE](LICENSE)). No a
 
 ## Install
 
-Some steps in the skills are Grok Bot only (chat sends, routines, draft cards); non-Grok agents skip them.
+Some steps in the skills are Grok Bot only (the box, chat sends, routines, cards). `t3-tots-rules` "Grok Bot only" says what other agents do instead.
 
 **Grok Bot.** The skills are built in. Say "set up T3 Tots": after your yes it installs the tools on each computer and checks every file against SHA-256 hashes pinned in `t3-install-tools`.
 
@@ -53,7 +53,7 @@ Some steps in the skills are Grok Bot only (chat sends, routines, draft cards); 
    ```
 
    Use the folder your agent reads: Claude Code `~/.claude/skills`, Codex `~/.agents/skills`, Cursor `~/.cursor/skills`, Hermes `~/.hermes/skills` (on Windows the same folders under `%USERPROFILE%`). Install into one folder only. Cursor also loads `~/.claude/skills`, `~/.agents/skills` and `~/.codex/skills`, so a copy in a second folder is listed twice.
-2. Ask your agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) to install the tools, verified against `manifest.json`, and skips the steps `t3-getting-started` marks as Grok Bot only.
+2. Ask your agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) to install the tools, verified against `manifest.json`, and uses the stand-ins in `t3-tots-rules` "Grok Bot only" for Grok Bot steps.
 
 Every file is checked against `manifest.json` first; any mismatch installs nothing. To update, get the new release and run the same commands. They copy only skills that are missing or changed, and keep any skill you edited (`--force` replaces it and moves your copy to `out/skills-backup/<timestamp>/` in the folder that holds the `t3ctl` you ran, here the release's `tools/`). `skills list --to <folder>` shows the state of each skill without changing anything.
 
@@ -67,7 +67,7 @@ Every file is checked against `manifest.json` first; any mismatch installs nothi
 
 ## Developing
 
-- `scripts/check.sh` runs every check: syntax, the Node and Python tests, manifest freshness, CRLF in the Windows wrappers, and a scan for private details. Put words that must never ship (your name, private project names) one per line in `~/.config/t3-tots/private-words.txt`; never commit that file.
+- `scripts/check.sh` runs every check: syntax, the Node and Python tests, manifest freshness, CRLF in the Windows wrappers, and a scan for private details. Put words that must never ship (your name, private project names) one per line in `~/.config/t3-tots/private-words.txt`; never commit that file. With no list the check fails; set `T3TOTS_NO_PRIVATE_WORDS=1` only if you mean to skip it.
 - After changing a tool, add new tools to `TOOLS` in `scripts/make-manifest.py` and run it. It rewrites `manifest.json` from `VERSION`.
 - `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC=<folder>`) copies the live skills into `skills/`, scans them for private details, and updates the manifest. It changes only line endings, and copies nothing if the scan finds anything; fix the live skill, then run it again.
 - Release only from a tag. Installers download by tag and check every hash.
