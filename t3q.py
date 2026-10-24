@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """T3 Tots read-only query tool. Usage: python3 t3q.py <overview|waiting|thread|projects|health|usage>
-Settings via env: T3_DAYS, T3_ALL=1, T3_Q (thread name), T3_LAST, T3_WEEK=1.
+Settings via env: T3_DAYS, T3_ALL=1, T3_Q (thread name or id), T3_LAST, T3_WEEK=1.
 Data folder: T3CODE_HOME (T3 Code's own setting, default ~/.t3) + /userdata; T3_HOME may point at either folder.
 Needs Python 3.8+. Opens statev2.sqlite read-only; never reads secrets/token/auth files."""
 import sqlite3, os, json, sys, datetime as dt, difflib
@@ -38,6 +38,10 @@ RQ = "orchestration_v2_projection_runtime_requests"; MS = "orchestration_v2_proj
 # a queued run whose queue was stopped on purpose is not running: it waits for someone to resume or cancel it
 RUNST = "case when r.status='queued' and json_extract(r.payload_json,'$.queueHeld') then 'queue held' else r.status end"
 SPAWNED = ("mcp", "provider")  # threads created by agents, not by the user
+# last real activity: newest message or run. updated_at also moves when a thread is settled, renamed or snoozed
+ACT = f"""max(coalesce(t.created_at,''), coalesce((select max(m.created_at) from {MS} m where m.thread_id=t.thread_id),''),
+ coalesce((select max(coalesce(r.completed_at, r.requested_at)) from {RU} r where r.thread_id=t.thread_id),''))"""
+SETTLED = "(json_extract(t.payload_json,'$.settledOverride')='settled' or (json_extract(t.payload_json,'$.settledAt') is not null and coalesce(json_extract(t.payload_json,'$.settledOverride'),'')<>'unsettled'))"
 def asks_q(text):
     tail = [l.strip(" *_>`)") for l in (text or "").splitlines() if l.strip()][-2:]
     return any(l.endswith("?") for l in tail)
@@ -57,18 +61,20 @@ APPROVALS = "(select count(*) from projection_pending_approvals a where a.thread
 
 def overview():
     DAYS = int(os.environ.get("T3_DAYS", "7")); ALL = os.environ.get("T3_ALL") == "1"
-    rows = q(f"""select t.thread_id, coalesce(p.title,'(no project)'), t.title, t.updated_at,
+    rows = q(f"""select * from (select t.thread_id, coalesce(p.title,'(no project)'), t.title, {ACT} act,
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
      (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
      (select count(*) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
-     (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1)
+     (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1),
+     {SETTLED}
      from {TH} t left join projection_projects p on p.project_id=t.project_id
-     where t.archived_at is null and t.deleted_at is null and t.updated_at >= ? order by t.updated_at desc""", (since(DAYS),))
+     where t.archived_at is null and t.deleted_at is null) where act >= ? order by act desc""", (since(DAYS),))
     mine = [r for r in rows if ALL or r[4] not in SPAWNED]
     print(f"T3 threads active in last {DAYS} days: {len(mine)} shown, {len(rows)-len(mine)} agent-spawned hidden (T3_ALL=1 shows them)")
-    for tid, proj, title, upd, src, run, pend, last in mine:
+    for tid, proj, title, upd, src, run, pend, last, settled in mine:
         role, _, text = (last or "\x1f").partition("\x1f")
-        st = "running" if run in LIVE else "needs you" if pend or run in ("waiting", "queue held") or (role == "assistant" and asks_you(text)) else (run or "idle")
+        st = "running" if run in LIVE else "needs you" if pend or run in ("waiting", "queue held") else "settled" if settled \
+            else "needs you" if role == "assistant" and asks_you(text) else (run or "idle")
         print(f"- [{proj}] {title} | {st} | {loc(upd)} | {role or '-'}: {flat(text,140)}")
     spawned = {}
     for r in rows:
@@ -77,20 +83,21 @@ def overview():
 
 def waiting():
     DAYS = int(os.environ.get("T3_DAYS", "14"))
-    rows = q(f"""select t.thread_id, coalesce(p.title,'(no project)'), t.title, t.updated_at,
+    rows = q(f"""select * from (select t.thread_id, coalesce(p.title,'(no project)'), t.title, {ACT} act,
      (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
      (select group_concat(kind||'@'||created_at) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
      {APPROVALS},
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
-     (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1)
+     (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1),
+     {SETTLED}
      from {TH} t left join projection_projects p on p.project_id=t.project_id
-     where t.archived_at is null and t.deleted_at is null and t.updated_at >= ? order by t.updated_at desc""", (since(DAYS),))
+     where t.archived_at is null and t.deleted_at is null) where act >= ? order by act desc""", (since(DAYS),))
     n = 0
     ALL = os.environ.get("T3_ALL") == "1"
-    for tid, proj, title, upd, run, pend, appr, src, last in rows:
+    for tid, proj, title, upd, run, pend, appr, src, last, settled in rows:
         if src in SPAWNED and not ALL and not (pend or appr): continue
         role, _, text = (last or "\x1f").partition("\x1f")
-        asks = role == "assistant" and asks_you(text)
+        asks = role == "assistant" and asks_you(text) and not settled  # settling a thread means its hand-back was dealt with
         if run in LIVE or not (pend or appr or run in ("waiting", "queue held") or asks): continue
         n += 1
         why = []
@@ -100,27 +107,43 @@ def waiting():
         if appr: why.append(f"{appr} pending approval(s)")
         if run == "queue held": why.append(f"queue held: a message waits to start (resume: t3ctl queue --thread '{tid}' --resume, or cancel it)")
         if asks and not why: why.append("last reply asks you a question or hands a decision back")
-        print(f"\n## [{proj}] {title}\nid {tid} | {loc(upd)} | " + "; ".join(why))
+        print(f"\n## [{proj}] {title}\nid {tid} | last activity {loc(upd)}{' | settled' if settled else ''} | " + "; ".join(why))
         msg = " ".join((text or "").split())
         if msg: print("last assistant message:", flat(msg, 900) if len(msg) <= 900 else flat(msg[:400], 400) + " … " + flat(msg[-500:], 500))
     print(f"\n{n} thread(s) waiting on you (last {DAYS} days)" if n else f"Nothing waiting on you (last {DAYS} days)")
 
 def thread():  # fuzzy match a user thread; prints state, git context, goal, last N messages
-    import subprocess
-    Q = os.environ.get("T3_Q", "").strip().lower()
-    th = q(f"select t.thread_id, t.title, coalesce(p.title,'(no project)'), p.workspace_root, t.payload_json, t.created_at, t.updated_at, coalesce(json_extract(t.payload_json,'$.creationSource'),'') from {TH} t left join projection_projects p on p.project_id=t.project_id where t.deleted_at is null order by t.updated_at desc")
-    if not Q: th = [r for r in th if r[7] not in SPAWNED]
+    import subprocess, re
+    Q = " ".join(os.environ.get("T3_Q", "").lower().split()); ALL = os.environ.get("T3_ALL") == "1"
+    th = q(f"select t.thread_id, t.title, coalesce(p.title,'(no project)'), p.workspace_root, t.payload_json, t.created_at, {ACT}, coalesce(json_extract(t.payload_json,'$.creationSource'),''), {SETTLED} from {TH} t left join projection_projects p on p.project_id=t.project_id where t.deleted_at is null order by 7 desc")
+    byid = [r for r in th if Q and (r[0].lower() == Q or (len(Q) >= 8 and r[0].lower().startswith(Q)))]
+    if not ALL: th = [r for r in th if r[7] not in SPAWNED]  # agent-spawned threads only with T3_ALL=1 (or by id)
+    if byid: th = byid
     if not th: print("no threads"); return
-    def score(r):
-        t = r[1].lower()
-        return (1.0 if Q and Q in t else 0) + difflib.SequenceMatcher(None, Q, t).ratio() + 0.15 * sum(w in t for w in Q.split())
+    al = lambda x: re.sub(r"[^a-z0-9]", "", x.lower())
+    words = Q.split()
+    def score(r):  # 0..1: query words in the title, whole phrase, similarity, project named in the query, recent activity
+        if byid: return 1.0
+        t = r[1].lower(); proj = al(r[2])
+        cov = sum(w in t for w in words) / len(words)
+        named = bool(proj) and (al(Q) == proj or any(al(w) == proj for w in words))
+        recent = max(0.0, 1 - ago_h(r[6]) / 720)
+        return 0.5 * cov + 0.2 * (Q in t) + 0.15 * difflib.SequenceMatcher(None, Q, t).ratio() + 0.1 * named + 0.05 * recent
     ranked = sorted(th, key=score, reverse=True) if Q else th
-    print("matches:", " | ".join(f"{r[1]} [{r[2]}] {score(r):.2f}" for r in ranked[:4]))
-    tid, title, proj, root, pj, c, u, _ = ranked[0]; pj = json.loads(pj or "{}")
+    line = lambda r: f"{r[1]} [{r[2]}] {score(r):.2f} | last activity {loc(r[6])} | id {r[0]}"
+    if Q:
+        print("matches:", " | ".join(f"{r[1]} [{r[2]}] {score(r):.2f}" for r in ranked[:4]))
+        best = score(ranked[0]); second = score(ranked[1]) if len(ranked) > 1 else 0
+        if best < 0.6:
+            print(f'\nNO_GOOD_MATCH: no thread title matches "{Q}" well (best {best:.2f}). Closest:'); [print("-", line(r)) for r in ranked[:5]]; return
+        if best - second < 0.1:
+            close = [r for r in ranked[:8] if best - score(r) < 0.1]
+            print(f'\nAMBIGUOUS: {len(close)} threads match "{Q}" about equally. Ask which one, or rerun with a fuller name or the id:'); [print("-", line(r)) for r in close]; return
+    tid, title, proj, root, pj, c, u, _, settled = ranked[0]; pj = json.loads(pj or "{}")
     runs = q(f"select status, count(*) from {RU} where thread_id=? group by 1", (tid,))
-    last_run = q(f"select status from {RU} where thread_id=? order by ordinal desc limit 1", (tid,))
+    last_run = q(f"select {RUNST} from {RU} r where thread_id=? order by ordinal desc limit 1", (tid,))
     pend = q(f"select count(*) from {RQ} where thread_id=? and status='pending'", (tid,))[0][0]
-    print(f"\nTHREAD {title} [{proj}] id {tid}\ncreated {loc(c)} | updated {loc(u)} | last run {last_run[0][0] if last_run else '-'} | runs {dict(runs)} | pending requests {pend}")
+    print(f"\nTHREAD {title} [{proj}] id {tid}{' (settled)' if settled else ''}\ncreated {loc(c)} | last activity {loc(u)} | last run {last_run[0][0] if last_run else '-'} | runs {dict(runs)} | pending requests {pend}")
     wt = pj.get("worktreePath") or root
     def git(*a):
         try: return subprocess.run(["git", "-C", wt, *a], capture_output=True, text=True, timeout=15).stdout.strip()
@@ -136,8 +159,8 @@ def thread():  # fuzzy match a user thread; prints state, git context, goal, las
         print(f"\n[{role} {loc(at)}] {flat(text, 900)}")
 
 def projects():  # T3 projects with folder, thread count and last activity; also guesses the common projects folder
-    rows = q(f"""select p.title, p.workspace_root, count(t.thread_id), max(t.updated_at) from projection_projects p
-     left join {TH} t on t.project_id=p.project_id and t.deleted_at is null where p.deleted_at is null group by p.project_id order by max(t.updated_at) desc""")
+    rows = q(f"""select p.title, p.workspace_root, count(t.thread_id), nullif(max({ACT}),'') from projection_projects p
+     left join {TH} t on t.project_id=p.project_id and t.deleted_at is null where p.deleted_at is null group by p.project_id order by 4 desc""")
     print(f"{len(rows)} T3 project(s)")
     for title, root, n, last in rows: print(f"- {title} | {tilde(root or '-')} | {n} thread(s) | last {loc(last) if last else '-'}")
     parents = {}
@@ -215,7 +238,7 @@ def usage():
     src = caches[-1]; u = json.load(open(src, encoding="utf-8"))
     try: rates = json.load(open(os.path.join(D, "usage-model-rates.json"), encoding="utf-8")).get("document", {})
     except Exception: rates = {}
-    print("cache updated", dt.datetime.fromtimestamp(os.path.getmtime(src)).strftime("%b %d %H:%M"), "| files:", os.path.basename(src), "+", "usage-model-rates.json" if rates else "(no rates file - costs unavailable)")
+    print("cache updated", loc(dt.datetime.fromtimestamp(os.path.getmtime(src), dt.timezone.utc).isoformat()), "| files:", os.path.basename(src), "+", "usage-model-rates.json" if rates else "(no rates file - costs unavailable)")
     models = u.get("models", []); cut = (dt.datetime.now() - dt.timedelta(days=DAYS)).timestamp() * 1000
     if os.environ.get("T3_WEEK") == "1":  # calendar week, Monday 00:00 local
         n = dt.datetime.now(); cut = (n - dt.timedelta(days=n.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000; DAYS = "this week,"

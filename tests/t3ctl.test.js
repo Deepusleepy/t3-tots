@@ -144,3 +144,25 @@ test("limitLine: marks a reset time that has already passed", () => {
   assert.doesNotMatch(t.limitLine({ id: "b", title: "B", usageLimitResetAt: "2026-01-03T00:00:00Z" }, true, now), /passed|Z\b/);
   assert.match(t.limitLine({ id: "c", title: "C" }, false, now), /resets=\?/);
 });
+test("limitLine: title first, id last", () => {
+  assert.match(t.limitLine({ id: "abc", title: "My thread" }, false), /^My thread  resets=.*  id=abc$/);
+});
+test("localT: names the zone (IST, not GMT+5:30)", () => {
+  const { execFileSync } = require("child_process");
+  const out = (tz) => execFileSync(process.execPath, ["-e", `console.log(require(${JSON.stringify(path.join(__dirname, "..", "t3ctl"))}).localT("2026-01-01T12:00:00Z"))`], { env: { ...process.env, TZ: tz } }).toString().trim();
+  assert.match(out("Asia/Kolkata"), /5:30 PM IST$|17:30 IST$/i);
+  assert.doesNotMatch(out("America/Los_Angeles"), /GMT/);
+  assert.equal(t.localT(null), "-");
+});
+test("isSettled: settledAt or a settled override, unless overridden back", () => {
+  assert.equal(t.isSettled({ settledAt: "2026-01-01T00:00:00Z" }), true);
+  assert.equal(t.isSettled({ settledOverride: "settled" }), true);
+  assert.equal(t.isSettled({ settledAt: "2026-01-01T00:00:00Z", settledOverride: "unsettled" }), false);
+  assert.equal(t.isSettled({}), false);
+});
+test("threadLine: a held queue shows as queue held, not the last run status", () => {
+  const th0 = { id: "x", title: "Snig", status: "cancelled" };
+  assert.equal(t.threadLine(th0, { runs: [{ status: "queued", queueHeld: true }] }), "x  queue held  Snig");
+  assert.equal(t.threadLine(th0, { runs: [] }), "x  cancelled  Snig");
+  assert.equal(t.threadLine({ ...th0, settledAt: "2026-01-01T00:00:00Z" }, null), "x  cancelled (settled)  Snig");
+});

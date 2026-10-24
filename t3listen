@@ -191,7 +191,13 @@ const DELEGATED = "thread:delegated-task:", ACTIVE = new Set(["running", "starti
 const END = { completed: "thread.finished", failed: "thread.failed", error: "thread.failed", cancelled: "thread.cancelled", interrupted: "thread.cancelled" };
 const END_WORD = { "thread.finished": "finished", "thread.failed": "failed", "thread.cancelled": "was cancelled" };
 const runSeen = new Map(); // threadId -> { status, activeRunId } last seen
-const localTime = (iso) => { try { return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" }); } catch { return iso; } };
+// localTime: "Oct 21, 7:16 PM IST"; the default locale often names the zone only as GMT+5:30, so try a few English ones (same as t3ctl)
+const tzName = (d) => { let fb = "";
+  for (const l of [undefined, "en-IN", "en-GB", "en-AU", "en-US"]) { try { const n = (new Intl.DateTimeFormat(l, { timeZoneName: "short" }).formatToParts(d).find((x) => x.type === "timeZoneName") || {}).value || "";
+    if (n && !/^(GMT|UTC)([+-]|$)/.test(n)) return n; fb = fb || n; } catch {} }
+  return fb; };
+const localTime = (iso) => { const d = new Date(iso); if (!iso || !Number.isFinite(d.getTime())) return iso;
+  return `${d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} ${tzName(d)}`.trim(); };
 const noteRun = (t) => { const prev = runSeen.get(t.id); runSeen.set(t.id, { status: t.status, activeRunId: t.activeRunId || null }); return prev; };
 const isActive = (t) => !!(t && (t.activeRunId || ACTIVE.has(t.status)));
 const isBusy = (t) => isActive(t) || (t && t.status === "queued"); // a queued message is about to start
@@ -428,18 +434,27 @@ async function test() {
 }
 
 async function previewFinish() { // print the run-end event the listener would send for a thread's latest ended run; posts nothing, saves nothing
-  C = loadConfig(); const id = optv("--thread"); if (!id) die("USAGE", "preview-finish --thread <thread id>");
+  C = loadConfig(); const q = optv("--thread"); if (!q) die("USAGE", "preview-finish --thread <thread id or title>");
   const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
-  const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", "no such thread");
+  let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
+  for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
+  const hit = pickThread(sh.threads || [], q), id = hit ? hit.id : q;
+  const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
   e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
 }
 
+// pickThread: exact id, else id prefix, else the newest thread whose title contains the text
+function pickThread(threads, q) { const s = String(q || "").toLowerCase(); if (!s) return null;
+  return threads.find((t) => t.id === q) || threads.find((t) => String(t.id).startsWith(q)) ||
+    threads.filter((t) => String(t.title || "").toLowerCase().includes(s)).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0] || null; }
+
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
 t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
 t3listen test [--dry-run]         send one test event to the webhook
-t3listen preview-finish --thread id   print the run-end event for a thread's latest ended run (sends nothing)
+t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
+if (require.main !== module) module.exports = { pickThread, localTime };
+else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
