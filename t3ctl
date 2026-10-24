@@ -29,7 +29,7 @@ const uuid = () => crypto.randomUUID();
 function args() { const a = process.argv.slice(3), o = {}; for (let i = 0; i < a.length; i++) { if (a[i].startsWith("--")) { const k = a[i].slice(2); const v = a[i + 1] && !a[i + 1].startsWith("--") ? a[++i] : true; o[k] = v; } } return o; }
 async function get(p) {
   let r; try { r = await fetch(BASE + p, { headers: H }); } catch (e) { throw netErr(e); }
-  if (r.status === 401 || r.status === 403) throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (t3-tots-rules rule 8).`);
+  if (r.status === 401 || r.status === 403) throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (see Token in t3-tots-rules).`);
   if (!r.ok) throw new Error(`${p} -> HTTP ${r.status} ${(await r.text()).slice(0, 300)}`); return r.json();
 }
 const shell = () => get("/api/orchestration/shell");
@@ -130,6 +130,16 @@ async function wait(id, sec = 300) {
   while (Date.now() < end) { const s = await shell(); const t = s.threads.find((t) => t.id === id); if (t && !t.activeRunId && t.status !== "running" && t.status !== "starting") return t; await new Promise((r) => setTimeout(r, 3000)); }
   throw new Error("timed out waiting for reply");
 }
+function decodeText(b) { // UTF-8 (with or without BOM) or UTF-16 with BOM, as Windows PowerShell 5 writes by default; CRLF -> LF
+  let x; if (b[0] === 0xff && b[1] === 0xfe) x = b.subarray(2).toString("utf16le");
+  else if (b[0] === 0xfe && b[1] === 0xff) { const c = Buffer.from(b.subarray(2)); c.swap16(); x = c.toString("utf16le"); }
+  else x = b.toString("utf8").replace(/^\uFEFF/, "");
+  return x.replace(/\r\n?/g, "\n");
+}
+function promptOf(o) { // --prompt-file keeps long prompts out of shell quoting
+  if (o["prompt-file"] && o["prompt-file"] !== true) { const f = String(o["prompt-file"]).replace(/^~(?=$|[\/\\])/, HOME); const x = decodeText(fs.readFileSync(f)); if (!x.trim()) throw new Error(`--prompt-file ${f} is empty`); return x; }
+  return o.prompt && o.prompt !== true ? String(o.prompt) : "";
+}
 async function printLast(id, n) { const snap = await thread(id); for (const m of messages(snap).slice(-n)) console.log(`[${m.role}] ${m.text}`); }
 
 // --- runtime requests (questions / approvals) ---
@@ -154,7 +164,81 @@ function printRequest(r) {
     q.options.forEach((x, i) => console.log(`     ${i + 1}. ${x.label}${x.description && x.description !== x.label ? " - " + x.description : ""}`));
     if (q.allowCustomAnswer) console.log("     (free-text answer allowed)");
   }
-  if (r.approval) { console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
+  if (r.approval) { const k = riskOf(r.approval); console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}\n  risk hint: ${k.level}${k.reasons.length ? " (" + k.reasons.join(", ") + ")" : ""}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
+}
+// --- pure helpers (unit-tested in tests/t3ctl.test.js; no network) ---
+// riskOf: a hint for approvals so a watcher can approve routine ones and hold risky ones. The agent still decides.
+const RISK_HIGH = [
+  [/\brm\s+-[a-z]*[rf]/i, "deletes files (rm -r/-f)"], [/\bgit\s+push\b[^\n]*(\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S)/i, "force push"],
+  [/\bgit\s+push\b[^\n]*\b(main|master)\b/i, "pushes to main/master"], [/\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|push\s+\S+\s+--delete|push\s+\S+\s+:)/i, "discards or deletes git work"],
+  [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-recurse\b|\s-force\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
+  [/\bsudo\b|\bdoas\b|\brunas\b|-verb\s+runas\b|\bset-executionpolicy\b/i, "runs as admin"], [/\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(ba|z)?sh\b|\biex\b/i, "runs a downloaded script"],
+  [/\b(mkfs|diskutil\s+erase|format\s+[a-z]:|format-volume|clear-disk|dd\s+if=)/i, "touches disks"], [/\bchmod\s+-R\s+777\b|\bchown\s+-R\b/i, "changes permissions recursively"],
+  [/(^|[\s"'\/\\])(\.env\b|secrets?[\/\\]|id_(rsa|ed25519)|\.ssh[\/\\]|credentials?\b|[\w.-]*token[\w.-]*\.(json|txt)\b|\.cli-proxy-api|keychain)/i, "reads or writes secrets"],
+  [/\b(npm|pnpm|yarn|cargo)\s+publish\b|\bgh\s+release\s+(create|delete)|\bgh\s+repo\s+(delete|edit\b[^\n]*--visibility)|\bgh\s+pr\s+merge\b/i, "publishes, merges or changes a repo"],
+  [/\b(vercel|netlify|fly|wrangler)\b[^\n]*\b(--prod|deploy)\b|\bkubectl\s+(apply|delete)\b|\bterraform\s+(apply|destroy)\b/i, "deploys"],
+  [/\bdrop\s+(table|database)\b|\btruncate\s+table\b/i, "drops data"], [/\b(shutdown|reboot|killall|pkill|taskkill|stop-process|restart-computer|stop-computer)\b|\bkill\s+-9\b/i, "kills processes or the machine"],
+];
+const READ_ONLY = /^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![^\n]*(-delete|-exec\s+rm))|tree|du|df|git\s+(status|log|diff|show|branch|remote\s+-v|rev-parse|ls-files|blame|fetch)|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b/i;
+// unwrapShell: Codex shows commands as `bash -lc '...'` or `pwsh -Command "..."`; judge the inner command.
+function unwrapShell(c) { const m = String(c).trim().match(/^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?"?\s+-l?c\s+([\s\S]+)$|^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:pwsh|powershell)(?:\.exe)?"?\s+(?:-\w+\s+)*?-c(?:ommand)?\s+([\s\S]+)$/i);
+  if (!m) return String(c); const x = (m[1] || m[2]).trim(); return /^(['"]).*\1$/s.test(x) ? x.slice(1, -1) : x; }
+const WRITES = /(^|[^0-9&>])>{1,2}(?!&)\s*(?!\/dev\/null\b|\$null\b|nul\b)\S|\btee\b|\bout-file\b|\bset-content\b|\badd-content\b|\$\(|`/i;
+function riskOf(approval) {
+  const a = approval || {}; const inner = unwrapShell(a.prompt || ""); const text = [a.prompt, inner, a.requestKind, a.appName].filter(Boolean).join(" ");
+  const reasons = RISK_HIGH.filter(([re]) => re.test(text)).map(([, why]) => why);
+  if (reasons.length) return { level: "high", reasons };
+  if (/file_change|apply_patch|write|edit/i.test(String(a.requestKind || "")) && !a.prompt) return { level: "normal", reasons: ["edits files in the workspace"] };
+  const cmds = inner.split(/&&|\|\|?|;|\n/).map((s) => s.trim()).filter(Boolean); // every piped stage must be read-only too
+  if (cmds.length && !WRITES.test(inner) && cmds.every((c) => READ_ONLY.test(c.replace(/^(cd\s+\S+\s*)$/i, "pwd")))) return { level: "low", reasons: ["read-only command or test run"] };
+  return { level: "normal", reasons: [] };
+}
+// deliveryOf: where a just-sent message ended up. "started" | "steered" | "queued" (behind a running run) | "held" | "stuck" | "unknown"
+function deliveryOf(p, messageId, activeRunId) {
+  const runs = (p && p.runs) || []; const mine = runs.find((r) => r.userMessageId === messageId);
+  if (mine && mine.status === "queued") return mine.queueHeld ? "held" : activeRunId ? "queued" : "stuck";
+  if (mine) return "started";
+  const items = Array.isArray(p && p.turnItems) ? p.turnItems : Object.values((p && p.turnItems) || {});
+  if (items.some((i) => i.id === messageId || i.messageId === messageId)) return "steered";
+  return "unknown";
+}
+// stallHint: the last reply says the thread is waiting on something it may never hear back from.
+const STALL_RE = /\b(waiting (for|on)|wait for|in the background|background (job|task|process|run)|once (it|this|that|they|the \w+) (finish|finishes|complete|completes|is done)|will (check|report|follow up|continue) (back|when|once)|still running|monitor(ing)? (it|the)|i'?ll be notified|polling)\b/i;
+const stallHint = (text) => !!text && STALL_RE.test(String(text));
+// watchSnap/watchDiff: compact per-thread state and the changes worth reporting between two checks.
+function watchSnap(t, p, now = Date.now()) {
+  const pend = pendingOf(p || {}); const runs = ((p && p.runs) || []).filter((r) => r.status === "queued");
+  const items = (p && p.turnItems) || []; const lastA = (Array.isArray(items) ? items : Object.values(items)).filter((i) => i.type === "assistant_message" && i.text).at(-1);
+  const reply = lastA ? String(lastA.text) : ""; const settled = !!(t.settledAt || t.settledOverride === "settled");
+  const state = t.activeRunId ? "running" : pend.length ? "waiting" : t.lastErrorClass === "usage_limit" ? "limit" : t.lastError ? "error" : t.hasActionableProposedPlan ? "plan-ready" : /\?\s*[*_`)]*\s*$/.test(reply) ? "asked-you" : "idle";
+  return { id: t.id, title: t.title, state, settled, updatedAt: t.updatedAt, checkedAt: new Date(now).toISOString(),
+    pending: pend.map((r) => ({ id: r.requestId, kind: r.kind, answerable: r.answerable, ...(r.approval ? { risk: riskOf(r.approval).level, prompt: String(r.approval.prompt || r.approval.requestKind).slice(0, 160) } : { question: ((r.questions || [])[0] || {}).question || "" }) })),
+    queued: runs.length, queueHeld: runs.some((r) => r.queueHeld), replyHash: reply ? crypto.createHash("sha256").update(reply).digest("hex").slice(0, 12) : null,
+    reply: reply.replace(/\s+/g, " ").slice(0, 280), resetAt: t.usageLimitResetAt || null,
+    autoResume: !!(t.limitRecovery && t.limitRecovery.runId === t.latestRunId && t.limitRecovery.autoResume), error: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null };
+}
+const DONE = new Set(["idle", "asked-you", "plan-ready"]); // states a finished run leaves behind
+function watchDiff(prev, cur, stallMin = 20, now = Date.now()) { // -> [{ kind, text }], plus cur.idleSince / cur.stallReported carried over
+  const ev = []; const add = (kind, text) => ev.push({ kind, threadId: cur.id, title: cur.title, text });
+  const same = prev && prev.state === cur.state && prev.replyHash === cur.replyHash && prev.updatedAt === cur.updatedAt;
+  cur.idleSince = cur.state === "running" ? null : same && prev.idleSince ? prev.idleSince : cur.checkedAt;
+  cur.quietSince = cur.state !== "running" ? null : same && prev.quietSince ? prev.quietSince : cur.checkedAt;
+  cur.stallReported = !!(same && prev.stallReported);
+  if (!prev) { add("first", `${cur.state}${cur.pending.length ? `, ${cur.pending.length} open request(s)` : ""}`); }
+  else if (prev.state !== cur.state) add(prev.state === "running" && DONE.has(cur.state) ? "finished" : "state", `${prev.state} -> ${cur.state}${cur.reply && prev.replyHash !== cur.replyHash ? `: ${cur.reply}` : ""}`);
+  const seen = new Set(((prev && prev.pending) || []).map((r) => r.id));
+  for (const r of cur.pending) if (!seen.has(r.id)) add(r.kind === "user_input" ? "question" : `approval-${r.risk}`, r.question || r.prompt || r.kind);
+  const wasStale = new Set(((prev && prev.pending) || []).filter((r) => !r.answerable).map((r) => r.id));
+  for (const r of cur.pending) if (!r.answerable && !wasStale.has(r.id)) add("stale-request", `request ${r.id} can't be answered any more; clear it in T3`);
+  if (cur.queued && cur.state !== "running" && !(prev && prev.queued && prev.state === cur.state)) add(cur.queueHeld ? "queue-held" : "queue-stuck", `${cur.queued} queued message(s) not running`);
+  if (cur.state === "limit" && (!prev || prev.state !== "limit")) add("limit", `usage limit, resets ${cur.resetAt || "?"}, auto-resume ${cur.autoResume ? "on" : "off"}`);
+  if (cur.state === "error" && (!prev || prev.error !== cur.error)) add("error", cur.error || "error");
+  if (prev && cur.replyHash && prev.replyHash !== cur.replyHash && prev.state === cur.state && cur.state !== "running") add(DONE.has(cur.state) ? "finished" : "reply", DONE.has(cur.state) ? `ran and finished between checks: ${cur.reply}` : cur.reply);
+  const quietMin = cur.quietSince ? (now - Date.parse(cur.quietSince)) / 6e4 : 0;
+  if (cur.state === "running" && !cur.stallReported && quietMin >= 2 * stallMin) { add("quiet", `running with no new activity for ${Math.round(quietMin)}m; check t3ctl subtasks and t3ctl read`); cur.stallReported = true; }
+  const idleMin = cur.idleSince ? (now - Date.parse(cur.idleSince)) / 6e4 : 0;
+  if (!cur.settled && cur.state === "idle" && !cur.stallReported && idleMin >= stallMin && stallHint(cur.reply)) { add("stalled", `idle ${Math.round(idleMin)}m and the last reply says it is waiting on something`); cur.stallReported = true; }
+  return ev;
 }
 function matchOption(q, v) {
   const s = String(v).trim(), n = norm(s);
@@ -220,43 +304,96 @@ async function answer(o) {
 async function confirm(t, r, what) {
   for (let i = 0; i < 10; i++) {
     const p = (await thread(t.id)).projection; const now = (p.runtimeRequests || []).find((x) => x.id === r.requestId);
-    if (now && now.status !== "pending") { console.log(`answered "${t.title}": ${what}  (request ${now.status})`); return; }
+    if (now && now.status !== "pending") { console.log(`answered "${t.title}": ${what}  (request ${now.status})`);
+      const left = pendingOf(p).filter((x) => x.requestId !== r.requestId); // leftovers block the thread just as much
+      if (left.length) console.log(`still open in "${t.title}": ${left.map((x) => `${x.requestId} (${x.kind}${x.answerable ? "" : ", can't be answered any more: clear it in T3"})`).join(", ")}  - see: t3ctl pending --thread ${t.id}`);
+      return; }
     await new Promise((res) => setTimeout(res, 500));
   }
   throw new Error(`SENT_UNCONFIRMED: the answer was sent but the request still shows pending in "${t.title}"; check with: t3ctl pending --thread ${t.id}`);
 }
 
-const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw"];
-(async () => {
+
+// --- phase 2 helpers ---
+function parseWhen(v) { // ISO | +30m/+2h/+1d | HH:MM (today, or tomorrow if passed) -> ISO
+  if (!v || v === true) throw new Error("--until <ISO time | +30m | +2h | +1d | HH:MM> is required");
+  v = String(v).trim(); let m;
+  if ((m = v.match(/^\+(\d+)\s*([mhd])$/i))) return new Date(Date.now() + +m[1] * { m: 6e4, h: 36e5, d: 864e5 }[m[2].toLowerCase()]).toISOString();
+  if ((m = v.match(/^([01]?\d|2[0-3]):([0-5]\d)$/))) { const d = new Date(); d.setHours(+m[1], +m[2], 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d.toISOString(); }
+  const t = Date.parse(v); if (!Number.isFinite(t)) throw new Error(`can't read time "${v}" (use ISO, +30m, +2h, +1d or HH:MM)`); return new Date(t).toISOString();
+}
+const isMainThread = (t) => !/^(mcp|provider)$/.test(t.creationSource || ""); // hides threads agents spawned (same rule as t3q.py, export.js, survey.js)
+// limitLine: one row of `t3ctl limits`, reset time in local time, marked when it has already passed (a stale limit)
+const limitLine = (t, autoResume, now = Date.now()) => { const at = t.usageLimitResetAt, past = at && Date.parse(at) < now;
+  return `${t.id}  resets=${at ? localT(at) + (past ? " (passed)" : "") : "?"}  autoResume=${autoResume}  snoozedUntil=${t.snoozedUntil ? localT(t.snoozedUntil) : "-"}  ${t.title}`; };
+const localT = (iso) => iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : "-";
+function parseEvery(v) { const m = String(v).trim().match(/^(\d+)\s*([mhd])$/i); if (!m) throw new Error(`--every must look like 30m, 2h or 1d (got "${v}")`); const ms = +m[1] * { m: 6e4, h: 36e5, d: 864e5 }[m[2].toLowerCase()]; if (ms < 6e4) throw new Error("--every must be at least 1m"); return ms; }
+async function threadPrs(t) { const th = ((await thread(t.id)).projection || {}).thread || {}; const list = [...(th.pullRequests || []), th.linkedPullRequest, th.branchPullRequest].filter(Boolean);
+  const seen = new Set(); return list.filter((x) => { const k = `${x.repository}#${x.number}`.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }); }
+function prRef(o, t, link) { const ref = { projectId: (t && t.projectId) || o.projectId, repository: link ? link.repository : String(o.repo || ""), number: link ? link.number : +o.number }; if (link && link.host) ref.host = link.host; return ref; }
+async function printPr(ref) {
+  const sum = await rpc("pullRequests.summary", ref).catch((e) => ({ error: e.message })); const ch = await rpc("pullRequests.checks", ref).catch((e) => ({ error: e.message }));
+  console.log(`${ref.repository}#${ref.number}  ${sum.error ? "summary error: " + sum.error.slice(0, 200) : `${sum.state || "?"}${sum.isDraft ? " (draft)" : ""}  ${sum.title || ""}${sum.reviewDecision ? "  review=" + sum.reviewDecision : ""}${sum.checksState ? "  checks=" + sum.checksState : ""}${sum.mergeability ? "  " + sum.mergeability : ""}  ${sum.headBranch}->${sum.baseBranch}`}`);
+  if (ch && ch.error) console.log(`  checks error: ${ch.error.slice(0, 200)}`); else if (!ch || !ch.checks || !ch.checks.length) console.log("  checks: none reported");
+  else { console.log(`  checks: ${ch.state}`); for (const c of ch.checks) console.log(`    ${c.status}  ${c.name}${c.required ? " (required)" : ""}`); }
+}
+// A steer that lands after the run ends, or a queue that T3 holds, leaves the message sitting unsent. Check, fix once, else say so.
+async function verifyDelivery(t, messageId, wantQueue) {
+  let d = "unknown", fixed = false, stuckSeen = 0;
+  for (let i = 0; i < 16; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const s = await shell(); const now = s.threads.find((x) => x.id === t.id) || {}; d = deliveryOf((await thread(t.id)).projection, messageId, now.activeRunId);
+    if (d === "started" || d === "steered" || d === "held" || (d === "queued" && wantQueue)) break;
+    if (d !== "stuck") { stuckSeen = 0; continue; }
+    if (++stuckSeen >= 2 && !fixed) { await dispatch("queue.resume", t.id); fixed = true; stuckSeen = 0; } // a run can show "queued" for a moment before it starts
+  }
+  if (d === "held") { console.log(`QUEUE_HELD: the message is queued but this thread's queue is held (someone stopped it on purpose). Start it with: t3ctl queue --thread ${t.id} --resume`); return; }
+  if (d === "queued" && !wantQueue) { console.log(`queued: the steer became a queued message and runs after the current run. To push it in now: list it with t3ctl queue --thread ${t.id}, then add --steer <runId>`); return; }
+  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); return; }
+  if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return; }
+  throw new Error(`SEND_STUCK: the message is ${d} in "${t.title}" and resuming the queue didn't start it. Try: t3ctl queue --thread ${t.id} --resume, then t3ctl status --thread ${t.id}`);
+}
+const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw", "limits", "resume-at-reset", "snooze-until-reset", "snooze", "unsnooze", "model", "search", "tasks", "prs", "pr", "fork", "stop", "subtasks", "subagent-stop", "watch"];
+const main = async () => {
   const cmd = process.argv[2], o = args();
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
   else if (cmd === "models") { const m = new Map(); for (const t of (await shell()).threads) if (t.modelSelection) m.set(`${t.modelSelection.instanceId} ${t.modelSelection.model}`, (t.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id))?.id || "-"); for (const [k, v] of [...m].sort()) console.log(`${k}  (effort key: ${v})`); }
-  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } for (const t of ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15)) console.log(`${t.id}  ${t.status}  ${t.title}`); }
+  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } if (o.main) ts = ts.filter(isMainThread); for (const t of ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15)) console.log(`${t.id}  ${t.status}  ${t.title}`); }
   else if (cmd === "new") {
-    if (!o.project || !o.prompt) throw new Error("usage: new --project <path|name|id> --prompt <text> [--model m] [--effort e] [--title t] [--mode plan] [--wait]");
+    const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--wait]");
     const p = await findProject(o.project); const s0 = await shell(); const sel = modelSel(o, p.defaultModelSelection || recentSel(s0, p.id) || recentSel(s0), s0);
-    const title = o.title || String(o.prompt).slice(0, 60);
+    const title = o.title || prompt.slice(0, 60);
     const res = await rpc("orchestration.launchThread", { commandId: uuid(), creationSource: "web", projectId: p.id, title, generateTitle: !o.title,
       modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: { type: "root" },
-      initialMessage: { messageId: uuid(), text: String(o.prompt), attachments: await uploadImages(o.attach) } });
+      initialMessage: { messageId: uuid(), text: prompt, attachments: await uploadImages(o.attach) } });
+    try { const sf = path.join(__dirname, "started-here.json"); let m = {}; try { m = JSON.parse(fs.readFileSync(sf, "utf8")) || {}; } catch {} // t3listen auto-resumes threads started here
+      const cut = Date.now() - 60 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k]; m[res.threadId] = new Date().toISOString(); fs.writeFileSync(sf, JSON.stringify(m)); } catch {}
     console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}`);
     if (o.wait) { const t = await wait(res.threadId, +o.timeout || 300); console.log(`title: ${t.title}  status: ${t.status}`); await printLast(res.threadId, 2); }
   }
   else if (cmd === "send") {
-    if (!o.thread || !o.prompt) throw new Error("usage: send --thread <id|title> --prompt <text> [--wait]");
+    const prompt = promptOf(o); if (!o.thread || !prompt) throw new Error("usage: send --thread <id|title> (--prompt <text> | --prompt-file <path>) [--queue] [--wait] [--no-verify]");
     const t = await findThread(o.thread);
-    const busy = !!t.activeRunId;
-    await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId: uuid(),
-      text: String(o.prompt), attachments: await uploadImages(o.attach), dispatchMode: !busy ? { type: "start_immediately" } : o.queue ? { type: "queue_after_active" } : { type: "steer_active", targetRunId: t.activeRunId } });
+    const busy = !!t.activeRunId, messageId = uuid();
+    await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId,
+      text: prompt, attachments: await uploadImages(o.attach), dispatchMode: !busy ? { type: "start_immediately" } : o.queue ? { type: "queue_after_active" } : { type: "steer_active", targetRunId: t.activeRunId } });
     console.log(`sent to ${t.id}  "${t.title}"${busy ? (o.queue ? " (queued after current run)" : " (steered into the running run)") : ""}`);
+    if (!o["no-verify"]) await verifyDelivery(t, messageId, !!o.queue);
     if (o.wait) { await wait(t.id, +o.timeout || 300); await printLast(t.id, 2); }
   }
   else if (cmd === "queue") {
     const t = await findThread(o.thread); const snap = await thread(t.id); const pr = snap.projection || snap;
     const runs = (pr.runs || []).filter((r) => r.status === "queued"); const msgs = messages(snap);
     const all = (Array.isArray(pr.turnItems) ? pr.turnItems : Object.values(pr.turnItems || {}));
-    const textOf = (r) => { const m = all.find((x) => x.id === r.userMessageId || x.messageId === r.userMessageId); return m ? String(m.text ?? m.content ?? (m.message && m.message.text) ?? "") : ""; };
+    const textOf = (r) => { const m = (pr.messages || []).find((x) => x.id === r.userMessageId) || all.find((x) => x.id === r.userMessageId || x.messageId === r.userMessageId); return m ? String(m.text ?? m.content ?? (m.message && m.message.text) ?? "") : ""; };
+    if (o.resume) { await dispatch("queue.resume", t.id); console.log(`resumed the queue of "${t.title}"`); return; }
+    if (o.edit) { const r = runs.find((x) => x.id === o.edit || x.id.startsWith(String(o.edit))); if (!r) throw new Error(`no queued run matches ${o.edit}`); if (o.text === undefined || o.text === true || !String(o.text).trim()) throw new Error("--text <new message> is required with --edit");
+      await dispatch("queued-run.edit", t.id, { runId: r.id, text: String(o.text) }); console.log(`edited queued ${r.id}`); return; }
+    if (o.move) { const r = runs.find((x) => x.id === o.move || x.id.startsWith(String(o.move))); if (!r) throw new Error(`no queued run matches ${o.move}`);
+      let before = null; if (o.before && o.before !== "end") { const b = runs.find((x) => x.id === o.before || x.id.startsWith(String(o.before))); if (!b) throw new Error(`no queued run matches ${o.before}`); if (b.id === r.id) throw new Error("--before is the same run"); before = b.id; }
+      else if (o.first) before = (runs.filter((x) => x.id !== r.id).sort((a, b) => (a.queuePosition || 0) - (b.queuePosition || 0))[0] || {}).id || null;
+      await dispatch("queued-run.reorder", t.id, { runId: r.id, beforeRunId: before }); console.log(`moved queued ${r.id} ${before ? "before " + before : "to the end"}`); return; }
     if (o.steer || o.cancel) {
       const pick = String(o.steer || o.cancel); const targets = pick === "all" ? runs : runs.filter((r) => r.id === pick || r.id.startsWith(pick));
       if (!targets.length) throw new Error(`no queued run matches ${pick}`);
@@ -266,8 +403,8 @@ const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "
       }
       return;
     }
-    console.log(`${t.title}  active=${t.activeRunId || "none"}  queued=${runs.length}`);
-    for (const r of runs) console.log(`${r.id}  ${(textOf(r) || "(text not found)").replace(/\s+/g, " ").slice(0, 140)}`);
+    console.log(`${t.title}  active=${t.activeRunId || "none"}  queued=${runs.length}${runs.some((r) => r.queueHeld) ? `  (queue held: t3ctl queue --thread ${t.id} --resume)` : ""}`);
+    for (const r of runs.sort((a, b) => (a.queuePosition || a.ordinal) - (b.queuePosition || b.ordinal))) console.log(`${r.id}  ${(textOf(r) || "(text not found)").replace(/\s+/g, " ").slice(0, 140)}`);
   }
   else if (cmd === "read") { const t = await findThread(o.thread); console.log(`${t.id}  ${t.title}  status=${t.status}`); await printLast(t.id, +o.last || 6); }
 
@@ -275,7 +412,7 @@ const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "
   else if (cmd === "rename") { const t = await findThread(o.thread); if (!o.title) throw new Error("--title required"); await dispatch("thread.metadata.update", t.id, { title: String(o.title) }); console.log(`renamed "${t.title}" -> "${o.title}"`); }
   else if (cmd === "interrupt") { const t = await findThread(o.thread); if (!t.activeRunId) { console.log("not running"); return; } await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: "t3ctl", holdQueue: !!o.hold }); console.log(`interrupted run in "${t.title}"`); }
   else if (cmd === "pending") { const t = await findThread(o.thread); const pend = pendingOf((await thread(t.id)).projection);
-    if (o.json) console.log(JSON.stringify(pend)); else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
+    if (o.json) console.log(JSON.stringify(pend.map((r) => (r.approval ? { ...r, risk: riskOf(r.approval) } : r)))); else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
   else if (cmd === "answer") await answer(o);
   else if (cmd === "diff") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; const n = p.checkpoints.filter((c) => c.status !== "missing").length;
     const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
@@ -293,5 +430,97 @@ const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "
       lastReply: lastA ? lastA.text.replace(/\s+/g, " ").slice(0, 280) : null, updatedAt: t.updatedAt, lastError: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null, model: t.modelSelection && t.modelSelection.model };
     if (o.json) console.log(JSON.stringify(r)); else console.log(`${r.state}  ${r.title}  (updated ${r.updatedAt}, pending=${r.pendingRequests})\n${r.lastReply || ""}`); }
   else if (cmd === "raw") { if (!o.thread) throw new Error("--thread <id> is required"); console.log(JSON.stringify(await thread(o.thread), null, 1).slice(0, +o.chars || 6000)); }
-  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | new/send ... --attach img1.png,img2.jpg");
-})().catch((e) => { console.error("error:", e.message); process.exit(1); });
+  else if (cmd === "limits") { // read-only: threads stopped on a usage limit
+    const ts = (await shell()).threads.filter((t) => t.status === "failed" && t.lastErrorClass === "usage_limit");
+    if (o.json) { console.log(JSON.stringify(ts.map((t) => ({ id: t.id, title: t.title, resetAt: t.usageLimitResetAt || null, latestRunId: t.latestRunId, limitRecovery: t.limitRecovery || null, snoozedUntil: t.snoozedUntil || null })))); return; }
+    if (!ts.length) console.log("no threads are stopped on a usage limit");
+    for (const t of ts) { const r = t.limitRecovery, cur = r && r.runId === t.latestRunId && r.resetAt === t.usageLimitResetAt;
+      console.log(limitLine(t, !!(cur && r.autoResume))); } }
+  else if (cmd === "resume-at-reset" || cmd === "snooze-until-reset") {
+    const t = await findThread(o.thread), field = cmd === "resume-at-reset" ? "autoResume" : "snooze", on = !o.cancel;
+    if (t.status !== "failed" || t.lastErrorClass !== "usage_limit" || !t.latestRunId || !t.usageLimitResetAt)
+      throw new Error(`NOT_LIMITED: "${t.title}" isn't stopped on a usage limit (status=${t.status}, error=${t.lastErrorClass || "none"})`);
+    if (t.archivedAt || t.settledOverride === "settled") throw new Error(`"${t.title}" is archived or settled; unsettle it first`);
+    if (t.pendingRuntimeRequest) throw new Error(`"${t.title}" has an open question/approval; answer it first (t3ctl pending --thread ${t.id})`);
+    const resetMs = Date.parse(t.usageLimitResetAt);
+    if (field === "snooze" && on && resetMs <= Date.now()) throw new Error("the reset time already passed, so it can't be snoozed until then (use resume-at-reset or send)");
+    await dispatch("thread.metadata.update", t.id, { limitRecovery: { runId: t.latestRunId, resetAt: t.usageLimitResetAt, [field]: on } });
+    const n = (await shell()).threads.find((x) => x.id === t.id) || {}, r = n.limitRecovery || {};
+    console.log(`${cmd}${on ? "" : " cancelled"} "${t.title}"  resetAt=${t.usageLimitResetAt}  autoResume=${!!r.autoResume}  snooze=${!!r.snooze}  snoozedUntil=${n.snoozedUntil || "-"}` +
+      (on && field === "autoResume" && resetMs <= Date.now() ? "  (reset already passed: T3 sends 'Continue where you left off.' on its next check)" : "")); }
+  else if (cmd === "snooze") { const t = await findThread(o.thread); const until = parseWhen(o.until); if (Date.parse(until) <= Date.now()) throw new Error("--until is in the past");
+    await dispatch("thread.snooze", t.id, { snoozedUntil: until }); const n = (await shell()).threads.find((x) => x.id === t.id) || {}; console.log(`snoozed "${t.title}" until ${localT(n.snoozedUntil || until)}`); }
+  else if (cmd === "unsnooze") { const t = await findThread(o.thread); if (!t.snoozedUntil) { console.log(`"${t.title}" isn't snoozed`); return; } await dispatch("thread.unsnooze", t.id, { reason: "user" }); console.log(`unsnoozed "${t.title}"`); }
+  else if (cmd === "model") { const s = await shell(); const t = await findThread(o.thread);
+    if (!o.model && !o.effort) { console.log(`"${t.title}"  ${JSON.stringify(t.modelSelection)}`); return; }
+    if (t.activeRunId) throw new Error(`"${t.title}" is running; switch the model when it's idle (or interrupt it first)`);
+    const cur = t.modelSelection || {}; const sel = o.model ? (() => { const x = modelSel(o, null, s); if (!o.effort && x.instanceId === cur.instanceId && cur.options) x.options = cur.options; return x; })() : { ...cur, options: [{ id: ((cur.options || []).find((x) => /effort|variant/i.test(x.id)) || {}).id || "effort", value: String(o.effort) }] };
+    const type = (t.providerInstanceId || cur.instanceId) === sel.instanceId ? "thread.model-selection.set" : "provider.switch";
+    await dispatch(type, t.id, { modelSelection: sel }); console.log(`${type === "provider.switch" ? "switched provider" : "set model"} on "${t.title}": ${JSON.stringify(sel)}`); }
+  else if (cmd === "search") { const q = String(o.query || o.q || "").trim(); if (q.length < 2 || q.length > 200) throw new Error("usage: search --query <2-200 chars> [--limit 1-50]");
+    const lim = Math.min(50, Math.max(1, +o.limit || 15)); const r = await rpc("orchestration.searchThreads", { query: q, limit: lim }); const s = await shell(); const all = [...s.threads, ...(s.archivedThreads || [])];
+    if (!r.matches.length) console.log("no matches"); for (const m of r.matches) { const t = all.find((x) => x.id === m.threadId); console.log(`${m.threadId}  ${t ? t.title : "?"}  [${m.source}${m.messageCreatedAt ? " " + m.messageCreatedAt : ""}]\n    ${String(m.snippet).replace(/\s+/g, " ")}`); } }
+  else if (cmd === "tasks") {
+    if (o.enable || o.disable) { const id = String(o.enable || o.disable); await rpc("scheduledTasks.setEnabled", { id, enabled: !!o.enable }); console.log(`${o.enable ? "enabled" : "disabled"} task ${id}`); return; }
+    if (o.run) { const r = await rpc("scheduledTasks.runNow", { id: String(o.run) }); console.log(`started task ${o.run}: ${JSON.stringify(r).slice(0, 300)}`); return; }
+    if (o.delete) { if (!o.yes) throw new Error("deleting a scheduled task can't be undone; add --yes"); await rpc("scheduledTasks.delete", { id: String(o.delete) }); console.log(`deleted task ${o.delete}`); return; }
+    if (o.upsert) {
+      const tprompt = promptOf(o); if (!o.title || !tprompt || !o.project) throw new Error("usage: tasks --upsert --project p --title t (--prompt x | --prompt-file f) (--every 30m | --at HH:MM [--days 1,2,3]) [--thread t] [--model m --effort e] [--disabled] [--id existing]");
+      const p = await findProject(o.project); const s = await shell(); let schedule;
+      if (o.every) schedule = { type: "interval", everyMs: parseEvery(o.every) };
+      else if (o.at) { if (!/^([01]?\d|2[0-3]):([0-5]\d)$/.test(String(o.at))) throw new Error("--at must be HH:MM (24h)"); schedule = { type: "fixed_time", timeOfDay: String(o.at) };
+        if (o.days) { const d = String(o.days).split(",").map(Number); if (d.some((x) => !Number.isInteger(x) || x < 0 || x > 6)) throw new Error("--days are 0-6 (0 = Sunday), comma separated"); schedule.weekdays = d; } }
+      else throw new Error("give --every 30m or --at HH:MM");
+      const th = o.thread ? await findThread(o.thread) : null; if (th && th.projectId !== p.id) throw new Error("--thread is in a different project");
+      const r = await rpc("scheduledTasks.upsert", { ...(o.id ? { id: String(o.id), requireExisting: true } : {}), commandId: uuid(), title: String(o.title), prompt: tprompt, enabled: !o.disabled, schedule, projectId: p.id, threadId: th ? th.id : null,
+        workspaceStrategy: { type: "root" }, modelSelection: modelSel(o, p.defaultModelSelection || recentSel(s, p.id) || recentSel(s), s), runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", createdBy: "user", creationSource: "web" });
+      const task = r.task || r; console.log(`saved task ${task.id || "?"}  "${o.title}"  enabled=${!o.disabled}  ${JSON.stringify(schedule)}`); return; }
+    const r = await rpc("scheduledTasks.list", {}); const s = await shell(); if (!r.tasks.length) console.log("no scheduled tasks");
+    for (const k of r.tasks) { const p = s.projects.find((x) => x.id === k.projectId); const sc = k.schedule || {};
+      const when = sc.type === "interval" ? `every ${Math.round(sc.everyMs / 6e4)}m` : sc.type === "fixed_time" ? `at ${sc.timeOfDay}${sc.weekdays ? " on " + sc.weekdays.map((d) => "Sun Mon Tue Wed Thu Fri Sat".split(" ")[d]).join(",") : " daily"}` : sc.type || "?";
+      console.log(`${k.id}  ${k.enabled ? "on " : "off"}  ${when}  ${p ? p.title : k.projectId}  ${k.title}${k.lastRunStatus ? "  last=" + k.lastRunStatus : ""}${k.nextRunAt ? "  next=" + localT(k.nextRunAt) : ""}`); } }
+  else if (cmd === "prs") { const p = await findProject(o.project || ""); const st = String(o.state || "open"); if (!["all", "open", "closed", "merged"].includes(st)) throw new Error("--state is all|open|closed|merged");
+    const r = await rpc("pullRequests.list", { state: st, projectId: p.id, limit: Math.min(500, +o.limit || 20) }); const rows = r.entries || [];
+    for (const er of r.errors || []) console.log(`error for ${er.projectTitle}: ${er.message}`);
+    if (!rows.length) console.log(`no ${st} PRs for ${p.title}`);
+    for (const x of rows) console.log(`${x.repository}#${x.number}  ${x.state}${x.isDraft ? " draft" : ""}  checks=${x.checksState || "-"}  review=${x.reviewDecision || "-"}  ${x.mergeability}  ${x.headBranch}->${x.baseBranch}  ${x.title}`); }
+  else if (cmd === "pr") {
+    if (o.thread) { const t = await findThread(o.thread); const links = await threadPrs(t); if (!links.length) { console.log(`no PRs linked to "${t.title}"`); return; }
+      let ls = links.filter((l) => (!o.number || l.number === +o.number) && (o.all || o.number || !l.snapshot || l.snapshot.state === "open"));
+      if (!ls.length) { console.log(`no open PRs linked to "${t.title}" (${links.length} linked in all; add --all)`); return; } for (const l of ls) await printPr(prRef(o, t, l)); return; }
+    if (!o.project || !o.repo || !o.number) throw new Error("usage: pr --thread t [--number n]  |  pr --project p --repo owner/name --number n");
+    const p = await findProject(o.project); await printPr({ projectId: p.id, repository: String(o.repo), number: +o.number }); }
+  else if (cmd === "fork") { const t = await findThread(o.thread); const runs = ((await thread(t.id)).projection.runs || []);
+    if (o.run && !runs.some((r) => r.id === o.run)) throw new Error(`no run ${o.run} in "${t.title}" (see: t3ctl raw --thread ${t.id})`);
+    const target = `thread:project:${t.projectId}:${uuid()}`;
+    await dispatch("thread.fork", undefined, { createdBy: "user", creationSource: "web", sourceThreadId: t.id, targetThreadId: target, sourcePoint: o.run ? { type: "run", runId: String(o.run) } : { type: "latest_stable" }, ...(o.title ? { title: String(o.title) } : {}) });
+    console.log(`forked "${t.title}" -> ${target}${o.title ? `  "${o.title}"` : ""}`); }
+  else if (cmd === "stop") { // run.interrupt with holdQueue: T3 also stops the thread's delegated sub-tasks (thread.stop is server-internal)
+    const t = await findThread(o.thread); if (!t.activeRunId) { console.log(`"${t.title}" isn't running (nothing to stop)`); return; }
+    await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: String(o.reason || "t3ctl stop"), holdQueue: true });
+    console.log(`stopped "${t.title}": run interrupted, its sub-tasks stopped, queue held (resume with: t3ctl queue --thread ${t.id} --resume)`); }
+  else if (cmd === "subtasks") { const t = await findThread(o.thread); const s = await shell(); const p = (await thread(t.id)).projection;
+    const kids = s.threads.filter((x) => x.lineage && x.lineage.parentThreadId === t.id);
+    const act = (x) => (/running|starting|queued|waiting|failed/.test(x.status) ? 0 : 1); kids.sort((a, b) => act(a) - act(b) || b.updatedAt.localeCompare(a.updatedAt));
+    console.log(`"${t.title}"  sub-task threads: ${kids.length}${kids.length > 15 && !o.all ? " (showing 15; --all for every one)" : ""}`); for (const k of o.all ? kids : kids.slice(0, 15)) console.log(`  ${k.id}  ${k.status}  ${k.title}`);
+    const subs = p.subagents || []; console.log(`  in-thread subagents: ${subs.length}`); for (const a of subs) console.log(`  ${a.id}  run=${a.runId}  ${a.status || ""}  ${a.origin || ""}/${a.driver || ""}  ${String(a.title || a.prompt || "").replace(/\s+/g, " ").slice(0, 80)}`); }
+  else if (cmd === "subagent-stop") { const t = await findThread(o.thread); if (!o.subagent) throw new Error("--subagent <id> is required (list them with: t3ctl subtasks --thread t)");
+    const a = ((await thread(t.id)).projection.subagents || []).find((x) => x.id === o.subagent || String(x.id).endsWith(String(o.subagent))); if (!a) throw new Error(`no subagent ${o.subagent} in "${t.title}"`);
+    await dispatch("subagent.stop", t.id, { runId: a.runId, subagentId: a.id }); console.log(`stopped subagent ${a.id} in "${t.title}"`); }
+  else if (cmd === "watch") { // change-only report for routines: prints nothing when nothing worth saying changed
+    if (!o.thread || o.thread === true) throw new Error("usage: watch --thread a[,b,...] [--state <file>] [--stall-min 20] [--json]");
+    const sf = o.state && o.state !== true ? String(o.state).replace(/^~(?=$|[\/\\])/, HOME) : path.join(__dirname, "watch-state.json");
+    let st = {}; try { st = JSON.parse(fs.readFileSync(sf, "utf8")) || {}; } catch {}
+    const out = [], snaps = [];
+    for (const q of String(o.thread).split(",").map((x) => x.trim()).filter(Boolean)) {
+      let t, cur; try { t = await findThread(q); cur = watchSnap(t, (await thread(t.id)).projection); }
+      catch (e) { if (/^(TOKEN_REJECTED|T3_NOT_REACHABLE|T3_NOT_RUNNING|NO_TOKEN)/.test(e.message)) throw e; const k = "q:" + q, msg = String(e.message).slice(0, 200);
+        if (!st[k] || st[k].readError !== msg) out.push({ kind: "unreadable", threadId: q, title: q, text: msg }); st[k] = { readError: msg }; continue; }
+      delete st["q:" + q]; out.push(...watchDiff(st[t.id], cur, +o["stall-min"] || 20)); st[t.id] = cur; snaps.push(cur); }
+    const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
+    if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
+    for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify");
+};
+if (require.main !== module) module.exports = { isMainThread, limitLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); console.error("error:", m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message); process.exit(1); });

@@ -35,6 +35,8 @@ def since(days): return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=da
 LIVE = ("queued", "preparing", "starting", "running")
 TH = "orchestration_v2_projection_threads"; RU = "orchestration_v2_projection_runs"
 RQ = "orchestration_v2_projection_runtime_requests"; MS = "orchestration_v2_projection_messages"
+# a queued run whose queue was stopped on purpose is not running: it waits for someone to resume or cancel it
+RUNST = "case when r.status='queued' and json_extract(r.payload_json,'$.queueHeld') then 'queue held' else r.status end"
 SPAWNED = ("mcp", "provider")  # threads created by agents, not by the user
 def asks_q(text):
     tail = [l.strip(" *_>`)") for l in (text or "").splitlines() if l.strip()][-2:]
@@ -49,12 +51,15 @@ if CMD != "usage":
     if not os.path.exists(P): print("NO_T3_DATA at", tilde(D), "- T3 Code has not run on this computer yet (or T3CODE_HOME points elsewhere)."); sys.exit(0)
     db = sqlite3.connect("file:" + P.replace("\\", "/") + "?mode=ro", uri=True)
 q = lambda s, a=(): db.execute(s, a).fetchall()
+# Older T3 builds kept approvals in their own table; newer ones keep them in runtime_requests (already counted)
+APPROVALS = "(select count(*) from projection_pending_approvals a where a.thread_id=t.thread_id and a.status='pending')" \
+    if CMD != "usage" and q("select 1 from sqlite_master where type='table' and name='projection_pending_approvals'") else "0"
 
 def overview():
     DAYS = int(os.environ.get("T3_DAYS", "7")); ALL = os.environ.get("T3_ALL") == "1"
     rows = q(f"""select t.thread_id, coalesce(p.title,'(no project)'), t.title, t.updated_at,
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
-     (select status from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
+     (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
      (select count(*) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
      (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1)
      from {TH} t left join projection_projects p on p.project_id=t.project_id
@@ -63,7 +68,7 @@ def overview():
     print(f"T3 threads active in last {DAYS} days: {len(mine)} shown, {len(rows)-len(mine)} agent-spawned hidden (T3_ALL=1 shows them)")
     for tid, proj, title, upd, src, run, pend, last in mine:
         role, _, text = (last or "\x1f").partition("\x1f")
-        st = "running" if run in LIVE else "needs you" if pend or run == "waiting" or (role == "assistant" and asks_you(text)) else (run or "idle")
+        st = "running" if run in LIVE else "needs you" if pend or run in ("waiting", "queue held") or (role == "assistant" and asks_you(text)) else (run or "idle")
         print(f"- [{proj}] {title} | {st} | {loc(upd)} | {role or '-'}: {flat(text,140)}")
     spawned = {}
     for r in rows:
@@ -73,9 +78,9 @@ def overview():
 def waiting():
     DAYS = int(os.environ.get("T3_DAYS", "14"))
     rows = q(f"""select t.thread_id, coalesce(p.title,'(no project)'), t.title, t.updated_at,
-     (select status from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
+     (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
      (select group_concat(kind||'@'||created_at) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
-     (select count(*) from projection_pending_approvals a where a.thread_id=t.thread_id and a.status='pending'),
+     {APPROVALS},
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
      (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1)
      from {TH} t left join projection_projects p on p.project_id=t.project_id
@@ -86,13 +91,14 @@ def waiting():
         if src in SPAWNED and not ALL and not (pend or appr): continue
         role, _, text = (last or "\x1f").partition("\x1f")
         asks = role == "assistant" and asks_you(text)
-        if run in LIVE or not (pend or appr or run == "waiting" or asks): continue
+        if run in LIVE or not (pend or appr or run in ("waiting", "queue held") or asks): continue
         n += 1
         why = []
         if pend:
             for k in pend.split(","):
                 kind, _, at = k.partition("@"); why.append(f"pending {kind} since {loc(at)}" + (" (stale >24h)" if ago_h(at) > 24 else ""))
         if appr: why.append(f"{appr} pending approval(s)")
+        if run == "queue held": why.append(f"queue held: a message waits to start (resume: t3ctl queue --thread '{tid}' --resume, or cancel it)")
         if asks and not why: why.append("last reply asks you a question or hands a decision back")
         print(f"\n## [{proj}] {title}\nid {tid} | {loc(upd)} | " + "; ".join(why))
         msg = " ".join((text or "").split())
@@ -169,9 +175,10 @@ def health():
     print(f"T3 server: {state} (pid {pid}) | port {port} reachable: {listen} | runtime file host {host}")
     print("listening on:", ", ".join(sorted(binds)) or "none found")
     if any(b.startswith(("0.0.0.0", "*", "[::]", "::")) for b in binds) or host in ("0.0.0.0", "::"):
-        print("WARNING: T3 is bound to all interfaces — anyone on the same network can reach it. Bind to 127.0.0.1 unless you need remote access.")
-    for tid, title, st, at, upd in q(f"select r.thread_id, t.title, r.status, r.requested_at, t.updated_at from {RU} r join {TH} t using(thread_id) where r.status in ('queued','preparing','starting','running','waiting') order by r.requested_at"):
-        h = ago_h(at); quiet = ago_h(upd)  # stuck = live over 1h AND no thread activity for 30+ min
+        print("WARNING: T3 is bound to all interfaces, so anyone on the same network can reach it. Bind to 127.0.0.1 unless you need remote access.")
+    for tid, title, st, at, upd in q(f"select r.thread_id, t.title, {RUNST}, r.requested_at, t.updated_at from {RU} r join {TH} t using(thread_id) where r.status in ('queued','preparing','starting','running','waiting') order by r.requested_at"):
+        h = ago_h(at); quiet = ago_h(upd)
+        if st == "queue held": print(f"queue held: {title} | a message has waited {h:.1f}h for someone to resume or cancel it"); continue  # stuck = live over 1h AND no thread activity for 30+ min
         print(f"{'STUCK? ' if h > 1 and quiet > 0.5 else ''}live run: {title} | {st} for {h:.1f}h, last activity {quiet*60:.0f} min ago")
     for title, kind, at in q(f"select t.title, x.kind, x.created_at from {RQ} x join {TH} t using(thread_id) where x.status='pending'"):
         print(f"pending {kind}: {title} since {loc(at)}" + (" (stale >24h)" if ago_h(at) > 24 else ""))
@@ -211,7 +218,7 @@ def usage():
     print("cache updated", dt.datetime.fromtimestamp(os.path.getmtime(src)).strftime("%b %d %H:%M"), "| files:", os.path.basename(src), "+", "usage-model-rates.json" if rates else "(no rates file - costs unavailable)")
     models = u.get("models", []); cut = (dt.datetime.now() - dt.timedelta(days=DAYS)).timestamp() * 1000
     if os.environ.get("T3_WEEK") == "1":  # calendar week, Monday 00:00 local
-        n = dt.datetime.now(); cut = (n - dt.timedelta(days=n.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000; DAYS = "this week:"
+        n = dt.datetime.now(); cut = (n - dt.timedelta(days=n.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000; DAYS = "this week,"
     def rate(m, prov):
         for k in (m, f"{prov}/{m}", m.split("@")[0], "-".join(m.split("-")[:-1])):
             if k in rates and "input_cost_per_token" in rates[k]: return rates[k]

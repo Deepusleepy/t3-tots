@@ -1,0 +1,15 @@
+# Local state the tools write next to themselves. Never commit these.
+token
+listen.json
+listen-*.json
+*-state.json
+watch-*.json
+answered-here.json
+started-here.json
+out/
+__pycache__/
+*.pyc
+*.log
+*.pid
+.env
+.DS_Store

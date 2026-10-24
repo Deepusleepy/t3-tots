@@ -9,7 +9,7 @@ let rt;try{rt=JSON.parse(fs.readFileSync(path.join(t3Dir(),"server-runtime.json"
 let T="";try{T=fs.readFileSync(path.join(__dirname,"token"),"utf8").trim()}catch{}if(!T)die("NO_TOKEN","no `token` file next to this script yet. Ask T3 Tots to issue one (setup step), then retry.");
 const H={Authorization:"Bearer "+T,"x-t3-orchestration-protocol":"2"};const B=`http://${!rt.host||rt.host==="0.0.0.0"||rt.host==="::"?"127.0.0.1":rt.host.includes(":")?`[${rt.host}]`:rt.host}:${rt.port}`;
 const get=async p=>{let r;try{r=await fetch(B+p,{headers:H})}catch(e){throw new Error(`T3_NOT_REACHABLE: can't reach T3 at ${B} (${(e.cause&&e.cause.code)||e.message}). Is T3 Code open?`)}
- if(r.status===401||r.status===403)throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (t3-tots-rules rule 8).`);if(!r.ok)throw new Error(p+" "+r.status);return r.json()};
+ if(r.status===401||r.status===403)throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (see Token in t3-tots-rules).`);if(!r.ok)throw new Error(p+" "+r.status);return r.json()};
 (async()=>{const j=await get("/api/orchestration/shell");
 const P=Object.fromEntries(j.projects.map(p=>[p.id,p.title]));const now=Date.now(),d=s=>(now-Date.parse(s))/864e5;
 const user=j.threads.filter(t=>!/^(mcp|provider)$/.test(t.creationSource));
