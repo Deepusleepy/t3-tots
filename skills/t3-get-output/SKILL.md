@@ -6,10 +6,10 @@ description: >-
   send it here", "get me the file from <thread>", "send me what <thread> made",
   "diff of <thread>".
 ---
-Follow @t3-tots-rules. Send only the prompt the user asked for.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Send only the prompt the user asked for.
 
 ## 1. Make it (skip when fetching)
-1. Resolve the computer, project and model as in @t3-new-thread. Throwaway asks go to the user's sandbox project, from memory (ask once and save it if unknown), with `--model haiku --effort low`.
+1. Resolve the computer, project and model as in t3-new-thread. Throwaway asks go to the user's sandbox project, from memory (ask once and save it if unknown), with `--model haiku --effort low`.
 2. Write the prompt to a file (t3-tots-rules "Sending into threads"). Ask for one output path and no other changes: "<ask>. Save it as <subdir>/<name>.<ext> in this project. Do not change any other files. Reply with the path."
 3. Start it: `t3ctl new --project '<P>' --model <m> --effort <e> --title '<short>' --prompt-file <file> --wait --timeout 600`. For long renders, leave out `--wait` and check later with `t3ctl read`.
 

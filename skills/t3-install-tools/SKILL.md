@@ -6,7 +6,7 @@ description: >-
   onto the box and the user's T3 computers. Use during setup, when a skill says the
   tools are missing or differ, or for "update T3 Tots tools".
 ---
-Follow @t3-tots-rules. The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.0` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.1` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder.
 
@@ -21,20 +21,20 @@ If it prints `REPO_PRIVATE_OR_MISSING`, the repo is private or the tag doesn't e
   box [--from DIR]          install the pinned release's tools into /workspace/t3-tots-tools, verify every sha256
   check                     compare with the latest GitHub release (read-only): changed files + notes
   update <tag> [--from DIR] install <tag> on the box, verified against that tag's manifest.json (only after the user's yes)
-  hashes <macos|linux|windows>                  'sha256  file' lines for that OS's tools folder, from the box manifest
-  emit <macos|linux|windows> <tools dir> [--gh] print a one-shot install command for that computer
+  hashes <macos|linux|windows>                  'sha256  file' lines for that OS's tools folder (with manifest.json)
+  emit <macos|linux|windows> <tools dir> [--gh] print a one-shot install command for that computer (tools, manifest.json, VERSION)
 --from DIR reads the files from a folder on the box (a CopyToBox of the release or a checkout at that tag)
 instead of downloading; the same hashes are checked. --gh makes the install command download with the
 GitHub CLI, which works for a private repo on a computer where `gh auth status` is signed in.
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
-goes to its manifest `dest` (tools/windows/t3ctl.cmd -> t3ctl.cmd)."""
+goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.0"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.1"
 PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN release; a changed repo can't change what gets installed
  "tools/t3q.py": ["t3q.py", "0e298a606626dec4895d06828b304755cca3a03bdd2f190b56326860c64355d3"],
- "tools/t3ctl": ["t3ctl", "e86bdea92b05319f93d29d6def203f6ca955c2daa242e6dac17006966e344227"],
+ "tools/t3ctl": ["t3ctl", "f8973b22a4b19723bafe1fe7f7cd208245d91361cd1834498a5358a568daa999"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "d8240b752669852e794dbeb68539b839a9fcf578aec9b5758316b5c40823e897"],
+ "tools/t3listen": ["t3listen", "57f23776a46ccdc7d9702c832fd9288d91ab6c4de26c3e5cd1acdffa1f6106be"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "fdfa0cc128c5b345dfc243f4b4c9f2f676e8f4a4c36cc96568c20ebbefae74be"],
  "tools/survey.js": ["survey.js", "49a21096cc9c2b4674456bb68eafc4d8e4343ef7a3cd2b638f0d79b3d9494e0c"],
@@ -88,10 +88,10 @@ def install_box(tag, mb):
         if (DST / d).exists(): os.chmod(DST / d, 0o755)
     (DST / "VERSION").write_text(tag + "\n")
     print(f"OK {tag}: {len(got)} files verified in {DST}" + (f" (from {SRC})" if SRC else ""))
-def files(os_):
+def files(os_):  # this OS's tools, then manifest.json itself (verified by `box`), so computers get it next to VERSION
     if not (DST / "manifest.json").exists(): sys.exit("NO_BOX_COPY: run `box` first")
-    m = json.loads((DST / "manifest.json").read_text())
-    return m["version"], [f for f in tools(m) if os_ in f["targets"]]
+    mb = (DST / "manifest.json").read_bytes(); m = json.loads(mb)
+    return m["version"], [f for f in tools(m) if os_ in f["targets"]] + [{"path": "manifest.json", "dest": "manifest.json", "sha256": sha(mb)}]
 cmd = args[0] if args else "box"
 if cmd == "box": install_box(PIN, fetch(PIN, "manifest.json"))
 elif cmd == "check":
@@ -105,7 +105,7 @@ elif cmd == "check":
     cur = (DST / "VERSION").read_text().strip() if (DST / "VERSION").exists() else "none"
     print(f"installed {cur} | latest {tag} ({rel.get('published_at', '')[:10]})")
     if tag != cur:
-        old = {f["dest"]: f["sha256"] for f in files("box")[1]} if (DST / "manifest.json").exists() else {}
+        old = {f["dest"]: f["sha256"] for f in files("box")[1][:-1]} if (DST / "manifest.json").exists() else {}
         new = {f["dest"]: f["sha256"] for f in tools(json.loads(get(raw(tag, "manifest.json"))))}
         for p in sorted(set(old) | set(new)):
             if old.get(p) != new.get(p): print("new:" if p not in old else "removed:" if p not in new else "changed:", p)
@@ -162,7 +162,7 @@ else: print(__doc__)
 
 ## Private repo
 The box can't download from a private repo. Pick the first option that works:
-1. A computer where `gh auth status` shows a signed-in account with access: run `gh release download <tag> -R Deepusleepy/t3-tots --archive tar.gz -D <temp folder>` there and unpack it (it holds one folder, `t3-tots-<version without v>`). CopyToBox the folder with `box_path` set to `/workspace/uploads/t3-tots-<tag>`, then run `python3 /workspace/t3tots_fetch.py box --from /workspace/uploads/t3-tots-<tag>`. The pinned hashes still decide what gets installed.
+1. A computer where `gh auth status` shows a signed-in account with access: run `gh release download <tag> -R Deepusleepy/t3-tots --archive tar.gz -D <temp folder>` there and unpack it. It holds one folder named for the tag without its leading `v` (`v1.4.1` unpacks to `t3-tots-1.4.1`). CopyToBox the folder with `box_path` set to `/workspace/uploads/t3-tots-<tag>`, then run `python3 /workspace/t3tots_fetch.py box --from /workspace/uploads/t3-tots-<tag>`. The pinned hashes still decide what gets installed.
 2. A local checkout of the repo at that tag: CopyToBox it the same way and use `--from`.
 3. For computers: `python3 /workspace/t3tots_fetch.py emit <os> '<tools folder>' --gh` prints an install command that downloads with `gh api` instead of the public URL. It needs `gh` signed in on that computer. Otherwise use step 3 of "Install on a computer".
 
@@ -171,9 +171,9 @@ The box can't download from a private repo. Pick the first option that works:
 ## Install on a computer
 Files per OS come from `manifest.json` (`targets`; names below are installed names): every computer gets `t3q.py`, `t3ctl`, `t3listen`, `export.js`, `survey.js`, `cleanup/scan.py`; Windows also `t3ctl.cmd` and `t3listen.cmd`; macOS also `t3ui` + `ui-*.applescript`. `make_report.py` and `report.py` stay on the box.
 1. On the box: `python3 /workspace/t3tots_fetch.py emit <macos|linux|windows> '<tools folder>'` (e.g. `~/t3-tots`, Windows `~\t3-tots`). It prints one command.
-2. Run that command unchanged on the computer (zsh/bash on macOS/Linux, PowerShell on Windows). It downloads from the pinned tag, checks every sha256 there, and only then moves the files into the tools folder (flat, as on the box) and writes `VERSION`. Expect `OK <tag>: <n> files verified in <folder>`.
-3. No internet on the computer or no curl/wget: CopyFromBox each file listed by `python3 /workspace/t3tots_fetch.py hashes <os>` from `/workspace/t3-tots-tools/<file>` to `<tools folder>/<file>` (CopyFromBox is byte-exact), compare hashes on the computer (macOS `shasum -a 256`, Linux `sha256sum`, Windows `Get-FileHash -Algorithm SHA256`), `chmod +x t3ctl t3listen t3ui` on macOS/Linux, and write the tag to `VERSION`.
-4. Check: `t3q.py health` prints the T3 server state (or `NO_T3_DATA`); `node t3ctl` with no args and `node t3listen help` print usage (or `NODE_TOO_OLD`). Installing the files doesn't start `t3listen`; that's @t3-phone-answers, after the user opts in.
+2. Run that command unchanged on the computer (zsh/bash on macOS/Linux, PowerShell on Windows). It downloads from the pinned tag, checks every sha256 there, and only then moves the files into the tools folder (flat, as on the box), including `manifest.json`, and writes `VERSION`. Expect `OK <tag>: <n> files verified in <folder>`.
+3. No internet on the computer or no curl/wget: CopyFromBox each file listed by `python3 /workspace/t3tots_fetch.py hashes <os>` (`manifest.json` included) from `/workspace/t3-tots-tools/<file>` to `<tools folder>/<file>` (CopyFromBox is byte-exact), compare hashes on the computer (macOS `shasum -a 256`, Linux `sha256sum`, Windows `Get-FileHash -Algorithm SHA256`), run `chmod +x t3ctl t3listen` on macOS and Linux (on macOS also `chmod +x t3ui`), and write the tag to `VERSION`.
+4. Check: `t3q.py health` prints the T3 server state (or `NO_T3_DATA`); `node t3ctl` with no args and `node t3listen help` print usage (or `NODE_TOO_OLD`). Installing the files doesn't start `t3listen`; that's t3-phone-answers, after the user opts in.
 
 ## Skills
 Grok Bot already has these skills. Another agent on a computer (Claude Code, Codex, Cursor and so on) gets them with `node t3ctl skills install --to <its skills folder>`, run from a repo checkout or an unpacked release (see the repo README).
@@ -189,5 +189,5 @@ Hash its files (step 3 commands) and compare with `python3 /workspace/t3tots_fet
 ## Updating (only when the user asks, e.g. "update T3 Tots tools", or when a script prints `T3_SCHEMA_CHANGED`)
 1. `python3 /workspace/t3tots_fetch.py check` (read-only): installed vs latest release, changed files, release notes.
 2. Show the user the version, a summary of 2 to 4 lines of the notes and the changed files. Ask "Update to <tag>?".
-3. On yes: `python3 /workspace/t3tots_fetch.py update <tag>` (verifies against that tag's `manifest.json` and replaces the box manifest), then "Install on a computer" on each computer, update `README.md` and the version in memory. If `t3listen` runs on a computer (`node t3listen status`), run `node t3listen install` again there (add `--approvals` if approvals were on) so it restarts on the new version; `listen.json` is kept.
+3. On yes: `python3 /workspace/t3tots_fetch.py update <tag>` (verifies against that tag's `manifest.json` and replaces the box manifest), then "Install on a computer" on each computer, update `README.md` and the version in memory. If `t3listen` runs on a computer (`node t3listen status`), run `node t3listen install` again there so it restarts on the new version. Add `--approvals` only if `node t3listen status` showed "installed with --approvals" before the update (tools before v1.4.1 don't print that line, so use memory or ask); `listen.json` is kept.
 4. Rollback: `update <previous tag>` the same way. Older tags stay on GitHub.

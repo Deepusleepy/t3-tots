@@ -415,6 +415,15 @@ function uninstall() {
   } else { tryRun("systemctl", ["--user", "disable", "--now", unitName()]); const had = fs.existsSync(unitPath()); if (had) fs.unlinkSync(unitPath()); tryRun("systemctl", ["--user", "daemon-reload"]); console.log(had ? `removed ${unitName()}` : "not installed"); }
   try { fs.unlinkSync(PID); } catch {}
 }
+function serviceArgs() { // what the autostart entry runs, to tell whether it was installed with --approvals
+  try {
+    if (process.platform === "darwin") return fs.existsSync(plistPath()) ? fs.readFileSync(plistPath(), "utf8") : "";
+    if (process.platform === "win32") return ps(`$t=Get-ScheduledTask -TaskName ${psq(TASK)} -ErrorAction SilentlyContinue; if ($t) { $t.Actions.Arguments }; if (Test-Path ${psq(startupLnk())}) { (New-Object -ComObject WScript.Shell).CreateShortcut(${psq(startupLnk())}).Arguments }`);
+    return fs.existsSync(unitPath()) ? fs.readFileSync(unitPath(), "utf8") : "";
+  } catch { return ""; }
+}
+// approvals are sent when listen.json has "approvals": true OR the service runs with --approvals
+const approvalsLine = (file, flag) => (file || flag ? `on (${[file && "listen.json", flag && "installed with --approvals"].filter(Boolean).join(" and ")})` : "off");
 function status() {
   let inst = "not installed", running = false, pid = null;
   if (process.platform === "darwin") { if (fs.existsSync(plistPath())) inst = "LaunchAgent"; const r = tryRun("launchctl", ["print", `gui/${process.getuid()}/${LABEL}`]); const m = r.ok && r.out.match(/\bpid = (\d+)/); if (m) { running = true; pid = +m[1]; } }
@@ -423,7 +432,7 @@ function status() {
   if (!running) { const p = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (p) try { process.kill(p, 0); running = true; pid = p; } catch {} }
   const st = readJSON(STATE, { sent: {} }), open = Object.values(st.sent || {}).filter((s) => !s.skipped).length;
   let tail = ""; try { tail = fs.readFileSync(LOG, "utf8").trim().split("\n").slice(-3).join("\n"); } catch {}
-  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
+  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
 }
 async function test() {
   C = loadConfig(); const e = { event: "test", machine: C.machine, threadId: "test", title: "t3listen test", project: null, requestId: "test-" + Date.now(), kind: "test" };
@@ -456,5 +465,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, localTime };
+if (require.main !== module) module.exports = { pickThread, localTime, approvalsLine };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

@@ -66,6 +66,8 @@ class Fetcher(unittest.TestCase):
         run(self.f, "box", "--from", str(ROOT), dst=self.dst)
         win = run(self.f, "emit", "windows", "~\\t3-tots", dst=self.dst).stdout
         self.assertIn("@('tools/windows/t3ctl.cmd','t3ctl.cmd',", win); self.assertNotIn("applescript", win)
+        self.assertIn(f"@('manifest.json','manifest.json','{sha((self.dst / 'manifest.json').read_bytes())}')", win)
+        self.assertIn("  manifest.json\n", run(self.f, "hashes", "linux", dst=self.dst).stdout)
         if not shutil.which("curl"):
             self.skipTest("no curl")
         sh = run(self.f, "emit", "macos", str(self.tmp / "mac"), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
@@ -77,6 +79,18 @@ class Fetcher(unittest.TestCase):
                 self.assertEqual(sha((mac / f["dest"]).read_bytes()), f["sha256"], f["dest"])
         self.assertFalse((mac / "t3ctl.cmd").exists()); self.assertFalse((mac / "tools").exists()); self.assertFalse((mac / ".t3tots-staging").exists())
         self.assertTrue(os.access(mac / "t3ui", os.X_OK))
+        self.assertEqual((mac / "manifest.json").read_bytes(), (ROOT / "manifest.json").read_bytes())
+        self.assertEqual((mac / "VERSION").read_text().strip(), MANIFEST["version"])
+
+    def test_linux_install_chmods_only_what_it_installs(self):
+        if not shutil.which("curl"):
+            self.skipTest("no curl")
+        run(self.f, "box", "--from", str(ROOT), dst=self.dst)
+        sh = run(self.f, "emit", "linux", str(self.tmp / "lin"), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
+        self.assertNotIn("t3ui", sh)
+        r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(os.access(self.tmp / "lin" / "t3ctl", os.X_OK)); self.assertTrue((self.tmp / "lin" / "manifest.json").is_file())
 
 
 class SyncSkills(unittest.TestCase):
@@ -90,7 +104,7 @@ class SyncSkills(unittest.TestCase):
 
     def skill(self, name, body):
         (self.live / name).mkdir(parents=True, exist_ok=True)
-        (self.live / name / "SKILL.md").write_bytes(f"---\nname: {name}\ndescription: >-\n  Test skill.\n---\n{body}".encode())
+        (self.live / name / "SKILL.md").write_bytes(f"---\nname: {name}\ndescription: >-\n  Test skill. Use for tests.\n---\n{body}".encode())
 
     def sync(self, *a):
         env = {k: v for k, v in os.environ.items() if k != "T3TOTS_PRIVATE_WORDS"}
@@ -101,7 +115,7 @@ class SyncSkills(unittest.TestCase):
         self.skill("t3-a", "Line one.\r\nLine two.")
         r = self.sync()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual((self.repo / "skills" / "t3-a" / "SKILL.md").read_bytes(), b"---\nname: t3-a\ndescription: >-\n  Test skill.\n---\nLine one.\nLine two.\n")
+        self.assertEqual((self.repo / "skills" / "t3-a" / "SKILL.md").read_bytes(), b"---\nname: t3-a\ndescription: >-\n  Test skill. Use for tests.\n---\nLine one.\nLine two.\n")
         m = json.loads((self.repo / "manifest.json").read_text())
         self.assertTrue(any(f["path"] == "skills/t3-a/SKILL.md" and f["dest"] == "t3-a/SKILL.md" for f in m["files"]))
 
@@ -110,6 +124,16 @@ class SyncSkills(unittest.TestCase):
         r = self.sync()
         self.assertEqual(r.returncode, 1); self.assertIn("SYNC_BLOCKED", r.stdout); self.assertIn("email", r.stdout)
         self.assertIn(str(self.live), r.stdout); self.assertFalse((self.repo / "skills").exists())
+
+    def test_source_is_required(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("T3TOTS_PRIVATE_WORDS", "T3TOTS_SKILLS_SRC")}
+        r = subprocess.run([sys.executable, str(self.repo / "scripts" / "sync-skills")], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1); self.assertIn("NO_SKILLS", r.stdout); self.assertFalse((self.repo / "skills").exists())
+
+    def test_description_must_say_when(self):
+        (self.live / "t3-a").mkdir(parents=True)
+        (self.live / "t3-a" / "SKILL.md").write_text("---\nname: t3-a\ndescription: >-\n  Does a thing.\n---\nbody\n")
+        r = self.sync(); self.assertEqual(r.returncode, 1); self.assertIn("say when to use", r.stdout)
 
     def test_name_must_match_folder(self):
         self.skill("t3-a", "ok\n"); (self.live / "t3-b").mkdir(); shutil.copy(self.live / "t3-a" / "SKILL.md", self.live / "t3-b")
@@ -120,6 +144,32 @@ class SyncSkills(unittest.TestCase):
         shutil.move(str(self.live / "t3-b"), str(self.tmp / "gone"))
         r = self.sync("--dry-run"); self.assertIn("in repo only", r.stdout); self.assertTrue((self.repo / "skills" / "t3-b").exists())
         r = self.sync("--prune"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertFalse((self.repo / "skills" / "t3-b").exists())
+
+
+
+class ScanPrivate(unittest.TestCase):
+    """Each sample is split so this file itself passes the scan."""
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("scan_private", ROOT / "scripts" / "scan-private.py")
+        self.m = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.m)
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-scan-"))
+
+    def hits(self, text):
+        f = self.tmp / "x.md"; f.write_text(text + "\n"); return self.m.scan([f], [])
+
+    def test_catches_personal_details(self):
+        for sample in ["cd ~" + "/Developer/app", "cd $HOME" + "/Projects/x", "%USERPROFILE%" + "\\Documents\\y",
+                       "/home" + "/box/agent-data", "/Users" + "/alice", "/Users" + "/alice/", "C:" + "\\Users\\bob",
+                       "alice-Mac" + "Book-Pro", "Mac" + "BookPro" + ".lo" + "cal", "Mac" + "Book-Pro-2", "DESKTOP-" + "AB12CD3", "LAPTOP-" + "Q1W2E3R",
+                       "gho" + "_" + "a" * 36, "npm" + "_" + "b" * 36, "xapp" + "-1-A0B1C2D3E4F5", "xoxb" + "-123456789012-abc",
+                       "https://hooks" + ".slack.com/services/T000/B000/XXXX", "https://discord" + ".com/api/webhooks/123/abc-DEF"]:
+            self.assertTrue(self.hits(sample), sample)
+
+    def test_allows_placeholders_and_generic_paths(self):
+        for sample in ["/Users" + "/you/t3-tots", "/Users" + "/Shared", "/home" + "/user/x", "C:" + "\\Users\\you\\t3-tots",
+                       "~/t3-tots", "~/.claude/skills", "$HOME/.t3", "~/Library/Caches", "a MacBook Pro or a Windows PC", "user@example.com"]:
+            self.assertEqual(self.hits(sample), [], sample)
 
 
 if __name__ == "__main__":

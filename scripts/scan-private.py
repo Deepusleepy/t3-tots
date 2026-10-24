@@ -2,21 +2,33 @@
 """Find private details in files before they reach the repo.
 
 Usage: python3 scripts/scan-private.py FILE_OR_FOLDER...   (exit 1 and print each hit if anything is found)
-Blocks: email addresses, personal home folders, machine ids (UUIDs), computer names, secret-looking keys,
-and your own private words, one per line in ~/.config/t3-tots/private-words.txt or comma separated in
+Blocks: email addresses, home folders (/Users/<name>, /home/<name>, C:\\Users\\<name>, with or without a trailing slash),
+personal folders under the home folder (~ or $HOME then Developer, Projects, Documents, ...), machine ids (UUIDs),
+computer names (<name>-MacBook..., MacBook host names written without a space, <host>.local, DESKTOP-<id>, LAPTOP-<id>),
+secret-looking keys and webhook URLs, and your own private words, one per line in ~/.config/t3-tots/private-words.txt or comma separated in
 T3TOTS_PRIVATE_WORDS. Never commit that list.
 """
 import os, pathlib, re, sys
 
+HOME_VAR = r"(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE)"
 PATTERNS = [
     ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}"),
      re.compile(r"@(example\.(com|org)|users\.noreply\.github\.com)|git@github\.com", re.I)),
-    ("home folder", re.compile(r"/Users/[A-Za-z][A-Za-z0-9._-]+/|/home/[A-Za-z][A-Za-z0-9._-]+/|[Cc]:\\{1,2}Users\\{1,2}[A-Za-z][A-Za-z0-9._-]+\\"),
-     re.compile(r"/(Users|home)/(you|me|name|user|USER|Shared|box)/|Users\\{1,2}(you|name|user|USER|Public)\\")),
+    # Home folders with or without a trailing separator. Placeholder names (you, name, user) are allowed.
+    ("home folder", re.compile(r"/(?:Users|home)/[A-Za-z][A-Za-z0-9._-]*|[A-Za-z]:\\{1,2}Users\\{1,2}[A-Za-z][A-Za-z0-9._-]*"),
+     re.compile(r"^/(?:Users|home)/(?:you|me|name|user|USER|Shared)$|Users\\{1,2}(?:you|name|user|USER|Public)$")),
+    # A personal folder under the home folder. Dot folders, Library and t3-tots are generic, so they pass.
+    ("personal path", re.compile(HOME_VAR + r"[/\\](?:Developer|Projects|Documents|Desktop|Code|code|src|dev|work|repos|git|GitHub|Sites)\b"), None),
     ("machine id", re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),
      re.compile(r"00000000-0000-0000-0000-000000000000|[0-9a-f]{8}-0000-0000-0000-0000000000[0-9a-f]{2}")),
-    ("computer name", re.compile(r"\b[A-Za-z0-9-]+-(MacBook|Mac-mini|iMac|Mac-Studio)[A-Za-z0-9-]*|\bDESKTOP-[A-Z0-9]{7}\b"), None),
-    ("secret key", re.compile(r"sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[bp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}"), None),
+    ("computer name", re.compile(r"\b[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*-(?:MacBook|Mac-mini|iMac|Mac-Studio|Mac-Pro)[A-Za-z0-9-]*"
+                                 r"|\bMac(?:Book|mini|Studio)-?(?:Pro|Air)?-?\d*\.local\b|\bMacBook-?(?:Pro|Air)(?:-\d+)?(?![ \w])"
+                                 r"|\b(?:DESKTOP|LAPTOP)-[A-Z0-9]{5,}\b|\b[A-Za-z0-9-]+\.local\b"),
+     re.compile(r"^(?:localhost|example|name|computer|my-computer|your-computer)\.local$", re.I)),
+    ("secret key", re.compile(r"sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+                              r"|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}"
+                              r"|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+                              r"|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+"), None),
 ]
 
 
@@ -64,6 +76,9 @@ def main():
     hits = scan(list(files(sys.argv[1:])), words)
     for h in hits:
         print(h)
+    if not words:
+        print("warning: no private words set, so your name and private project names are not checked "
+              "(add them to ~/.config/t3-tots/private-words.txt)")
     print(f"{'LEAKS FOUND' if hits else 'clean'} ({len(words)} private words checked)")
     return 1 if hits else 0
 

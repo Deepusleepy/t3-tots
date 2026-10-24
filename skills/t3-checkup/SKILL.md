@@ -4,7 +4,7 @@ description: >-
   Health check of T3 Code and the computer it runs on. Use for "health", "checkup",
   "is T3 ok", "is my computer ok", "why is T3 slow", or the Weekly health check routine.
 ---
-Follow @t3-tots-rules. Read-only.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only. For the Weekly health check routine, t3-getting-started section 5 says when to add the t3-cleanup scan.
 
 1. Run `t3q.py health` on every computer.
 2. Per computer, give one line with these parts:
@@ -14,5 +14,5 @@ Follow @t3-tots-rules. Read-only.
 3. Warn when one of these is true:
    - T3 listens on `0.0.0.0` or `::`, which makes it reachable from the network. Suggest `127.0.0.1`. If the user says network access is fine, save that and don't warn again.
    - Disk free is under 10%, memory available is under 10%, load is above the core count, or the data folder is over 20 GB.
-4. On macOS, quote free space only. For true used space, offer @t3-cleanup.
+4. On macOS, report free space only. For used space that matches System Settings, offer t3-cleanup.
 5. Suggest fixes. Apply none. A held queue isn't stuck: someone held it on purpose, so offer to resume or cancel it. Stale requests on agent-spawned threads usually belong to finished work; suggest dismissing them in T3.

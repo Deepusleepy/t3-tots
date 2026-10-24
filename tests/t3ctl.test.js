@@ -170,3 +170,12 @@ test("args: --key=value keeps a value that starts with --", () => {
   assert.deepEqual(t.args(["--text=--force is fine", "--thread", "x", "--json"]), { text: "--force is fine", thread: "x", json: true });
   assert.deepEqual(t.args(["--limit", "0"]), { limit: "0" });
 });
+
+test("usage names --timeout for new and send", () => {
+  const { execFileSync } = require("child_process");
+  const out = execFileSync(process.execPath, [path.join(__dirname, "..", "tools", "t3ctl")], { encoding: "utf8" });
+  assert.match(out, /new --project p [^|]*--wait \[--timeout seconds\]/);
+  assert.match(out, /send --thread id\|title --prompt t \[--wait \[--timeout seconds\]\]/);
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
+  assert.match(src, /"usage: new [^"]*--timeout seconds/); assert.match(src, /"usage: send [^"]*--timeout seconds/);
+});

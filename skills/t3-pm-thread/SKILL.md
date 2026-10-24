@@ -7,7 +7,7 @@ description: >-
   project in T3", "set up workers and reviewers", or when a goal spans several PRs
   or threads.
 ---
-Follow @t3-tots-rules. Starting the PM thread sends a prompt into T3, so it needs the user's yes to the brief. After that, the PM thread runs the project and you keep it moving.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Starting the PM thread sends a prompt into T3, so it needs the user's yes to the brief. After that, the PM thread runs the project and you keep it moving.
 
 ## Roles
 - The user decides what to build and approves anything risky or public.
@@ -17,7 +17,7 @@ Follow @t3-tots-rules. Starting the PM thread sends a prompt into T3, so it need
 - You watch every thread, pass the user's decisions in, and decide routine things under t3-tots-rules "Decisions". You don't make design choices for the PM.
 
 ## 1. Gather the brief
-1. Read what exists: the project's README and docs, open PRs (`t3ctl prs --project '<P>'`), recent threads (`t3ctl threads --project '<P>' --main --limit 15`), and its tracker if there is one (@t3-project-tracker).
+1. Read what exists: the project's README and docs, open PRs (`t3ctl prs --project '<P>'`), recent threads (`t3ctl threads --project '<P>' --main --limit 15`), and its tracker if there is one (t3-project-tracker).
 2. Collect the user's own words about the goal, constraints and decisions already made. Don't fill gaps with your own choices; list them as open questions for the PM.
 3. Take the PM's model, the worker and reviewer models, the review rules and the PR rules (merge method, branch protection, what PR text may say) from the user's memory. If memory has none, ask once and save the answer.
 
@@ -40,15 +40,15 @@ How to work:
 
 ## 3. Start it
 1. On the user's yes: `t3ctl new --project '<P>' --model <m> --effort <e> --title '<Project> PM' --prompt-file <file>`.
-2. Start one @t3-watch routine for the PM thread with `t3ctl watch`. Add each worker and reviewer thread to the same watch as the PM starts them. `t3ctl subtasks --thread '<PM>'` lists the ones it started as sub-tasks, and `t3ctl threads --project '<P>' --limit 20` the ones it started as separate threads.
+2. Start one t3-watch routine for the PM thread with `t3ctl watch`. Add each worker and reviewer thread to the same watch as the PM starts them. `t3ctl subtasks --thread '<PM>'` lists the ones it started as sub-tasks, and `t3ctl threads --project '<P>' --limit 20` the ones it started as separate threads.
 3. Tell the user in two lines: the PM thread's title and id, and what you'll bring to them.
 
 ## 4. Keep it moving
 - Pass the user's answers into the PM thread with `t3ctl send`, not into workers, so the PM keeps one picture. Keep these messages short, as t3-tots-rules "Sending into threads" says.
 - When the PM goes idle, read `<pm folder>/questions.md` in the repo. Bring new questions to the user, and send the answers back to the PM.
-- Handle questions, approvals, stalls and limits as in @t3-watch "Handle an event".
+- Handle questions, approvals, stalls and limits as in t3-watch "Handle an event".
 - When a worker finishes, check that the PM picked up the result. If the PM is idle with work left, send one short nudge naming the finished thread.
 - At each milestone, send the user a short update: what's done and checked, what's next, and what needs them.
 
 ## 5. Finish
-The project is done when `state.md` shows every task done and checked, and the user has seen the result. Offer @t3-save-learnings for the PM thread, and update the tracker.
+The project is done when `state.md` shows every task done and checked, and the user has seen the result. Offer t3-save-learnings for the PM thread, and update the tracker.

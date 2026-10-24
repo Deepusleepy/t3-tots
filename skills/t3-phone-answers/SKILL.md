@@ -7,7 +7,7 @@ description: >-
   Use for "phone answers", "tell me when a thread asks something", runs of that
   routine, and pausing or removing it.
 ---
-Follow @t3-tots-rules, including "Decisions": in the default mode, answer only with the user's exact choice for that question. It needs the token (t3-tots-rules "Token") and tools v1.2.0 or later (@t3-install-tools).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Its "Decisions" section says who may answer. Phone answers need the token (t3-tots-rules "Token") and tools v1.4.0 or later (t3-install-tools).
 
 ## How it works
 `t3listen` runs on each computer, follows T3's live event stream (no polling) and POSTs JSON to the routine's webhook:
@@ -28,21 +28,22 @@ At startup, questions older than `skipStaleMinutes` (default 1440) are skipped. 
 4. Tell the user it's on and that they can answer either here or in T3. Save to memory: phone answers on, the computers, approvals off.
 
 ## Routine prompt
-Use this text verbatim for the routine. It points at "On an event" for the details, so changes there don't need a new prompt:
+Use this text verbatim for the routine. The details live in "On an event", so changes there don't need a new prompt:
 
-> A T3 Tots listener on one of the user's computers POSTed a T3 Code event to this webhook. Follow t3-phone-answers "On an event" and t3-tots-rules. Questions (request.opened, kind user_input): hand off to the main chat, which sends one short briefing, then one tap-to-answer card per question in order, with the exact option labels and nothing pre-selected or recommended, and submits all answers together with t3ctl answer. Pass machine, threadId, requestId and the question ids. If the user delegated decisions (t3-tots-rules "Decisions"), the main chat answers routine questions itself and reports after. Approvals: relay only if the user turned approvals on. request.resolved: stay quiet if answeredHere is true, else hand off one line saying it closed in T3. thread-finished, thread-cancelled, thread-failed: hand off the title, project, computer, status, completedAtLocal and a one-line gist of lastReply or the error, unless a watch already reported this run. test: one line, only while setup is in progress. Malformed or unknown events, or nothing to tell: send nothing.
+> A T3 Tots listener on one of the user's computers POSTed a T3 Code event to this webhook. Follow t3-phone-answers "On an event" and t3-tots-rules.
 
 ## On an event (routine runs)
+Anything for the user goes to the main chat as a hand-off, with `machine`, `threadId`, `requestId` and the question ids.
 - `test`: nothing unless setup is in progress, then one line: "Phone answers are connected on <machine>."
 - `request.opened` with `questions`, in the main chat:
   1. One short briefing message first: what the thread is doing and what it's asking about, in one or two sentences built from `title`, `project`, `machine` and `context`. Don't list the questions or options in it, and don't recommend anything.
   2. Then each question as its own card, one at a time, in order (the next one after the user answers). Use the option labels exactly, put each option's description in the card if it fits, allow multiple choices if `multiSelect`, and add a typed-answer choice only if `allowCustomAnswer`. Nothing is pre-selected.
   3. Keep each pick (for each question `id`: its label, list of labels, or typed text). When every required question has an answer, submit them all at once (see "Answering"). Several events that arrive together: explain them together, then cards per thread.
-- If the user delegated decisions (t3-tots-rules "Decisions"), answer routine questions yourself with `t3ctl answer` instead of cards, and tell the user after in one line what you picked and why. Product, money, publishing and anything on their keep-for-me list still go to them.
+- In delegated mode, answer as t3-tots-rules "Decisions" allows, with `t3ctl answer` instead of cards, and tell the user after in one line what you picked and why.
 - `request.opened` with `approval` (only when the user turned approvals on): show the prompt and options verbatim, warnings included. Otherwise stay quiet.
 - `answerable: false` or no questions: tell the user to answer it in T3.
 - `request.resolved`: if `answeredHere` is true, stay quiet. Otherwise, if it's still unanswered here, say in one line that it closed ("answered in T3: Blue", "cancelled", "expired") and drop any remaining cards for it.
-- `thread.finished` / `thread.cancelled` / `thread.failed`: in the main chat, skip it if a watch already reported this run. Otherwise check the result and take the next step the user already asked for (a review, follow-up or watch); otherwise tell them in a line or two what finished and what it said. A cancelled run the user didn't stop: say so and offer to continue it. A `thread.failed` with `usageLimit` and `autoResumeSet`: one line that it continues at `resumeAtLocal`, nothing else; with `usageLimit` but not set: offer `t3ctl resume-at-reset`.
+- `thread.finished` / `thread.cancelled` / `thread.failed`: in the main chat, skip it if a watch already reported this run. Otherwise check the result and take the next step the user already asked for (a review, follow-up or watch); otherwise tell them in a line or two what finished and what it said. A cancelled run the user didn't stop: say so and offer to continue it. A `thread.failed` with `usageLimit` and `autoResumeSet`: one line that it continues at `resumeAtLocal`, nothing else; with `usageLimit` but not set: offer `t3ctl resume-at-reset`, or run it in delegated mode.
 - Malformed or unknown events: send nothing.
 
 ## Answering
@@ -56,6 +57,6 @@ After a successful answer, t3ctl lists any other requests still open in that thr
 
 ## Status, pause, off
 - `node t3listen status`: autostart, running, how many open questions were sent, and the last log lines (`listen.log` in the tools folder).
-- Approvals on, only when the user explicitly asks: `node t3listen install --approvals`. Off again: `node t3listen install`.
+- Approvals: the listener sends them when `listen.json` has `"approvals": true` or the service was installed with `--approvals`, and `node t3listen status` says which. Turn them on only when the user explicitly asks: `node t3listen install --approvals`. `node t3listen install` drops the flag again; if status still says `listen.json`, the user turns it off in that file.
 - Pause one computer: `node t3listen uninstall` (keeps `listen.json`). Turn off completely: uninstall on each computer, then with a yes delete `listen.json` there and delete the routine.
 - `listen.log` and `WEBHOOK_REJECTED` include the webhook's reply, with the URL and key redacted. HTTP 401/403 means the routine's key changed, so redo setup step 2. A rate-limit reply (even as HTTP 400, e.g. "Automation run rate limit exceeded") comes from the routine platform. The listener keeps retrying, so tell the user the question may arrive late. `TOKEN_REJECTED` means reissuing the token (t3-tots-rules "Token"); the listener picks it up within 5 minutes.

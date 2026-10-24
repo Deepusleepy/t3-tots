@@ -5,7 +5,7 @@ description: >-
   steps). Use for "help me launch <project>", "track <project>", "update the
   <project> tracker", "what's next for <project>", "how close is <project> to done".
 ---
-Follow @t3-tots-rules. Write only the tracker file, never project files.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Write only the tracker file, never project files.
 
 The tracker is `<tools folder>/trackers/<project>.md` on the computer where the project lives. It has these sections: Goal, Milestones (checkbox and target date), Todo (now, next, later), Decisions (dated), Open questions, Risks, Links, and Log (dated one-liners).
 
@@ -19,4 +19,4 @@ The tracker is `<tools folder>/trackers/<project>.md` on the computer where the 
 Read git and the threads since the last Log entry. Tick milestones, add decisions (including "we decided X" from chat) and open questions, and add a Log line. Tell the user what changed and the next 3 steps.
 
 ## Suggest
-Suggest next steps from the gap between the goal and the current state. For a release, check signing, notarizing, the installer, a landing page, the README, the changelog and a demo post. Add bugs from threads and open questions. Offer to start one with @t3-new-thread, @t3-pm-thread or @t3-handoff.
+Suggest next steps from the gap between the goal and the current state. For a release, check signing, notarizing, the installer, a landing page, the README, the changelog and a demo post. Add bugs from threads and open questions. Offer to start one with t3-new-thread, t3-pm-thread or t3-handoff.

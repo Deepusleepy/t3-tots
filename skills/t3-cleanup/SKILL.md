@@ -5,12 +5,12 @@ description: >-
   Safe / Ask / Never cleanup list and deletes only what the user picks. Use for
   "clean up my mac/pc", "free up space", "what is using my disk", "disk is full".
 ---
-Follow @t3-tots-rules. Scanning is read-only. Nothing is deleted, moved, or pruned without the user's explicit pick.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Scanning is read-only. Nothing is deleted, moved, or pruned without the user's explicit pick.
 
 ## 0. Set up
 - Call ListMachines. "my mac" / "my pc" = that one; otherwise every connected computer, in parallel.
 - Tell the user: "Scanning sizes only (no file contents, except hashing big files for duplicates). Nothing is deleted. This takes a few minutes."
-- `scan.py` is `cleanup/scan.py` in the tools folder; if it's missing there, CopyFromBox it from `/workspace/t3-tots-tools/cleanup/scan.py` (run @t3-install-tools if that is missing too). Needs Python 3.8+; if absent use the per-OS commands in step 2.
+- `scan.py` is `cleanup/scan.py` in the tools folder; if it's missing there, CopyFromBox it from `/workspace/t3-tots-tools/cleanup/scan.py` (run t3-install-tools if that is missing too). Needs Python 3.8+; if absent use the per-OS commands in step 2.
 - Write every scan file and CSV to `out/` in the tools folder (create it if missing), never to the tools folder itself or the home folder.
 - Record **free space before** (step 1 numbers). Keep each Shell call under ~10 min; background long ones and say so.
 - **Other user accounts:** list them; never scan or touch them.
@@ -25,7 +25,7 @@ Best tool per OS, all read-only. One job per drive/volume (and on big roots one 
 - **Windows (preferred order):**
   1. WizTree CLI if installed (`WizTree64.exe C:\ /export="out\wiztree.csv" /admin=1`, run from the tools folder. It reads the NTFS MFT in seconds).
   2. Everything `es.exe -size -sort size`.
-  3. **C# one-pass walker** (proven in practice, far faster than Get-ChildItem): `Add-Type` with `EnumerateFiles`/`EnumerateDirectories`, skip ReparsePoints; write every folder of 0.3 GB or more to depth 7 and every file of 1 GB or more to a TSV per drive in `out\`.
+  3. If WizTree and Everything are missing, run a C# walker that records every folder of 0.3 GB or more, to depth 7, and every file of 1 GB or more: `Add-Type` with `EnumerateFiles`/`EnumerateDirectories`, skip ReparsePoints, one TSV per drive in `out\`.
   4. Fallback: `py -3 cleanup\scan.py C:\` or PowerShell `Get-ChildItem -Recurse -Force -File | Measure-Object Length -Sum` per top folder.
 - **macOS / Linux:** `dust -x -d 3`, `gdu -n` (parallel), `ncdu -x -o out/ncdu.json`, else `du -xk -d1 ROOT | sort -rn`. On macOS also `mdfind 'kMDItemFSSize > 1000000000'` for big files. Fallback: `python3 cleanup/scan.py ROOT`.
 - `scan.py ROOT1 ROOT2 --jobs N` parallelizes roots. Folders needing admin are skipped; report the gap as "needs admin to measure".
@@ -40,8 +40,8 @@ Working thresholds for the report: drill into folders of 5 GB or more. List fold
 
 ## 4. Pattern detectors (scan.py + manual)
 - **Known categories:** each tree node gets a `category` (Docker, WSL disk, Ollama, HuggingFace, LM Studio, pip/uv/conda, npm/pnpm/bun/yarn, cargo, gradle/maven/nuget, Xcode, simulators, Android SDK/AVD, Unity, iOS backups, browser/Electron/Slack/Discord/Teams caches, logs, Trash, Windows Update/Installer/WinSxS, snaps/flatpaks, agent data and worktrees).
-- **Stale project artifacts** (npkill/kondo style): `node_modules`, `target`, `.venv`/`venv`, `dist`, `build`, `.next`, `.turbo`, `.gradle`, `Pods`, `DerivedData`, Unity `Library`. Count them only when the sibling marker file exists (package.json, Cargo.toml, ProjectSettings and so on) and nothing inside changed for N days. Skip projects with live runs or uncommitted work (`git status`). Include copies inside Downloads and backup folders.
-- **Duplicates** (Czkawka style): group by size, then by a partial hash (64 KB), then by a full hash. Hardlinked copies already excluded. Never auto-pick which copy to keep.
+- **Stale project artifacts:** `node_modules`, `target`, `.venv`/`venv`, `dist`, `build`, `.next`, `.turbo`, `.gradle`, `Pods`, `DerivedData`, Unity `Library`. Count them only when the sibling marker file exists (package.json, Cargo.toml, ProjectSettings and so on) and nothing inside changed for N days. Skip projects with live runs or uncommitted work (`git status`). Include copies inside Downloads and backup folders.
+- **Duplicates:** group by size, then by a partial hash (64 KB), then by a full hash. Hardlinked copies already excluded. Never auto-pick which copy to keep.
 - **Large old files:** 1 GB or more, untouched for a year (ISOs, installers, VM images, videos, zips in Downloads). Also installers whose extracted folder sits beside them.
 - **Orphans:** app-data folders (`~/Library/Application Support|Caches|Containers`, `%APPDATA%`, `%LOCALAPPDATA%`, `%LOCALAPPDATA%\Programs`, `~/.config`, `~/.local/share`) whose app is no longer installed. Compare against `/Applications`, `winget list`/uninstall registry, `dpkg -l`/`rpm -qa`. Always Ask tier.
 - **Old versions:** multiple SDK/runtime versions (nvm/fnm/volta node, pyenv, rustup toolchains, Android platforms/system-images, Xcode simulator runtimes, JetBrains old IDE dirs, `~/.vscode/extensions` old versions, old Linux kernels, old Windows `Windows.old`).
@@ -105,7 +105,7 @@ Parse it with `^Cleanup picks for (.+), (\d{4}-\d\d-\d\d), total ([\d.]+) GB$` a
 
 ## 8. Clean (only the picked items)
 - Use the tool's own command first. For raw folders, send to Trash / Recycle Bin (macOS `osascript -e 'tell app "Finder" to delete POSIX file "<path>"'` or `trash`; Windows `Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(p,'OnlyErrorDialogs','SendToRecycleBin')`; Linux `gio trash`). Permanent delete only when the user says so (remind them to empty the bin for space to come back).
-- **Docker/WSL vhdx or Docker.raw compaction:** compacting alone frees nothing until the guest trims. In order: start Docker, run `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -- fstrim -av`, run `docker rmi alpine`, quit Docker and run `wsl --shutdown`, then run diskpart as admin (`select vdisk file="<path>\docker_data.vhdx"`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`) via the admin pattern in t3-tots-rules. In one real run this shrank a 45 GB vhdx to about 14 GB with containers and volumes intact. Check the file size after.
+- **Docker/WSL vhdx or Docker.raw compaction:** compacting alone frees nothing until the guest trims. In order: start Docker, run `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -- fstrim -av`, run `docker rmi alpine`, quit Docker and run `wsl --shutdown`, then run diskpart as admin (`select vdisk file="<path>\docker_data.vhdx"`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`) via the admin pattern in t3-tots-rules. Check the file size after.
 - Windows Update `SoftwareDistribution\Download` "access denied" errors are files locked by the update service: harmless, report and move on.
 - Record **free space after**, and report what was freed (after minus before) per item and in total.
 
@@ -137,7 +137,7 @@ Parse it with `^Cleanup picks for (.+), (\d{4}-\d\d-\d\d), total ([\d.]+) GB$` a
 
 ## Optional recurring scan (off by default)
 Offer it only when the user asks. Never enable it on your own.
-- When the user opts in ("scan my disk weekly/monthly"), turn on the shipped **Weekly health check** routine (Mondays 10:00 AM; it runs this scan when the last one is 25+ days old) by resuming it and updating the "Routines on" memory note, instead of creating a new routine. If they want a different cadence or only certain computers, change that routine's schedule or note it in this bot's memory; never create a duplicate.
+- When the user opts in ("scan my disk weekly/monthly"), turn on the shipped **Weekly health check** routine (t3-getting-started section 5) by resuming it and updating the "Routines on" memory note, instead of creating a new routine. If they want a different cadence or only certain computers, change that routine's schedule or note it in this bot's memory; never create a duplicate.
 - Each run is **read-only**: breadth and depth scan, plan JSON, `make_report.py` HTML, and a short summary saying what's new or grown since the last run and how much is reclaimable. Then send the report in chat. Delete nothing in a routine.
 - The user replies with pasted picks or "clean X". Handle that live in chat, following 7d (re-verify, confirm, then act).
 - Stay quiet if nothing changed meaningfully (under ~2 GB new reclaimable). Pause the routine when the user asks.

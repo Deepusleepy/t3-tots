@@ -4,12 +4,12 @@ description: >-
   Start a new T3 thread or send a follow-up into one. Use for "new thread", "/new",
   "start a thread in <project>", "follow up in <thread>", "send this to T3".
 ---
-Follow @t3-tots-rules, including "Sending into threads". Send only the prompt the user asked for.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md), including "Sending into threads". Send only the prompt the user asked for.
 
 ## 1. Resolve (read-only)
-- Computer: the one the user names, else the one their message came from.
+- Computer: the one the user names, else the one their message came from. For a follow-up, the computer that owns the thread.
 - Project: `t3ctl projects`. `--project` takes an id, title or path and ignores case. If the folder isn't a project yet, ask before `~/.t3/bin/t3 project add <path>` (Windows: `t3.cmd project add <path>`).
-- Thread, for follow-ups: `t3ctl threads [--project P] --main --limit 15`. Confirm if several match. Then read its recent history with `t3ctl read --thread '<t>' --last 6`.
+- Thread, for follow-ups: t3-tots-rules "Finding a thread".
 - Model: `t3ctl models` lists the models already used. Aliases are `haiku`, `sonnet` and `opus`, and pick the newest of that family; other ids look like `claude-sonnet-5-5`, `gpt-6.1-sol` or `grok-4.7`. Effort is low, medium, high, xhigh or max. With none given, the project default applies.
 
 ## 2. Write the prompt
@@ -18,9 +18,9 @@ Follow @t3-tots-rules, including "Sending into threads". Send only the prompt th
 
 ## 3. Send
 - New thread: `t3ctl new --project <P> --model <m> --effort <e> --prompt-file <file> [--title '<t>'] [--mode plan] [--attach a.png,b.jpg] [--wait --timeout 300]`
-- Follow-up: `t3ctl send --thread '<id|title>' --prompt-file <file> [--attach ...] [--queue] [--wait]`
-- A follow-up steers into a running run by default. Add `--queue` only when the user wants it to wait for the run to end. t3ctl then checks delivery; relay its notes.
-- Leave out `--wait` for long coding tasks, say it's running, and offer @t3-watch.
+- Follow-up: `t3ctl send --thread '<id|title>' --prompt-file <file> [--attach ...] [--queue] [--wait [--timeout 300]]`
+- Add `--queue` only when the user wants the follow-up to wait for the run to end.
+- Leave out `--wait` for long coding tasks, say it's running, and offer t3-watch.
 - `t3ctl new` records the thread in `started-here.json`, so t3listen arms Resume at reset if the thread later stops on a usage limit.
 
 ## Fallback on macOS
