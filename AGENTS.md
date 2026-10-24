@@ -4,7 +4,8 @@ This repo is the download source for the T3 Tots bot. Instructions for an agent 
 
 ## Rules
 - Install only after the user's yes. Never print, copy or overwrite the `token` file or `listen.json` (it holds the user's webhook URL and key), and never open T3 Code's `secrets/` or any auth/token/credential file.
-- Answer a thread's question (`t3ctl answer`) only with the user's exact choice, never your own. Approvals (`--decision`) only if the user turned them on.
+- Answer a thread's question (`t3ctl answer`) only with the user's exact choice, or within a delegation the user set up and wrote down (which kinds of questions you may answer, and where you log each answer). Approvals (`--decision`) only if the user turned them on. `t3ctl pending --json` adds a `risk` hint (`low`, `normal`, `high` with reasons) to each approval. It is a hint. Never accept a `high` one without the user's yes.
+- If this repo is private, the raw and API URLs below return 404 without a login. Then download with an authenticated GitHub CLI (`gh api "repos/<owner>/t3-tots/contents/<path>?ref=<tag>" -H "Accept: application/vnd.github.raw"`), or copy from a checkout the user already has. Verify the hashes either way.
 - Always download from a **tag** (`https://raw.githubusercontent.com/Deepusleepy/t3-tots/<tag>/<path>`), never from `main`.
 - Verify every file's SHA-256 against `manifest.json` from the same tag (or a hash list you already trust) **before** moving it into place. On any mismatch install nothing and report `HASH_MISMATCH <path>`.
 - Files are stored byte-exact (`.gitattributes`: `* -text`); `t3ctl.cmd` has CRLF line endings on purpose.
@@ -50,6 +51,10 @@ The scripts print these instead of stack traces. Relay them in plain words.
 | `NO_LISTEN_CONFIG` / `BAD_LISTEN_CONFIG` | `listen.json` is missing or invalid: run `t3listen setup`. |
 | `WEBHOOK_REJECTED` / `WEBHOOK_UNREACHABLE` | The webhook refused the event or can't be reached. The message (and `listen.log`) includes the webhook's reply with the URL and key redacted: 401/403 means a wrong key (redo setup), a rate-limit reply clears on its own (the listener keeps retrying). |
 | `ALREADY_RUNNING` | A listener is already running on this computer. |
+| `DELIVERY_FIXED` | `t3ctl send` found the message stuck in the queue and resumed the queue once; it is running now. |
+| `QUEUE_HELD` | The message is queued, but someone held this thread's queue on purpose. `t3ctl queue --thread <t> --resume` starts it. |
+| `SEND_STUCK` | The message is still not running after one fix attempt. Check `t3ctl queue` and `t3ctl status`. |
+| `MANIFEST_STALE` | (repo checks) A shipped file changed without `scripts/make-manifest.py`. |
 
 ## Updating
 Check `https://api.github.com/repos/Deepusleepy/t3-tots/releases/latest`. If its `tag_name` is newer than the installed `VERSION`, show the user the release notes and which files changed (compare `manifest.json`), and update only after their yes, verifying against that tag's `manifest.json`.
