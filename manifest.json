@@ -22,8 +22,8 @@
   },
   {
    "path": "t3ctl",
-   "bytes": 59044,
-   "sha256": "dceaf9c257106bf0f1af2eb428f607d59447024a3c3022f0bcae3e0e742dfd89",
+   "bytes": 61628,
+   "sha256": "4769a0e1d78bcbe13102c8bbc2518bc460a2863ed2aefd837faedb79c809568a",
    "targets": [
     "macos",
     "linux",
@@ -66,8 +66,8 @@
   },
   {
    "path": "export.js",
-   "bytes": 4996,
-   "sha256": "9a4a829c925bcf6d997a7f995da4950a3c4b5aef57b4110f1007175178da6ea4",
+   "bytes": 5002,
+   "sha256": "fdfa0cc128c5b345dfc243f4b4c9f2f676e8f4a4c36cc96568c20ebbefae74be",
    "targets": [
     "macos",
     "linux",
@@ -78,8 +78,8 @@
   },
   {
    "path": "survey.js",
-   "bytes": 3963,
-   "sha256": "f5ea8235ffe5dbfeccbf2450d056ff79a96cb9b1e7f9b2a8f8a3109ca80bed53",
+   "bytes": 3969,
+   "sha256": "49a21096cc9c2b4674456bb68eafc4d8e4343ef7a3cd2b638f0d79b3d9494e0c",
    "targets": [
     "macos",
     "linux",

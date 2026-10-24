@@ -83,3 +83,51 @@ test("parseEvery and parseWhen", () => {
   assert.equal(t.parseEvery("30m"), 30 * 6e4); assert.throws(() => t.parseEvery("10s"));
   const iso = t.parseWhen("+2h"); assert.ok(Math.abs(Date.parse(iso) - Date.now() - 2 * 36e5) < 5000);
 });
+
+// --- round 2 ---
+test("decodeText: UTF-8 BOM, UTF-16 LE/BE (Windows PowerShell 5) and CRLF", () => {
+  const s = "Line one\r\nLine two é\r\n";
+  assert.equal(t.decodeText(Buffer.from(s, "utf8")), "Line one\nLine two é\n");
+  assert.equal(t.decodeText(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(s, "utf8")])), "Line one\nLine two é\n");
+  assert.equal(t.decodeText(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(s, "utf16le")])), "Line one\nLine two é\n");
+  const be = Buffer.from(s, "utf16le"); be.swap16();
+  assert.equal(t.decodeText(Buffer.concat([Buffer.from([0xfe, 0xff]), be])), "Line one\nLine two é\n");
+});
+test("riskOf: pipes into a shell and redirects that write are not low", () => {
+  for (const p of ["cat install.sh | bash", "echo hi > ~/.zshrc", "git log >> notes.md", "ls | tee out.txt", "echo $(whoami)"])
+    assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+  for (const p of ["git log | head -5", "rg TODO | wc -l", "npm test 2>&1", "ls 2>/dev/null"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+});
+test("riskOf: shell wrappers are unwrapped and Windows commands are judged", () => {
+  assert.equal(t.unwrapShell("bash -lc 'git status'"), "git status");
+  assert.equal(t.unwrapShell('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-ChildItem src"'), "Get-ChildItem src");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "/bin/zsh -lc 'ls -la && git diff'" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: 'pwsh.exe -NoProfile -Command "Get-Content README.md"' }).level, "low");
+  for (const p of ['pwsh -Command "Remove-Item -Recurse -Force build"', "rd /s /q dist", "taskkill /F /IM node.exe", "Stop-Process -Name node", "Start-Process pwsh -Verb RunAs"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+});
+test("watchDiff: a run that ends on a question or a plan is 'finished'", () => {
+  const now = Date.now();
+  const a = t.watchSnap(th({ activeRunId: "r" }), proj("working"), now);
+  const b = t.watchSnap(th({ updatedAt: "2026-01-01T01:00:00Z" }), proj("Should I merge it?"), now + 6e4);
+  assert.equal(t.watchDiff(a, b, 20, now + 6e4)[0].kind, "finished");
+  const c = t.watchSnap(th({ updatedAt: "2026-01-01T01:00:00Z", hasActionableProposedPlan: true }), proj("Plan ready."), now + 6e4);
+  assert.equal(t.watchDiff(a, c, 20, now + 6e4)[0].kind, "finished");
+});
+test("watchDiff: a run that starts and ends between two checks is 'finished'", () => {
+  const now = Date.now();
+  const a = t.watchSnap(th(), proj("old reply"), now);
+  const b = t.watchSnap(th({ updatedAt: "2026-01-01T03:00:00Z" }), proj("new reply"), now + 6e4);
+  const ev = t.watchDiff(a, b, 20, now + 6e4); assert.equal(ev.length, 1); assert.equal(ev[0].kind, "finished"); assert.match(ev[0].text, /new reply/);
+});
+test("watchDiff: a request that can't be answered is reported once, not every check", () => {
+  const now = Date.now();
+  const p = proj("idle", { runtimeRequests: [{ id: "old", kind: "user_input", status: "pending", createdAt: "x", responseCapability: { type: "not_resumable" } }],
+    turnItems: [{ type: "assistant_message", text: "idle" }] });
+  const a = t.watchSnap(th(), proj("idle"), now);
+  const b = t.watchSnap(th(), p, now + 6e4); const c = t.watchSnap(th(), p, now + 12e4);
+  const first = t.watchDiff(a, b, 20, now + 6e4).filter((e) => e.kind === "stale-request");
+  const again = t.watchDiff(b, c, 20, now + 12e4).filter((e) => e.kind === "stale-request");
+  assert.equal(first.length, 1); assert.equal(again.length, 0);
+});
