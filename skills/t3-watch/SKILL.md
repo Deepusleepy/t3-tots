@@ -7,10 +7,10 @@ description: >-
   me", "let me know when <X> is done", "monitor <X>", "keep it going overnight",
   "I'm away, handle it".
 ---
-Follow @t3-tots-rules. A watch is a routine you create only when the user asks for one. It reports by default. In hands-off mode it may also answer, approve and nudge, under t3-tots-rules "Decisions".
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). A watch is a routine you create only when the user asks for one. It reports by default. In delegated mode (t3-tots-rules "Decisions") it may also answer, approve, nudge and resume.
 
 ## Pick the check
-- A T3 thread on a computer where `t3listen` runs with phone answers on: finished, failed and cancelled events already reach chat (@t3-phone-answers). A watch is still useful for stalls, approvals and queue problems, which t3listen doesn't report.
+- A T3 thread on a computer where `t3listen` runs with phone answers on: finished, failed and cancelled events already reach chat (t3-phone-answers). A watch is still useful for stalls, approvals and queue problems, which t3listen doesn't report.
 - A T3 thread: `t3ctl watch --thread '<id>[,<id2>]' --state watch-<name>.json --json`. One call covers several threads and prints nothing when nothing changed. Give each watch routine its own state file, so two watches on one thread don't hide changes from each other.
 - A log: `tail -n 30 <log>`. A process: `pgrep -fl <name>`.
 - A PR: `gh pr view <n> -R <owner/repo> --json state,statusCheckRollup,reviews,comments`.
@@ -26,7 +26,7 @@ Don't set an end time unless the user gives one. A watch runs until the user sto
 ### Routine prompt
 ```
 Watch <TARGET> on <COMPUTER> (machineId <ID>). Follow t3-tots-rules and t3-watch.
-Mode: <report | hands-off until <end condition>>.
+Mode: <report | delegated until <end condition>>.
 Check: <the command from "Pick the check">
 Rules:
 - No changes in the output: send nothing and write nothing to memory or a journal.
@@ -37,13 +37,13 @@ Rules:
 ```
 
 ## Handle an event
-In report mode, send the user one line per event: what it needs and the last reply in 200 characters or fewer. Keep watching.
+In report mode, send the user one line per event: what it needs and the last reply in 200 characters or fewer. For `limit`, offer `t3ctl resume-at-reset`. Keep watching.
 
-In hands-off mode, act first and report after:
+In delegated mode, act first and report after:
 
 | Event | What to do |
 |---|---|
-| `question` | Answer it yourself if it's routine. Escalate product, money or publishing questions to the user. |
+| `question` | Answer it or escalate it, as t3-tots-rules "Decisions" says. |
 | `approval-low`, `approval-normal` | Accept it with `t3ctl answer --thread <t> --request <id> --decision <d>`, where `<d>` is the accept option that `t3ctl pending --thread <t> --json` lists. |
 | `approval-high` | Ask the user. Don't accept it yourself. |
 | `queue-stuck` | `t3ctl queue --thread <t> --resume` once. |
@@ -57,8 +57,8 @@ In hands-off mode, act first and report after:
 
 Keep a short log of what you decided and why, and send it to the user when they're back or when the watch ends.
 
-## Hands-off mode
-Start it when the user hands over control, for example "do whatever you need" or "keep it moving overnight". Before the first check:
-1. Save the scope and the end condition to memory (t3-tots-rules "Decisions").
+## Delegated mode
+Start it when the user hands over control (t3-tots-rules "Decisions"). Before the first check:
+1. Save the scope and the end condition to memory.
 2. On a Mac, keep it awake for the run (t3-tots-rules "Computers").
 3. Confirm in one line which threads, until when, and what you'll still ask about.

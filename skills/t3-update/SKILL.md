@@ -5,7 +5,7 @@ description: >-
   check first. Use for "update T3/AI/dev/everything", "update gh", "update claude and
   codex", "update just T3 on <computer>", "what's out of date", "change my update levels".
 ---
-Follow @t3-tots-rules. Updating is approved only for the items resolved this turn; anything else needs a fresh yes. Never touch a project's own lockfile or dependencies unless asked.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Updating is approved only for the items resolved this turn, or a saved level as its "Writes" section allows. Never touch a project's own lockfile or dependencies unless asked.
 
 ## 1. Resolve what to update
 - **By name (first-class):** "update gh", "update claude and codex", "update node on the Mac", "update just T3 on <computer>". Map words to item ids below; a computer name narrows the scope. Named items run even if they aren't in any level, and even if they're in `skip` (the user named them).
@@ -14,7 +14,7 @@ Follow @t3-tots-rules. Updating is approved only for the items resolved this tur
 - **"change my update levels":** show `levels`, let the user rename, add or remove triggers and items, save. Don't update in that turn unless asked. Custom levels ("make 'update editors' mean VS Code + Cursor") don't have to nest.
 - Any other phrase: ask which item or level.
 
-Item ids (survey and offer only what is installed on that computer): `t3-code`, `claude`, `codex`, `opencode`, `gemini`, `cursor-agent`, `cliproxyapi`, `gh`, `node`, `npm`, `pnpm`, `python`, `go`, `rust`, `npm-global:<pkg>|all`, `brew:<formula>|all`, `winget:<Id>|all`, plus any user-registered long-running tool from `protect` (only when named).
+Item ids (survey and offer only what is installed on that computer): `t3-code`, `claude`, `codex`, `opencode`, `gemini`, `cursor-agent`, `gh`, `node`, `npm`, `pnpm`, `python`, `go`, `rust`, `npm-global:<pkg>|all`, `brew:<formula>|all`, `winget:<Id>|all`, plus any user-registered long-running tool from `protect` (only when named). Personal tools (a local proxy, an in-house CLI) aren't built in: they come from memory or from items the user added under "change my update levels", with the survey and update commands saved there too.
 
 ## Prefs
 `<tools folder>/update-prefs.json` on each computer; the main computer's copy wins, keep them in sync after edits. First use with no file: seed the defaults, ask whether any long-running jobs (benchmarks, training, servers) must never be disturbed and record them in `protect` (empty if none), show the survey grouped by level, ask what to run, save after they answer.
@@ -22,9 +22,9 @@ Item ids (survey and offer only what is installed on that computer): `t3-code`, 
 {"version":1,"updated":"<ISO>","main":"<label>",
  "levels":{
   "update T3":["t3-code"],
-  "update AI":["t3-code","claude","codex","opencode","gemini","cursor-agent","cliproxyapi"],
-  "update dev":["t3-code","claude","codex","opencode","gemini","cursor-agent","cliproxyapi","gh","node","npm","npm-global:all"],
-  "update everything":["t3-code","claude","codex","opencode","gemini","cursor-agent","cliproxyapi","gh","node","npm","npm-global:all","brew:all","winget:all"]},
+  "update AI":["t3-code","claude","codex","opencode","gemini","cursor-agent"],
+  "update dev":["t3-code","claude","codex","opencode","gemini","cursor-agent","gh","node","npm","npm-global:all"],
+  "update everything":["t3-code","claude","codex","opencode","gemini","cursor-agent","gh","node","npm","npm-global:all","brew:all","winget:all"]},
  "skip":["winget:Microsoft.WSL"],
  "protect":[{"name":"<long-running job, e.g. a benchmark runner>","process":"<pgrep pattern>","log":"<log path>","uses":["node"]}]}
 ```
@@ -33,8 +33,7 @@ Item ids (survey and offer only what is installed on that computer): `t3-code`, 
 - T3 Code: Mac `defaults read "/Applications/<app>.app/Contents/Info" CFBundleShortVersionString` where `<app>` is `T3 Code (Alpha)` (stable) or `T3 Code (Nightly)`; check which exists (both can). Windows: the `T3 Code*` entry under the Uninstall registry keys (HKCU and HKLM). Linux: the AppImage/package version.
 - CLIs: `<tool> --version` for codex, claude, opencode, cursor-agent, gemini, gh, node, npm, pnpm; latest via `npm view <pkg> version` or the tool's channel.
 - Mac: `export PATH=/opt/homebrew/bin:$PATH; brew outdated --verbose`. Global npm: `npm -g outdated`. Windows: `winget upgrade --accept-source-agreements`.
-- CLIProxyAPI on Windows (`%USERPROFILE%\.cli-proxy-api\bin\cli-proxy-api.exe`): never run it with `--version` (it starts the server); use the file version or the GitHub release (router-for-me/CLIProxyAPI).
-- `protect` tools: version only, read from their own package/version file; never start them to check.
+- `protect` and personal tools: version only, read from their own package/version file; never start them to check.
 Show only outdated items in scope: computer, item, current version, latest version, major jump (yes or no), and how to update.
 
 ## 3. Project-safety check (before applying)
@@ -44,14 +43,13 @@ Show only outdated items in scope: computer, item, current version, latest versi
    - **Block (skip, report):** a live run or running T3 thread uses it (for a live `protect` job, skip the job and everything in its `uses` list. For a running thread, skip T3 Code and that thread's provider CLI). Never kill anything; offer to retry later or t3-watch until idle.
    - **Ask:** major version jump (node 24 to 26, npm 11 to 12, python 3.12 to 3.13), or the new version breaks a pin or range in an active project (`engines.node` "<25", `packageManager: pnpm@9`, `.nvmrc 22`). Name the project and the pin.
    - **Go:** minor/patch with no conflicts.
-   Show the plan (go / ask / blocked) and wait for answers on "ask" items. Saved levels count as approval for "go" items only.
+   Show the plan (go / ask / blocked) and wait for answers on "ask" items.
 
 ## 4. Apply
 Record each item's current version first (it's the rollback).
 - T3 Code: in-app updater or the latest download for the user's channel (stable or Nightly); quit only when no thread runs.
 - Codex `npm i -g @openai/codex@latest`. Claude `claude update`. Gemini `npm i -g @google/gemini-cli@latest`. Cursor agent `cursor-agent update`.
 - OpenCode: the way it was installed: `brew upgrade opencode`, `npm i -g opencode-ai@latest`, or `opencode upgrade`.
-- CLIProxyAPI: Mac `brew upgrade cliproxyapi && brew services restart cliproxyapi`; Windows stop it, replace the exe from the release, restart.
 - gh `brew upgrade gh` / `winget upgrade GitHub.cli`. node `brew upgrade node` (or the installed `node@<major>` formula) / `winget upgrade OpenJS.NodeJS.LTS` / nvm `nvm install --lts`. npm/pnpm/global pkgs `npm i -g <pkg>@latest`.
 - Linux: the distro's package manager (`apt`, `dnf`, `pacman`) needs sudo; give the exact command and let the user run it, or ask first. `npm`-installed CLIs as above.
 - `brew:all` runs `brew upgrade` minus skip. `winget:all` runs `winget upgrade --all --silent` minus skip (exclude the WSL entry).

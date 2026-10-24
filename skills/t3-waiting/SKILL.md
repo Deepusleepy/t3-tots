@@ -5,7 +5,7 @@ description: >-
   answering what one thread is asking. Use for "what's waiting", "inbox", "what
   needs me", "anything waiting on me", "what is <thread> asking".
 ---
-Follow @t3-tots-rules. This skill is read-only, except for answering under t3-tots-rules "Decisions".
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). This skill is read-only, except for answering under t3-tots-rules "Decisions".
 
 ## All threads
 1. Run `t3q.py waiting` on every computer. `T3_DAYS` defaults to 14; `T3_ALL=1` adds agent-spawned threads. A thread is waiting when it has a pending request or approval, a run in `waiting`, a held queue (a message waits for someone to resume or cancel it), or a last reply that ends in a question or hands a decision back. Running and settled threads are left out, and `T3_DAYS` counts from the last activity in the thread.
@@ -16,6 +16,6 @@ Follow @t3-tots-rules. This skill is read-only, except for answering under t3-to
 
 ## One thread
 1. Run `t3ctl pending --thread '<t>' --json`.
-2. For a question with `answerable: true`, show it as a question card with the options exactly as listed. Answer with the user's pick as in @t3-phone-answers "Answering", and confirm that it closed.
+2. For a question with `answerable: true`, show it as a question card with the options exactly as listed. Answer with the user's pick as in t3-phone-answers "Answering", and confirm that it closed.
 3. For an approval, show the prompt, the options and the risk hint. Answer it only as t3-tots-rules "Decisions" allows.
 4. If it isn't answerable, tell the user to answer it in T3.

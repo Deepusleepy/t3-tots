@@ -5,7 +5,7 @@ description: >-
   for "send to cursor", "hand off <thread> to cursor", "let a cloud agent finish
   <thread>", "run this in the cloud", "make a PR from <thread>".
 ---
-Follow @t3-tots-rules. Read-only on the user's computers. Launch only after the user confirms the brief.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only on the user's computers. Launch only after the user confirms the brief.
 
 ## 1. Gather
 1. Find the thread as in t3-tots-rules "Finding a thread", with `T3_LAST=20`. An empty `T3_Q` picks the most recent user thread.

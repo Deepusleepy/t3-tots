@@ -17,3 +17,11 @@ test("localTime: names the zone (IST, not GMT+5:30)", () => {
   const out = execFileSync(process.execPath, ["-e", `console.log(require(${JSON.stringify(path.join(__dirname, "..", "tools", "t3listen"))}).localTime("2026-01-01T12:00:00Z"))`], { env: { ...process.env, TZ: "Asia/Kolkata" } }).toString().trim();
   assert.match(out, /IST$/);
 });
+
+test("approvalsLine names which switch turned approvals on", () => {
+  const { approvalsLine } = l;
+  assert.equal(approvalsLine(false, false), "off");
+  assert.equal(approvalsLine(true, false), "on (listen.json)");
+  assert.equal(approvalsLine(false, true), "on (installed with --approvals)");
+  assert.equal(approvalsLine(true, true), "on (listen.json and installed with --approvals)");
+});

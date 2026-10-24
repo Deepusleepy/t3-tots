@@ -2,8 +2,7 @@
 """Copy the live T3 Tots skills into skills/, check them for private details, and update manifest.json.
 
 Usage: scripts/sync-skills [--from DIR] [--dry-run] [--prune]
-  --from DIR   folder holding the live t3-*/SKILL.md skills
-               (default: $T3TOTS_SKILLS_SRC, else /home/box/agent-data/workflows, the Grok Bot box)
+  --from DIR   folder holding the live t3-*/SKILL.md skills (default: $T3TOTS_SKILLS_SRC; one of the two is required)
   --dry-run    show what would change; write nothing
   --prune      also remove repo skills that are no longer live (they are only listed otherwise)
 
@@ -42,13 +41,20 @@ def frontmatter_problem(slug, text):
     name = re.search(r"^name:\s*(\S+)\s*$", m.group(1), re.M)
     if not name or name.group(1).strip("\"'") != slug:
         return f"frontmatter name must be {slug}"
-    if not re.search(r"^description:\s*\S", m.group(1), re.M):
+    desc = re.search(r"^description:\s*(.*?)(?=^\S|\Z)", m.group(1), re.M | re.S)
+    if not desc or not desc.group(1).strip():
         return "frontmatter needs a description"
+    if not re.search(r"\b(when|before|use\s+(?:only\s+|it\s+)?(?:for|on|when))\b", desc.group(1), re.I):
+        return "description must say when to use the skill (for example \"Use for ...\" or \"... when ...\")"
     return None
 
 
 def main():
-    src = pathlib.Path(arg("--from") or os.environ.get("T3TOTS_SKILLS_SRC") or "/home/box/agent-data/workflows").expanduser()
+    given = arg("--from") or os.environ.get("T3TOTS_SKILLS_SRC")
+    if not given:
+        print("NO_SKILLS: say where the live skills are with --from DIR or T3TOTS_SKILLS_SRC")
+        return 1
+    src = pathlib.Path(given).expanduser()
     dry, prune = "--dry-run" in sys.argv, "--prune" in sys.argv
     live = sorted(d for d in src.glob("t3-*") if (d / "SKILL.md").is_file()) if src.is_dir() else []
     if not live:

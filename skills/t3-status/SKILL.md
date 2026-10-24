@@ -5,14 +5,14 @@ description: >-
   in <X>", "anything running?", "is <X> done?", "recap/where is <thread> at". Not for
   "catch me up/brief me" (t3-project-report) or "what needs me" (t3-waiting).
 ---
-Follow @t3-tots-rules. Read-only.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only.
 
 ## Pick the mode
 - No target ("status", "what's up in T3"): run `t3q.py overview` on every computer. `T3_DAYS` defaults to 7.
 - A T3 project: `t3ctl threads --project '<P>' --main --limit 8`. Then run `t3ctl status --thread '<id>' --json` for each thread that is running, waiting, asking or in error, plus the newest one. Add `t3ctl limits` for anything stopped on a usage limit.
 - A thread: find it as in t3-tots-rules "Finding a thread". For a recap, raise `T3_LAST` to 20 or 30 until the story is clear.
 - PRs linked to a T3 thread: `t3ctl pr --thread '<t>'` or `t3ctl prs --project '<P>'`. Use `gh` as the fallback.
-- Not T3 (a benchmark, build, other long job, process or PR): use the checks in @t3-watch "Pick the check" once. Report progress markers, such as level or percent done, and the last activity time.
+- Not T3 (a benchmark, build, other long job, process or PR): use the checks in t3-watch "Pick the check" once. Report progress markers, such as level or percent done, and the last activity time.
 - Unclear: ask one short question.
 
 ## Reply

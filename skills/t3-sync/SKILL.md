@@ -6,7 +6,7 @@ description: >-
   other computer", "make my computers match".
 ---
 # T3 Sync
-Follow @t3-tots-rules. Each apply is a write, so it needs the user's yes ("Writes"). Saved picks count as approval only for those same items when the user says "sync everything" or "sync X".
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Each apply is a write, so it needs the user's yes, and saved picks count only as its "Writes" section allows.
 
 ## Scope (global only)
 - **Include:** T3 Code settings (keybindings, appearance, providers, model defaults; not threads or DB). Provider CLIs (Claude Code, Codex, Cursor CLI, OpenCode, Gemini and others): version, global config, rules/AGENTS.md/CLAUDE.md, skills, commands, agents, MCP server definitions. Shell profile (aliases, PATH, functions). Global git config (not credentials). Editor settings, keybindings, snippets and extension list (VS Code, Cursor, Zed). Global npm/pnpm/bun/pipx/uv tools. Runtime versions (node, python, bun).
@@ -27,7 +27,7 @@ Follow @t3-tots-rules. Each apply is a write, so it needs the user's yes ("Write
 5. Then apply the picks, following the steps under Apply.
 
 ## Later runs
-- **"sync everything":** read the prefs file, re-scan only the saved items, and show a short diff (what will change on each target). Apply on approval, or apply directly if the user already said "sync everything" and nothing new or surprising showed up. Report anything new that is not in the picks, but don't apply it.
+- **"sync everything":** read the prefs file, re-scan only the saved items, and show a short diff (what will change on each target). Then apply the saved items as t3-tots-rules "Writes" allows. Report anything new that is not in the picks, but don't apply it.
 - **"sync X only":** match X against item ids and groups, then run the same flow for just those items.
 - **"change my sync picks":** re-scan everything, show the checklist with the current picks pre-marked, and save the changes. Change the main computer or direction only when the user asks.
 

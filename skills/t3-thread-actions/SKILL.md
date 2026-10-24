@@ -6,11 +6,7 @@ description: >-
   <thread>", "rename <thread>", "stop <thread>", "snooze <thread>", "resume after
   the limit". For "what is <thread> asking", use t3-waiting.
 ---
-Follow @t3-tots-rules. Do only the action asked, on that thread. Confirm first if several titles match.
-
-## Find
-- By title: `t3ctl threads [--project P] --main --limit 20`. Drop `--main` to reach a reviewer or sub-task thread.
-- By content: `t3ctl search --query '<words>'`
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Find the thread with its "Finding a thread" section, then do only the action asked, on that thread.
 
 ## Actions
 | Action | Command |
