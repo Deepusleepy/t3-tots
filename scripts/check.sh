@@ -24,6 +24,9 @@ PY
 step "unit tests"
 r=$(node --test tests/*.test.js 2>&1) && ok || bad "$r"
 
+step "python tests"
+r=$(python3 tests/t3q_test.py 2>&1) && ok || bad "$r"
+
 step "manifest"
 r=$(python3 scripts/make-manifest.py --check 2>&1) && ok || bad "$r"
 

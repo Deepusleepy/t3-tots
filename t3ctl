@@ -322,6 +322,10 @@ function parseWhen(v) { // ISO | +30m/+2h/+1d | HH:MM (today, or tomorrow if pas
   if ((m = v.match(/^([01]?\d|2[0-3]):([0-5]\d)$/))) { const d = new Date(); d.setHours(+m[1], +m[2], 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d.toISOString(); }
   const t = Date.parse(v); if (!Number.isFinite(t)) throw new Error(`can't read time "${v}" (use ISO, +30m, +2h, +1d or HH:MM)`); return new Date(t).toISOString();
 }
+const isMainThread = (t) => !/^(mcp|provider)$/.test(t.creationSource || ""); // hides threads agents spawned (same rule as t3q.py, export.js, survey.js)
+// limitLine: one row of `t3ctl limits`, reset time in local time, marked when it has already passed (a stale limit)
+const limitLine = (t, autoResume, now = Date.now()) => { const at = t.usageLimitResetAt, past = at && Date.parse(at) < now;
+  return `${t.id}  resets=${at ? localT(at) + (past ? " (passed)" : "") : "?"}  autoResume=${autoResume}  snoozedUntil=${t.snoozedUntil ? localT(t.snoozedUntil) : "-"}  ${t.title}`; };
 const localT = (iso) => iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : "-";
 function parseEvery(v) { const m = String(v).trim().match(/^(\d+)\s*([mhd])$/i); if (!m) throw new Error(`--every must look like 30m, 2h or 1d (got "${v}")`); const ms = +m[1] * { m: 6e4, h: 36e5, d: 864e5 }[m[2].toLowerCase()]; if (ms < 6e4) throw new Error("--every must be at least 1m"); return ms; }
 async function threadPrs(t) { const th = ((await thread(t.id)).projection || {}).thread || {}; const list = [...(th.pullRequests || []), th.linkedPullRequest, th.branchPullRequest].filter(Boolean);
@@ -355,7 +359,7 @@ const main = async () => {
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
   else if (cmd === "models") { const m = new Map(); for (const t of (await shell()).threads) if (t.modelSelection) m.set(`${t.modelSelection.instanceId} ${t.modelSelection.model}`, (t.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id))?.id || "-"); for (const [k, v] of [...m].sort()) console.log(`${k}  (effort key: ${v})`); }
-  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } for (const t of ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15)) console.log(`${t.id}  ${t.status}  ${t.title}`); }
+  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } if (o.main) ts = ts.filter(isMainThread); for (const t of ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15)) console.log(`${t.id}  ${t.status}  ${t.title}`); }
   else if (cmd === "new") {
     const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--wait]");
     const p = await findProject(o.project); const s0 = await shell(); const sel = modelSel(o, p.defaultModelSelection || recentSel(s0, p.id) || recentSel(s0), s0);
@@ -399,7 +403,7 @@ const main = async () => {
       }
       return;
     }
-    console.log(`${t.title}  active=${t.activeRunId || "none"}  queued=${runs.length}${runs.some((r) => r.queueHeld) ? "  (queue held: t3ctl queue --thread t --resume)" : ""}`);
+    console.log(`${t.title}  active=${t.activeRunId || "none"}  queued=${runs.length}${runs.some((r) => r.queueHeld) ? `  (queue held: t3ctl queue --thread ${t.id} --resume)` : ""}`);
     for (const r of runs.sort((a, b) => (a.queuePosition || a.ordinal) - (b.queuePosition || b.ordinal))) console.log(`${r.id}  ${(textOf(r) || "(text not found)").replace(/\s+/g, " ").slice(0, 140)}`);
   }
   else if (cmd === "read") { const t = await findThread(o.thread); console.log(`${t.id}  ${t.title}  status=${t.status}`); await printLast(t.id, +o.last || 6); }
@@ -431,7 +435,7 @@ const main = async () => {
     if (o.json) { console.log(JSON.stringify(ts.map((t) => ({ id: t.id, title: t.title, resetAt: t.usageLimitResetAt || null, latestRunId: t.latestRunId, limitRecovery: t.limitRecovery || null, snoozedUntil: t.snoozedUntil || null })))); return; }
     if (!ts.length) console.log("no threads are stopped on a usage limit");
     for (const t of ts) { const r = t.limitRecovery, cur = r && r.runId === t.latestRunId && r.resetAt === t.usageLimitResetAt;
-      console.log(`${t.id}  resets=${t.usageLimitResetAt || "?"}  autoResume=${!!(cur && r.autoResume)}  snoozedUntil=${t.snoozedUntil || "-"}  ${t.title}`); } }
+      console.log(limitLine(t, !!(cur && r.autoResume))); } }
   else if (cmd === "resume-at-reset" || cmd === "snooze-until-reset") {
     const t = await findThread(o.thread), field = cmd === "resume-at-reset" ? "autoResume" : "snooze", on = !o.cancel;
     if (t.status !== "failed" || t.lastErrorClass !== "usage_limit" || !t.latestRunId || !t.usageLimitResetAt)
@@ -514,9 +518,9 @@ const main = async () => {
         if (!st[k] || st[k].readError !== msg) out.push({ kind: "unreadable", threadId: q, title: q, text: msg }); st[k] = { readError: msg }; continue; }
       delete st["q:" + q]; out.push(...watchDiff(st[t.id], cur, +o["stall-min"] || 20)); st[t.id] = cur; snaps.push(cur); }
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
-    if (o.json) { console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
+    if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify");
 };
-if (require.main !== module) module.exports = { decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { isMainThread, limitLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); console.error("error:", m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message); process.exit(1); });

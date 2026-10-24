@@ -10,8 +10,8 @@
  "files": [
   {
    "path": "t3q.py",
-   "bytes": 19608,
-   "sha256": "5b639bbb3114c0e6cbfbbdc2a3c1edd1137d8c8a3322f166084eb02ec7418275",
+   "bytes": 20423,
+   "sha256": "024a665d02e48d1031a7c49f885c7c3d74f03f2de45e0bdcac38fe500dc1af4c",
    "targets": [
     "macos",
     "linux",
@@ -22,8 +22,8 @@
   },
   {
    "path": "t3ctl",
-   "bytes": 61628,
-   "sha256": "4769a0e1d78bcbe13102c8bbc2518bc460a2863ed2aefd837faedb79c809568a",
+   "bytes": 62218,
+   "sha256": "e3141e2016b54d3ce4d1425200770309228fc6d7840c8ddd853e546d41f24952",
    "targets": [
     "macos",
     "linux",

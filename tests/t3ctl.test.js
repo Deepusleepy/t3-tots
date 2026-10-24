@@ -131,3 +131,16 @@ test("watchDiff: a request that can't be answered is reported once, not every ch
   const again = t.watchDiff(b, c, 20, now + 12e4).filter((e) => e.kind === "stale-request");
   assert.equal(first.length, 1); assert.equal(again.length, 0);
 });
+
+test("isMainThread: hides threads agents spawned, keeps the user's", () => {
+  assert.equal(t.isMainThread({ creationSource: "web" }), true);
+  assert.equal(t.isMainThread({}), true);
+  assert.equal(t.isMainThread({ creationSource: "mcp" }), false);
+  assert.equal(t.isMainThread({ creationSource: "provider" }), false);
+});
+test("limitLine: marks a reset time that has already passed", () => {
+  const now = Date.parse("2026-01-02T00:00:00Z");
+  assert.match(t.limitLine({ id: "a", title: "A", usageLimitResetAt: "2026-01-01T00:00:00Z" }, false, now), /\(passed\)/);
+  assert.doesNotMatch(t.limitLine({ id: "b", title: "B", usageLimitResetAt: "2026-01-03T00:00:00Z" }, true, now), /passed|Z\b/);
+  assert.match(t.limitLine({ id: "c", title: "C" }, false, now), /resets=\?/);
+});
