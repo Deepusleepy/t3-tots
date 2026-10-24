@@ -26,7 +26,10 @@ function init() {
 const netErr = (e) => new Error(`T3_NOT_REACHABLE: can't reach T3 at ${BASE} (${(e.cause && e.cause.code) || e.message}). Is T3 Code open?`);
 const uuid = () => crypto.randomUUID();
 
-function args() { const a = process.argv.slice(3), o = {}; for (let i = 0; i < a.length; i++) { if (a[i].startsWith("--")) { const k = a[i].slice(2); const v = a[i + 1] && !a[i + 1].startsWith("--") ? a[++i] : true; o[k] = v; } } return o; }
+// args: --key value, --flag, or --key=value (use the = form, or --prompt-file, for a value that starts with --)
+function args(a = process.argv.slice(3)) { const o = {}; for (let i = 0; i < a.length; i++) { if (a[i].startsWith("--")) { const eq = a[i].indexOf("=");
+  if (eq > 2) { o[a[i].slice(2, eq)] = a[i].slice(eq + 1); continue; }
+  const k = a[i].slice(2); const v = a[i + 1] !== undefined && !a[i + 1].startsWith("--") ? a[++i] : true; o[k] = v; } } return o; }
 async function get(p) {
   let r; try { r = await fetch(BASE + p, { headers: H }); } catch (e) { throw netErr(e); }
   if (r.status === 401 || r.status === 403) throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (see Token in t3-tots-rules).`);
@@ -536,5 +539,5 @@ const main = async () => {
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
   else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify");
 };
-if (require.main !== module) module.exports = { isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { args, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); console.error("error:", m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message); process.exit(1); });
