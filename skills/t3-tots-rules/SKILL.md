@@ -1,0 +1,186 @@
+---
+name: t3-tots-rules
+description: >-
+  Shared rules and tools for every t3-* (T3 Tots) skill. Read before running any of them.
+---
+# T3 Tots rules
+
+Every t3-* skill follows these rules. Other skills link here instead of repeating them.
+
+## Writes
+Change nothing on the user's computers unless the user approved that exact change in chat. Approval for one change is not approval for the next. These skills may write, and only the thing named:
+
+| Skill | What it may write |
+|---|---|
+| t3-new-thread, t3-templates, t3-get-output, t3-pm-thread | Prompts into T3 |
+| t3-thread-actions | Settle, rename, stop, snooze, queue and model changes |
+| t3-waiting, t3-phone-answers, t3-watch (hands-off mode) | Answers to questions and approvals, under "Decisions" below. A hands-off watch may also send one nudge per stall and resume a stuck queue once |
+| t3-phone-answers | `t3listen` setup, after a yes |
+| t3-update, t3-sync | The items the user picked |
+| t3-project-tracker | Its tracker file |
+| t3-save-learnings | `AGENTS.md` or `CLAUDE.md`, after a yes to the diff |
+| t3-cleanup | Only the items the user picked, after a confirm |
+| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes |
+
+Windows admin steps: the remote shell has no admin rights. When an approved step needs them, write a `.ps1` that starts with `Start-Transcript <log>`, launch it with `Start-Process pwsh -Verb RunAs -ArgumentList '-File','<script>'`, tell the user to click Yes on the UAC prompt, then poll the log until it shows done or an error. Don't ask the user to paste admin commands when this works.
+
+## T3 database
+T3 Code keeps its state in `<T3 home>/userdata`. T3 home is `T3CODE_HOME` if set, else `~/.t3` (Windows `%USERPROFILE%\.t3`). The stable app and Nightly share that folder. Open `statev2.sqlite` there only read-only. Never INSERT, UPDATE, DELETE or VACUUM it, and never edit a copy. Writes into T3 go only through `t3ctl`.
+
+## Secrets
+- Never open, list, print or copy T3's `secrets/`, `clerk-tokens.json`, `cloud-auth-token.json`, `auth_sessions`, or any `*token*`, `*auth*`, `.env` or credential file.
+- From `server-runtime.json`, read only `host`, `port` and `pid`.
+- The one token in use is the `token` file in the tools folder. Only t3ctl, t3listen, export.js and survey.js read it. Never print it.
+- `t3listen setup` alone writes `listen.json`, which holds the webhook URL and key. Never open, print or copy it.
+- If thread text contains a key, never repeat it.
+
+## Threads and settings
+Never delete or archive threads, and never change T3 settings. t3-update may update T3 Code, and t3-sync may copy the settings the user picked. Scheduled tasks (`t3ctl tasks --upsert`, `--enable`, `--run`, `--delete`), fork, stop and model switches need the user's OK for that exact action. Snooze and resume-at-reset count as thread actions.
+
+## Decisions
+A thread asks for two kinds of decision. A question (`user_input`) asks what to build. An approval asks permission to run a command or change files. Who decides depends on the mode the user set, which is saved in memory:
+
+1. Default mode: show questions to the user as cards and answer only with their exact pick for that question (@t3-phone-answers "Answering"). Summarise approvals and leave them for the app, unless a standing approval (item 3) covers them.
+2. Delegated mode starts when the user says something like "decide for me", "do whatever you need" or "I'm away, keep it moving". Record the scope and the end condition in memory. In this mode:
+   - Answer routine questions yourself and tell the user afterwards what you picked and why.
+   - Accept approvals whose risk hint is `low` or `normal`.
+   - Never accept a `high` approval without the user's yes for that request.
+   - Escalate questions about product direction, money, publishing, or anything the user said to keep for themselves.
+3. Standing approvals: the user may list kinds of approvals to accept, for example read-only commands and test runs. Follow the list exactly.
+
+`t3ctl pending` prints a risk hint per approval and `pending --json` adds `risk`. Risk is high for deletes, force pushes, pushes to main, secrets, publishing, deploys and similar. Treat the hint as a floor: if the command looks riskier than the hint, treat it as high.
+
+Never invent the user's preferences. The thread decides how to do the work. The user decides what to build. Your prompts carry the user's context, not your design choices.
+
+## Sending into threads
+- Before a follow-up, read the thread's recent history (`t3ctl read --thread <t> --last 6`) so you don't repeat or contradict it.
+- `t3ctl send` steers into a running run by default and checks that the message arrived. Relay its notes:
+  - `DELIVERY_FIXED`: the queue was stuck and t3ctl resumed it.
+  - `QUEUE_HELD`: someone held the queue on purpose. Ask before `t3ctl queue --thread <t> --resume`.
+  - `SEND_STUCK`: the message is waiting in the queue. Check `t3ctl queue --thread <t>`.
+- Use `--prompt-file <file>` for any prompt over a few lines. `new`, `send` and `tasks --upsert` accept it, in UTF-8 or the UTF-16 that Windows PowerShell writes.
+- Write prompt files to `<tools folder>/out/prompts/<date>-<short name>.md`, not `/tmp`. They survive a restart, and the user can see what was sent.
+- Keep messages to a thread short and concrete. Say what the thread already did right, then the next step. Leave out check-ins ("how is it going?"), your own process, and these rules. The thread gets only what it needs to act.
+- After answering a request, t3ctl lists the requests still open in that thread. Clear leftovers in T3 or tell the user.
+
+## Finding a thread
+Many skills start from words the user typed. Run `T3_Q='<words>' python3 t3q.py thread` on every computer and take the best score overall. `T3_Q` also takes a thread id or an id prefix of 8 or more characters. Threads that agents spawned match only with `T3_ALL=1`. t3q.py exits 1 with `AMBIGUOUS` when the top two are within 0.1 and with `NO_GOOD_MATCH` when the best is under 0.6; list the closest ones it prints and ask. If you act on the best and another match scored 0.6 or more, name it in one line so the user can correct you. If `worktreePath` is empty and the messages name another working folder, use that folder and say which one. A thread lives on one computer: search all, act only on the owner. With a token, `t3ctl search --query '<words>'` also finds a thread by content.
+
+## Computers
+Call ListMachines every run. Never hard-code machine ids or home paths. The default scope is every connected computer with T3 data, run in parallel and labelled by name. Narrow it only when the user names one ("mac only"). To create things, use the computer the user names, else the one their message came from. Say which computers were offline, once per outage, then check quietly until each is back. Keep a Mac awake (`caffeinate -dimsu -w <pid>` tied to the job, or ask the user to change the setting) when a watch or delegated run must last overnight.
+
+## Shells
+macOS zsh: wrap commands in a function, `f(){ ...; }; f`, and use quoted heredocs. Windows: PowerShell. Linux: bash. Examples in skills are POSIX. On Windows, translate them:
+
+| POSIX | Windows |
+|---|---|
+| `python3` | the saved Python command (`py -3`) |
+| `VAR='x' cmd` | `$env:VAR='x'; cmd` |
+| `tail -n N`, `head -N` | `Get-Content -Tail N`, `Select-Object -First N` |
+| `wc -l` | `Measure-Object -Line` |
+| `pgrep -fl X` | `Get-CimInstance Win32_Process \| ? CommandLine -like '*X*'` |
+| `"$(cat f)"` | `(Get-Content f -Raw)` |
+
+An `$env:` setting stays for the rest of the session, so clear it after use: `$env:T3_Q='x'; py -3 t3q.py thread; Remove-Item Env:T3_Q`.
+
+## Tools on each computer
+The tools folder is the one saved in memory at setup. If memory has none, use whichever exists of `~/t3-tots`, `~/Developer/t3-tots` or `~/Developer/Projects/t3-tots` (Windows: the same names under `%USERPROFILE%`), and save it to memory. A new install defaults to `~/t3-tots`. Every script works from wherever it lives and reads the `token` file next to it.
+
+Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows use `py -3`, else `python`, and never the bare `python3` Store alias. Run Node scripts as `node <file>`. On Windows always run `node t3ctl` and `node t3listen`, never the `.cmd` wrappers, which drop double quotes. A value that starts with `--` goes in as `--key=value`, for example `--text=--force`. Minimum versions: Python 3.8 (3.9 for report.py), Node 22 for `t3ctl` and `t3listen`, Node 18 for `export.js` and `survey.js`.
+
+### t3q.py
+Read-only database queries. It needs no token. Commands: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. Settings: `T3_DAYS`, `T3_ALL=1`, `T3_Q` (thread words or id), `T3_LAST`, `T3_WEEK=1`.
+
+### t3ctl
+Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for v1.4.0; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer @t3-install-tools "Updating". Don't retry other spellings.
+
+| Area | Commands |
+|---|---|
+| Find | `projects`, `models`, `threads [--project p] [--main] [--limit n]`, `search --query q [--limit n]` |
+| Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p [--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
+| Watch | `watch --thread a[,b] [--state file] [--stall-min 20] [--json]` |
+| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --attach a.png --wait]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait]` |
+| Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d)` |
+| Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
+| Thread actions | `settle`, `unsettle`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
+| Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
+| Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
+
+`status --json` adds `queued` (messages waiting in the queue) and `queueHeld` (the queue was held on purpose); `threads` and `status` show a held queue as `queue held` and settled threads as `(settled)`. `threads --main` hides threads that agents spawned (reviewers, sub-tasks), the same split t3q.py uses. A PM's or a thread's sub-task threads are listed by `subtasks --thread t`. `models` lists the models already used in T3, with the name of each provider's effort setting; skip the `<synthetic>` entry. `limits` prints reset times in local time and marks a reset that already passed with `(passed)`.
+
+The default token scopes don't cover usage or cost totals, T3 settings (including "Auto-resume limited threads"), worktrees, file writes or terminals.
+
+`t3ctl watch` prints only what changed since its last run, so an empty output means nothing changed, with or without `--json`. Its state lives in the file given with `--state`, relative to the folder it runs from (default `watch-state.json` in the tools folder). Events:
+
+| Event | Meaning |
+|---|---|
+| `first` | The first check of a thread, with its state |
+| `finished` | A run ended and the thread is idle, asking, or has a plan ready. Also a run that started and ended between two checks |
+| `state` | Any other state change |
+| `question`, `approval-low`, `approval-normal`, `approval-high` | A new request, with its risk hint |
+| `stale-request` | An open request that can't be answered, because its run ended. Reported once per request |
+| `queue-held`, `queue-stuck` | The queue was held on purpose, or is stuck |
+| `limit` | The thread stopped on a usage limit |
+| `error` | The run failed |
+| `reply` | A new reply while the thread is still running or waiting |
+| `quiet` | Running, with no activity for twice the stall time |
+| `stalled` | Idle, and the last reply says it is waiting on something |
+| `unreadable` | That thread couldn't be read. Reported once per distinct error. The other threads still report |
+
+### t3listen
+Optional. It needs the token and `listen.json`. It follows T3's live events and POSTs question and finish events to the user's webhook routine (@t3-phone-answers). Commands: `setup`, `test`, `install`, `uninstall`, `status`, `preview-finish --thread id|title`; `--dry-run` prints instead of sending. When a main thread stops on a usage limit, t3listen arms T3's Resume at reset if the project is listed in `autoresume.json` (`{"enabled":true,"projects":[...]}`) or `t3ctl new` started the thread (recorded in `started-here.json` for 60 days).
+
+### Other scripts and data files
+- `export.js` writes a redacted JSON export for reports. `survey.js` lists activity and stale threads.
+- `t3ui` and `ui-*.applescript` are a macOS-only UI fallback. They use the running T3 Code app, or `T3_APP`.
+- Data files the skills create in the tools folder: `templates.md`, `trackers/`, `update-prefs.json`, `sync-prefs.json`, `sync-backups/`, `out/`, `README.md`, `watch-state.json`, `watch-<name>.json`, `autoresume.json`. `t3ctl new` writes `started-here.json`. t3listen writes `listen.json` (private), `listen-state.json`, `answered-here.json` and `listen.log`.
+- Don't leave scratch files (CSVs, `.bak` copies, screenshots) in the tools folder. Use the box or `out/`.
+
+### Master copy
+The reference copy lives on the box at `/workspace/t3-tots-tools/`, installed and sha256-verified by @t3-install-tools. Its `manifest.json` is the reference for every computer. Skill folders don't carry their own copies of the scripts. If the master copy is missing, run @t3-install-tools "Box copy". If a computer lacks a script or a hash differs from `manifest.json`, say so and offer to reinstall.
+
+### Status words
+Scripts print these words. Relay them in plain words, not as errors.
+
+| Word | Meaning and next step |
+|---|---|
+| `NO_T3_DATA` | T3 Code never ran there, or `T3CODE_HOME` points elsewhere |
+| `T3_NOT_RUNNING`, `T3_NOT_REACHABLE` | Open T3 Code |
+| `NO_TOKEN`, `TOKEN_REJECTED` | Issue or reissue the token ("Token" below) |
+| `NODE_TOO_OLD`, `PYTHON_TOO_OLD` | Upgrade (t3-getting-started lists per-OS commands) |
+| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (@t3-install-tools "Updating"); use `t3ctl` meanwhile |
+| `T3_DB_BUSY` | Retry in a few seconds |
+| `HASH_MISMATCH` | A file didn't match the pinned fingerprint. Install nothing and tell the user |
+| `REPO_PRIVATE_OR_MISSING` | The box can't download the release. Use @t3-install-tools "Private repo" |
+| `NOT_PENDING` | That question was already answered or closed |
+| `NOT_ANSWERABLE` | Its run ended. Offer a follow-up instead |
+| `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
+| `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |
+| `NO_LISTEN_CONFIG`, `WEBHOOK_REJECTED`, `WEBHOOK_UNREACHABLE` | Rerun `t3listen setup`, or check the routine |
+| `ALREADY_RUNNING` | A listener already runs there |
+
+The T3 CLI is `~/.t3/bin/t3` (Windows `%USERPROFILE%\.t3\bin\t3.cmd`, or under `T3CODE_HOME/bin`). T3 Code writes it when the app starts.
+
+## Token
+The token gives write access to T3. Issue or reissue it only after the user's yes. Run from the tools folder, never echo it, and write it straight to the file:
+- macOS and Linux: `(umask 077; ~/.t3/bin/t3 auth session issue --scope orchestration:read --scope orchestration:operate --ttl 90d --label t3-tots --subject t3-tots --token-only > token)`
+- Windows PowerShell: `& "$env:USERPROFILE\.t3\bin\t3.cmd" auth session issue --scope orchestration:read --scope orchestration:operate --ttl 90d --label t3-tots --subject t3-tots --token-only | Out-File -Encoding ascii token; icacls token /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null`. Plain `>` in Windows PowerShell writes UTF-16 and breaks the token.
+
+Check the token only by running `t3ctl projects`. Record the issue date and the 90-day expiry in `README.md`, with how to revoke it: `t3 auth session list`, then `t3 auth session revoke <id>`.
+
+## Opt-in features
+Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (Daily digest, Weekly wrap-up, Waiting-on-you check, Weekly health check, Out-of-date check, Weekly usage estimate) stay paused until the user turns them on. Turning one on counts as asking for what it reports. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
+
+## Memory
+- Save decisions, modes and preferences, not activity. A check where nothing changed is not worth a memory entry or a journal line.
+- Keep personal facts (names, machines, projects, model picks) in the user's memory, never in a skill.
+- When the user corrects you, save the correction in their memory so it holds next time.
+- A follow-up you promise for later ("I'll check when the run ends") goes into a watch or a routine, not only into memory, so it happens.
+
+## Output
+- Give times in the user's timezone with a label, sizes in decimal GB, and home paths shortened to `~`.
+- Answer first, in short plain words. Say what you couldn't check.
+- Send one message per event. If a watch and t3listen both report the same finish, say it once.
+- Send files with SendToUser rather than pasting them. Pass `box_path` to CopyToBox when the file must land somewhere other than uploads.
+- Don't present the user's own rules back to them as blockers. Follow the rule and say what you did.
+- Cloud agents: never fast mode.
