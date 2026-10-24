@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // t3listen - tells T3 Tots the moment a T3 Code thread asks a question (and when it's answered or closed),
-// and when a thread's run finishes, fails or is cancelled (sub-task threads only when they fail),
+// and when a thread's run finishes, fails or is cancelled (sub-task threads only when they fail; usage-limit stops in
+// projects listed in autoresume.json, or in threads T3 Tots started, get T3's "Resume at reset" armed, see autoResumeSet),
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
@@ -94,7 +95,7 @@ function requestInfo(p, r) {
 function summary(e) {
   const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
   if (END_WORD[e.event]) { const d = e.durationSec, dur = d == null ? "" : ` after ${d >= 3600 ? `${Math.floor(d / 3600)}h ${Math.round((d % 3600) / 60)}m` : d >= 60 ? `${Math.round(d / 60)}m` : `${d}s`}`;
-    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
+    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.usageLimit ? (e.autoResumeSet ? `\nUsage limit: auto-resume is set for ${e.resumeAtLocal || localTime(e.resumeAt)}.` : `\nUsage limit: not auto-resumed (${e.autoResumeNote || "unknown"}).`) : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
   if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed${e.answeredHere ? " (answered from chat)" : ""}: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
   if (e.questions) return `T3 question in ${where}:\n${e.context ? `Context: ${e.context}\n` : ""}` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
   return `T3 approval in ${where}: ${e.approval.requestKind}${e.approval.prompt ? " - " + e.approval.prompt : ""}\n` + e.approval.options.map((x) => `  - ${x.label}`).join("\n");
@@ -223,11 +224,54 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
     lastReply: reply ? trim(txt(reply), 600) : null, ...(event === "thread.failed" && errText ? { error: trim(String(errText), 300) } : {}) };
   return { e };
 }
+// ---------- usage-limit auto-resume ----------
+// When a run fails on a usage limit in a watched project (autoresume.json "projects", none by default) or in a thread
+// T3 Tots started (started-here.json, written by `t3ctl new`), arm T3's own "Resume at reset" for it (same command the
+// banner button sends) and add autoResumeSet to the failed event. Sub-task threads are left alone.
+const AUTO = path.join(DIR, "autoresume.json"), STARTED = path.join(DIR, "started-here.json");
+function autoResumeWanted(t) {
+  if (t.id.startsWith(DELEGATED)) return false;
+  const cfg = readJSON(AUTO, {}) || {}; if (cfg.enabled === false) return false;
+  const projects = (Array.isArray(cfg.projects) ? cfg.projects : []).map((x) => String(x).toLowerCase());
+  const proj = String(meta.projects.get(t.projectId) || "").toLowerCase();
+  return (proj && projects.includes(proj)) || !!(readJSON(STARTED, {}) || {})[t.id];
+}
+function wsRpc(ep, tag, payload) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`${ep.base.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: ep.H });
+    const to = setTimeout(() => { try { ws.close(); } catch {} reject(new Error("rpc timeout")); }, 30000);
+    ws.onopen = () => ws.send(JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] }));
+    ws.onmessage = (ev) => { let ms = JSON.parse(ev.data); if (!Array.isArray(ms)) ms = [ms];
+      for (const m of ms) { if (m._tag === "Ping") ws.send(JSON.stringify({ _tag: "Pong" }));
+        if (m._tag === "Exit" && m.requestId === "1") { clearTimeout(to); ws.close(); m.exit._tag === "Success" ? resolve(m.exit.value) : reject(new Error(JSON.stringify(m.exit.cause || m.exit).slice(0, 300))); }
+        if (m._tag === "Defect") { clearTimeout(to); ws.close(); reject(new Error("defect")); } } };
+    ws.onerror = (e) => { clearTimeout(to); reject(new Error(`ws error ${e.message || ""}`)); };
+  });
+}
+async function armResume(ep, threadId) { // -> { autoResumeSet, autoResumeNote }
+  let t = null;
+  for (let i = 0; i < 3 && !(t && t.lastErrorClass === "usage_limit" && t.usageLimitResetAt); i++) {
+    if (i) await sleep(1500);
+    try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); const sh = r.ok ? await r.json() : {}; for (const p of sh.projects || []) if (!meta.projects.has(p.id)) meta.projects.set(p.id, p.title); t = (sh.threads || []).find((x) => x.id === threadId) || null; } catch {}
+  }
+  if (!t || t.status !== "failed" || t.lastErrorClass !== "usage_limit") return null; // not a usage-limit stop
+  if (!autoResumeWanted(t)) return { autoResumeSet: false, autoResumeNote: "project not in autoresume.json and thread not started by T3 Tots" };
+  if (!t.latestRunId || !t.usageLimitResetAt) return { autoResumeSet: false, autoResumeNote: "T3 reported no reset time" };
+  if (t.archivedAt || t.settledOverride === "settled" || t.pendingRuntimeRequest) return { autoResumeSet: false, autoResumeNote: "thread is settled/archived or has an open question" };
+  const r = t.limitRecovery; if (r && r.runId === t.latestRunId && r.resetAt === t.usageLimitResetAt && r.autoResume) return { autoResumeSet: true, resumeAt: t.usageLimitResetAt, autoResumeNote: "already armed" };
+  if (DRY) return { autoResumeSet: false, resumeAt: t.usageLimitResetAt, autoResumeNote: "dry run" };
+  try { await wsRpc(ep, "orchestration.dispatchCommand", { type: "thread.metadata.update", commandId: crypto.randomUUID(), threadId: t.id,
+      limitRecovery: { runId: t.latestRunId, resetAt: t.usageLimitResetAt, autoResume: true } });
+    log(`usage limit in "${t.title}": resume-at-reset armed for ${t.usageLimitResetAt}`);
+    return { autoResumeSet: true, resumeAt: t.usageLimitResetAt, resumeAtLocal: localTime(t.usageLimitResetAt) };
+  } catch (err) { log(`usage limit in "${t.title}": couldn't arm resume-at-reset: ${err.message}`); return { autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
+}
 async function reportEnd(ep, t, runId, opts = {}) {
   if (runId && S.finished[runId]) return;
   const { e, skip } = await buildEnd(ep, t, runId, opts);
   if (!e) { if (VERBOSE) log(`run end in "${t.title}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
+  if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id); if (a) Object.assign(e, { usageLimit: true }, a); }
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
 }
 async function checkFinish(ep, t, prev) {
