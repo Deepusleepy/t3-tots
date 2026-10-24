@@ -166,3 +166,7 @@ test("threadLine: a held queue shows as queue held, not the last run status", ()
   assert.equal(t.threadLine(th0, { runs: [] }), "x  cancelled  Snig");
   assert.equal(t.threadLine({ ...th0, settledAt: "2026-01-01T00:00:00Z" }, null), "x  cancelled (settled)  Snig");
 });
+test("args: --key=value keeps a value that starts with --", () => {
+  assert.deepEqual(t.args(["--text=--force is fine", "--thread", "x", "--json"]), { text: "--force is fine", thread: "x", json: true });
+  assert.deepEqual(t.args(["--limit", "0"]), { limit: "0" });
+});

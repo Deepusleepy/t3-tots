@@ -34,9 +34,10 @@ def make_db(folder, legacy_approvals=False, extra_threads=False):
     db.execute("insert into orchestration_v2_projection_runtime_requests values ('t-done', 'command', 'pending', ?, '{}')", (iso(2),))
     db.commit(); db.close()
 
-def run(folder, cmd, **env_extra):
+def run(folder, cmd, rc=False, **env_extra):
     env = {**os.environ, "T3_HOME": folder, **env_extra}
-    return subprocess.run([sys.executable, T3Q, cmd], capture_output=True, text=True, env=env, timeout=60).stdout
+    r = subprocess.run([sys.executable, T3Q, cmd], capture_output=True, text=True, env=env, timeout=60)
+    return (r.stdout, r.returncode) if rc else r.stdout
 
 class T3qTest(unittest.TestCase):
     def setUp(self):
@@ -68,6 +69,10 @@ class T3qTest(unittest.TestCase):
         self.assertIn("queue held: Held queue", out)
         self.assertNotIn("STUCK? live run: Held queue", out)
         self.assertNotIn("\u2014", out)                  # no em dashes in output
+        if sys.platform != "darwin": self.assertNotIn("diskutil", out)  # the macOS disk note only on macOS
+        with open(os.path.join(self.dir, "server-runtime.json"), "w") as f: json.dump({"host": "0.0.0.0", "port": 1, "pid": 999999}, f)
+        out = run(self.dir, "health")                      # T3 closed: the binding is from its last run
+        self.assertIn("last run was bound to all interfaces", out); self.assertNotIn("WARNING: T3 is bound", out)
 
     def test_settled_thread_is_not_waiting(self):
         make_db(self.dir, extra_threads=True)
@@ -101,8 +106,13 @@ class T3qTest(unittest.TestCase):
 
     def test_thread_no_good_match(self):
         make_db(self.dir, extra_threads=True)
-        out = run(self.dir, "thread", T3_Q="zzz nonexistent thread")
-        self.assertIn("NO_GOOD_MATCH", out); self.assertNotIn("THREAD ", out)
+        out, code = run(self.dir, "thread", rc=True, T3_Q="zzz nonexistent thread")
+        self.assertIn("NO_GOOD_MATCH", out); self.assertNotIn("THREAD ", out); self.assertEqual(code, 1)
+
+    def test_unknown_command_exits_nonzero(self):
+        make_db(self.dir)
+        self.assertEqual(run(self.dir, "bogus", rc=True)[1], 2)
+        self.assertEqual(run(self.dir, "help", rc=True)[1], 0)
 
     def test_thread_skips_spawned_unless_all(self):
         make_db(self.dir, extra_threads=True)

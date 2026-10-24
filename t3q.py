@@ -50,7 +50,8 @@ def asks_you(text):  # a question at the end, or hand-back phrases anywhere in t
     body = " ".join((text or "").split()).lower()
     return asks_q(text) or any(c in body for c in CLOSERS)
 CMD = sys.argv[1] if len(sys.argv) > 1 else "overview"
-if CMD not in ("overview", "waiting", "thread", "projects", "health", "usage"): print("usage: python3 t3q.py overview|waiting|thread|projects|health|usage   (Windows: py -3 or python)"); sys.exit(0)
+if CMD not in ("overview", "waiting", "thread", "projects", "health", "usage"):
+    print("usage: python3 t3q.py overview|waiting|thread|projects|health|usage   (Windows: py -3 or python)"); sys.exit(0 if CMD in ("help", "-h", "--help") else 2)
 if CMD != "usage":
     if not os.path.exists(P): print("NO_T3_DATA at", tilde(D), "- T3 Code has not run on this computer yet (or T3CODE_HOME points elsewhere)."); sys.exit(0)
     db = sqlite3.connect("file:" + P.replace("\\", "/") + "?mode=ro", uri=True)
@@ -135,10 +136,10 @@ def thread():  # fuzzy match a user thread; prints state, git context, goal, las
         print("matches:", " | ".join(f"{r[1]} [{r[2]}] {score(r):.2f}" for r in ranked[:4]))
         best = score(ranked[0]); second = score(ranked[1]) if len(ranked) > 1 else 0
         if best < 0.6:
-            print(f'\nNO_GOOD_MATCH: no thread title matches "{Q}" well (best {best:.2f}). Closest:'); [print("-", line(r)) for r in ranked[:5]]; return
+            print(f'\nNO_GOOD_MATCH: no thread title matches "{Q}" well (best {best:.2f}). Closest:'); [print("-", line(r)) for r in ranked[:5]]; sys.exit(1)
         if best - second < 0.1:
             close = [r for r in ranked[:8] if best - score(r) < 0.1]
-            print(f'\nAMBIGUOUS: {len(close)} threads match "{Q}" about equally. Ask which one, or rerun with a fuller name or the id:'); [print("-", line(r)) for r in close]; return
+            print(f'\nAMBIGUOUS: {len(close)} threads match "{Q}" about equally. Ask which one, or rerun with a fuller name or the id:'); [print("-", line(r)) for r in close]; sys.exit(1)
     tid, title, proj, root, pj, c, u, _, settled = ranked[0]; pj = json.loads(pj or "{}")
     runs = q(f"select status, count(*) from {RU} where thread_id=? group by 1", (tid,))
     last_run = q(f"select {RUNST} from {RU} r where thread_id=? order by ordinal desc limit 1", (tid,))
@@ -197,7 +198,9 @@ def health():
     state = "running" if listen else "process alive but port not reachable" if alive else "not running"
     print(f"T3 server: {state} (pid {pid}) | port {port} reachable: {listen} | runtime file host {host}")
     print("listening on:", ", ".join(sorted(binds)) or "none found")
-    if any(b.startswith(("0.0.0.0", "*", "[::]", "::")) for b in binds) or host in ("0.0.0.0", "::"):
+    if not listen and not binds and host in ("0.0.0.0", "::"):
+        print("note: T3's last run was bound to all interfaces (runtime file). If it starts that way again, anyone on the same network can reach it.")
+    elif any(b.startswith(("0.0.0.0", "*", "[::]", "::")) for b in binds) or host in ("0.0.0.0", "::"):
         print("WARNING: T3 is bound to all interfaces, so anyone on the same network can reach it. Bind to 127.0.0.1 unless you need remote access.")
     for tid, title, st, at, upd in q(f"select r.thread_id, t.title, {RUNST}, r.requested_at, t.updated_at from {RU} r join {TH} t using(thread_id) where r.status in ('queued','preparing','starting','running','waiting') order by r.requested_at"):
         h = ago_h(at); quiet = ago_h(upd)
@@ -213,7 +216,7 @@ def health():
             try: tot += os.path.getsize(os.path.join(root, f))
             except OSError: pass
     print(f"T3 data folder: {tot/1e9:.2f} GB (secret and token files skipped)")
-    du = shutil.disk_usage(os.path.expanduser("~")); print(f"disk: {du.free/1e9:.0f} GB free of {du.total/1e9:.0f} GB ({du.used/du.total*100:.0f}% used; on macOS trust Settings/diskutil for total used)")
+    du = shutil.disk_usage(os.path.expanduser("~")); print(f"disk: {du.free/1e9:.0f} GB free of {du.total/1e9:.0f} GB ({du.used/du.total*100:.0f}% used{'; on macOS trust Settings/diskutil for total used' if OS == 'Darwin' else ''})")
     if OS == "Darwin":
         mem = int(sh(["sysctl", "-n", "hw.memsize"]).strip() or 0); vm = sh(["vm_stat"]); pg = 16384 if "16384" in (vm.splitlines() or [""])[0] else 4096
         g = lambda k: int(next((l.split(":")[1].strip(" .") for l in vm.splitlines() if l.startswith(k)), "0") or 0)
