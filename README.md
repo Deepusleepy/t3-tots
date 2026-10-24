@@ -34,7 +34,7 @@ You normally don't install these by hand: the T3 Tots bot downloads them on its 
 
 ## Developing
 
-- `scripts/check.sh` runs every check: `node --check`, Python compile, unit tests (`node --test tests/`), manifest freshness, CRLF in `t3ctl.cmd`, and a public-safety scan for email addresses, real home folders, and API keys. Put words that must never ship (your name, private project names) one per line in `~/.config/t3-tots/private-words.txt`. Never commit that file.
+- `scripts/check.sh` runs every check: `node --check`, Python compile, unit tests (`node --test tests/*.test.js`), manifest freshness, CRLF in `t3ctl.cmd`, and a public-safety scan for email addresses, real home folders, and API keys. Put words that must never ship (your name, private project names) one per line in `~/.config/t3-tots/private-words.txt`. Never commit that file.
 - After changing any shipped file, run `python3 scripts/make-manifest.py` to rewrite `manifest.json` and `manifest.sha256` from `VERSION`.
 - Release only from a tag. The installer downloads by tag and checks every hash.
 

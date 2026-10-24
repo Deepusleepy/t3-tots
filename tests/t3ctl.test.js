@@ -1,4 +1,4 @@
-// Unit tests for t3ctl's pure helpers. Run: node --test tests/
+// Unit tests for t3ctl's pure helpers. Run: node --test tests/*.test.js
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");

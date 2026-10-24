@@ -22,7 +22,7 @@ PY
 ) && ok || bad "$r"
 
 step "unit tests"
-r=$(node --test tests/ 2>&1) && ok || bad "$r"
+r=$(node --test tests/*.test.js 2>&1) && ok || bad "$r"
 
 step "manifest"
 r=$(python3 scripts/make-manifest.py --check 2>&1) && ok || bad "$r"
