@@ -25,3 +25,12 @@ test("approvalsLine names which switch turned approvals on", () => {
   assert.equal(approvalsLine(false, true), "on (installed with --approvals)");
   assert.equal(approvalsLine(true, true), "on (listen.json and installed with --approvals)");
 });
+
+test("staleMinutes: missing means the documented 1440; 0 stays off", () => {
+  for (const v of [undefined, null, "", "abc", -5]) assert.equal(l.staleMinutes(v), 1440, String(v));
+  assert.equal(l.staleMinutes(0), 0); assert.equal(l.staleMinutes("30"), 30);
+});
+test("redaction catches github_pat_, npm_, xapp- and glpat- keys", () => {
+  const keys = ["github_pat_" + "A1".repeat(15), "npm_" + "a1B2".repeat(9), "xapp-" + "1-A0".repeat(5), "glpat-" + "x_Y-".repeat(6), "sk-" + "a".repeat(24), "token = abcdefghij"];
+  for (const k of keys) assert.equal(`see ${k} here`.replace(l.RED, "[redacted]"), "see [redacted] here", k);
+});

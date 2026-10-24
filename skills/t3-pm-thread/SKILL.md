@@ -7,7 +7,7 @@ description: >-
   project in T3", "set up workers and reviewers", or when a goal spans several PRs
   or threads.
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Starting the PM thread sends a prompt into T3, so it needs the user's yes to the brief. After that, the PM thread runs the project and you keep it moving.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Starting the PM thread sends a prompt into T3, so it needs the user's yes to the brief. After that, the PM thread runs the project and you keep it moving.
 
 ## Roles
 - The user decides what to build and approves anything risky or public.

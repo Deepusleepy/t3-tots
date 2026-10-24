@@ -6,7 +6,7 @@ description: >-
   other computer", "make my computers match".
 ---
 # T3 Sync
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Each apply is a write, so it needs the user's yes, and saved picks count only as its "Writes" section allows.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Each apply is a write, so it needs the user's yes, and saved picks count only as its "Writes" section allows.
 
 ## Scope (global only)
 - **Include:** T3 Code settings (keybindings, appearance, providers, model defaults; not threads or DB). Provider CLIs (Claude Code, Codex, Cursor CLI, OpenCode, Gemini and others): version, global config, rules/AGENTS.md/CLAUDE.md, skills, commands, agents, MCP server definitions. Shell profile (aliases, PATH, functions). Global git config (not credentials). Editor settings, keybindings, snippets and extension list (VS Code, Cursor, Zed). Global npm/pnpm/bun/pipx/uv tools. Runtime versions (node, python, bun).

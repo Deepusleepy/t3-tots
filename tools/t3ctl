@@ -30,6 +30,12 @@ const uuid = () => crypto.randomUUID();
 function args(a = process.argv.slice(3)) { const o = {}; for (let i = 0; i < a.length; i++) { if (a[i].startsWith("--")) { const eq = a[i].indexOf("=");
   if (eq > 2) { o[a[i].slice(2, eq)] = a[i].slice(eq + 1); continue; }
   const k = a[i].slice(2); const v = a[i + 1] !== undefined && !a[i + 1].startsWith("--") ? a[++i] : true; o[k] = v; } } return o; }
+// flags that always take a value; "--from --to dir" must not read as --from=true
+const VALUE_FLAGS = new Set(["thread", "project", "prompt", "prompt-file", "model", "effort", "title", "mode", "attach", "timeout", "from", "to", "only", "text", "pick", "answers",
+  "decision", "request", "query", "q", "limit", "last", "number", "repo", "state", "stall-min", "until", "every", "at", "days", "id", "subagent", "edit", "move", "before", "steer",
+  "run", "provider", "turn", "reason", "label", "chars", "runtime", "enable", "disable", "delete", "copy"]);
+function missingValue(o, cmd) { // --cancel takes a run id only for queue; elsewhere it is a switch
+  return Object.keys(o).find((k) => o[k] === true && (VALUE_FLAGS.has(k) || (k === "cancel" && cmd === "queue"))); }
 async function get(p) {
   let r; try { r = await fetch(BASE + p, { headers: H }); } catch (e) { throw netErr(e); }
   if (r.status === 401 || r.status === 403) throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (see Token in t3-tots-rules).`);
@@ -65,11 +71,18 @@ async function findProject(q) {
 }
 async function findThread(q) {
   if (!q || q === true) throw new Error("--thread <id|title> is required");
-  q = String(q); const s = await shell(); const all = s.threads;
-  const exact = all.find((t) => t.id === q || t.id.startsWith(q)); if (exact) return exact;
+  q = String(q); const s = await shell(); return pickThread(s.threads, q);
+}
+// exact id, else an id prefix of 8+ characters, else an exact title, else one title containing the words. Several matches: AMBIGUOUS, never a guess
+function pickThread(all, q) {
+  const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
+  const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };
+  const exact = all.find((t) => t.id === q); if (exact) return exact;
+  if (q.length >= 8) { const pre = all.filter((t) => t.id.startsWith(q)); if (pre.length === 1) return pre[0]; if (pre.length > 1) amb(pre); }
+  const same = all.filter((t) => norm(t.title) === norm(q)); if (same.length === 1) return same[0]; if (same.length > 1) amb(same);
   const m = all.filter((t) => norm(t.title).includes(norm(q))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  if (!m.length) throw new Error(`thread not found: ${q}`);
-  if (m.length > 1) console.error(`note: ${m.length} matches, using newest: ${m.map((t) => `${t.id.slice(0, 8)} ${t.title}`).slice(0, 5).join(" | ")}`);
+  if (!m.length) throw new Error(`NOT_FOUND: no thread matches "${q}"${/^[0-9a-f-]{1,7}$/i.test(q) ? " (an id prefix needs 8 or more characters)" : ""}. Find it with: T3_Q='<words>' python3 t3q.py thread`);
+  if (m.length > 1) amb(m);
   return m[0];
 }
 const recentSel = (s, pid) => { const t = s.threads.filter((t) => t.modelSelection && (!pid || t.projectId === pid)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; return t && t.modelSelection; };
@@ -101,6 +114,11 @@ async function uploadImages(list) {
   }
   return out;
 }
+// never copy secrets out of a project: dotfiles and dot folders, and any path part naming a token, auth, secret, credential or .env file
+const SENSITIVE = /token|auth|secret|credential|\.env|passw|private[-_.]?key|id_rsa|id_ed25519|\.pem$|\.p12$|\.key$|keychain/i;
+function sensitivePath(f, root) {
+  const rel = root && path.resolve(f).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep) ? path.relative(root, f) : f;
+  return rel.split(/[\\/]+/).filter(Boolean).some((part) => part.startsWith(".") || SENSITIVE.test(part)); }
 async function changedFiles(t, lastTurn) {
   const p = (await thread(t.id)).projection; const proj = (await shell()).projects.find((x) => x.id === t.projectId);
   const root = t.worktreePath || (proj && proj.workspaceRoot);
@@ -116,7 +134,10 @@ async function changedFiles(t, lastTurn) {
     const walk = (d, depth) => { if (depth > 6) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (/^(\.git|node_modules|\.next|dist|build|\.venv|__pycache__)$/.test(e.name)) continue; const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, depth + 1); else { try { const m = fs.statSync(f).mtimeMs; if (m >= from && m <= to) add(f, "modified-during-run"); } catch {} } } };
     try { walk(root, 0); } catch {} }
-  return [...found].map(([f, why]) => ({ path: f, why, exists: fs.existsSync(f) }));
+  const inside = (f) => !!root && path.resolve(f).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep);
+  return [...found].map(([f, why]) => { let st = null; try { st = fs.lstatSync(f); } catch {}
+    const skip = sensitivePath(f, root) ? "sensitive name" : !inside(f) ? "outside the project" : st && !st.isFile() ? (st.isSymbolicLink() ? "symlink" : "not a file") : "";
+    return { path: f, why, exists: !!st, skip }; });
 }
 async function thread(id) { return get(`/api/orchestration/threads/${encodeURIComponent(id)}`); }
 function messages(snap) {
@@ -400,6 +421,7 @@ function moveDir(a, b) { try { fs.renameSync(a, b); } catch (e) { if (e.code !==
 function skillsCmd(sub, o) {
   if (!["list", "install"].includes(sub)) throw new Error("usage: skills list [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
   const src = skillsSource(o.from), to = o.to && o.to !== true ? path.resolve(expandHome(o.to)) : null;
+  if (sub === "install" && !src.verified) die("BAD_MANIFEST", `no manifest.json next to ${src.dir}, so its hashes can't be checked. Nothing installed. Use a release folder or repo checkout.`);
   if (sub === "install" && !to) throw new Error("--to <skills folder> is required, e.g. ~/.claude/skills");
   const only = o.only && o.only !== true ? String(o.only).split(",").map((s) => s.trim()).filter(Boolean) : null;
   const unknown = (only || []).filter((n) => !src.names.includes(n)); if (unknown.length) throw new Error(`no skill named ${unknown.join(", ")} in ${src.dir}`);
@@ -432,6 +454,8 @@ function skillsCmd(sub, o) {
 const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw", "limits", "resume-at-reset", "snooze-until-reset", "snooze", "unsnooze", "model", "search", "tasks", "prs", "pr", "fork", "stop", "subtasks", "subagent-stop", "watch"];
 const main = async () => {
   const cmd = process.argv[2], o = args();
+  const bare = missingValue(cmd === "skills" ? args(process.argv.slice(3)) : o, cmd);
+  if (bare) die("USAGE", `--${bare} needs a value (use --${bare}=<value> for a value that starts with --). Run t3ctl with no arguments for usage.`);
   if (cmd === "skills") return skillsCmd(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "list", args(process.argv.slice(3)));
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
@@ -496,7 +520,7 @@ const main = async () => {
     const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
   else if (cmd === "files") { const t = await findThread(o.thread); const fl = await changedFiles(t, !!o["last-turn"]);
     const outDir = path.join(__dirname, "out"); if (o.copy !== "no") fs.mkdirSync(outDir, { recursive: true });
-    for (const f of fl) { let note = ""; if (f.exists && o.copy !== "no") { const dst = path.join(outDir, path.basename(f.path)); fs.copyFileSync(f.path, dst); note = ` -> ${dst}`; } console.log(`${f.exists ? "" : "(gone) "}${f.path}  [${f.why}]${note}`); }
+    for (const f of fl) { let note = f.skip ? `  (not copied: ${f.skip})` : ""; if (f.exists && !f.skip && o.copy !== "no") { const dst = path.join(outDir, path.basename(f.path)); fs.copyFileSync(f.path, dst); note = ` -> ${dst}`; } console.log(`${f.exists ? "" : "(gone) "}${f.path}  [${f.why}]${note}`); }
     if (!fl.length) console.log("no files found"); }
 
   else if (cmd === "status") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection;
@@ -602,5 +626,5 @@ const main = async () => {
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
   else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { skillHash, args, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
-else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); console.error("error:", m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message); process.exit(1); });
+if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, sensitivePath, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

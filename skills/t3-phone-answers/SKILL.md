@@ -3,11 +3,11 @@ name: t3-phone-answers
 description: >-
   Answer T3 Code thread questions from this chat (e.g. on the phone): set up the
   t3listen listener and the "T3 questions to chat" webhook routine, show each new
-  question as tap-to-answer options, and answer it in T3 with the user's exact choice.
+  question as tap-to-answer options, and answer it in T3 as t3-tots-rules "Decisions" allows.
   Use for "phone answers", "tell me when a thread asks something", runs of that
   routine, and pausing or removing it.
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Its "Decisions" section says who may answer. Phone answers need the token (t3-tots-rules "Token") and tools v1.4.0 or later (t3-install-tools).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Its "Decisions" section says who may answer. Phone answers need the token (t3-tots-rules "Token") and tools v1.4.0 or later (t3-install-tools).
 
 ## How it works
 `t3listen` runs on each computer, follows T3's live event stream (no polling) and POSTs JSON to the routine's webhook:

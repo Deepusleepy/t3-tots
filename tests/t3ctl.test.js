@@ -179,3 +179,38 @@ test("usage names --timeout for new and send", () => {
   const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
   assert.match(src, /"usage: new [^"]*--timeout seconds/); assert.match(src, /"usage: send [^"]*--timeout seconds/);
 });
+
+test("missingValue: a flag that needs a value but gets none is caught (--from --to dir)", () => {
+  assert.equal(t.missingValue(t.args(["--from", "--to", "dir"]), "skills"), "from");
+  assert.equal(t.missingValue(t.args(["--thread"]), "read"), "thread");
+  assert.equal(t.missingValue(t.args(["--cancel"]), "queue"), "cancel");
+  assert.equal(t.missingValue(t.args(["--cancel", "--thread", "x"]), "resume-at-reset"), undefined);
+  assert.equal(t.missingValue(t.args(["--json", "--force", "--dry-run", "--main", "--wait"]), "threads"), undefined);
+  assert.equal(t.missingValue(t.args(["--from=--odd", "--to", "d"]), "skills"), undefined);
+});
+test("a flag with no value exits 1 with usage before doing anything", () => {
+  const { spawnSync } = require("child_process");
+  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "tools", "t3ctl"), "skills", "install", "--from", "--to", "/nonexistent-t3tots"], { encoding: "utf8" });
+  assert.equal(r.status, 1); assert.match(r.stderr, /^USAGE: --from needs a value/);
+});
+
+test("pickThread: exact id, 8+ character prefix, exact title, one title match; several is AMBIGUOUS", () => {
+  const ts = [{ id: "aaaa1111-0000", title: "Snig PR review", updatedAt: "2026-01-01" }, { id: "aaaa1112-0000", title: "Snig fixes", updatedAt: "2026-01-03" },
+    { id: "cccc3333-0000", title: "Other", updatedAt: "2026-01-02" }, { id: "dddd4444-0000", title: "Other things", updatedAt: "2026-01-04" }];
+  assert.equal(t.pickThread(ts, "aaaa1111-0000").id, "aaaa1111-0000");
+  assert.equal(t.pickThread(ts, "cccc3333").id, "cccc3333-0000");
+  assert.throws(() => t.pickThread(ts, "aaaa111"), /^Error: NOT_FOUND.*8 or more/); // short prefixes never match ids
+  assert.throws(() => t.pickThread(ts, "aaaa11"), /NOT_FOUND/);
+  assert.throws(() => t.pickThread([...ts, { id: "aaaa1111-9999", title: "x", updatedAt: "" }], "aaaa1111"), /^Error: AMBIGUOUS: 2 threads/);
+  assert.equal(t.pickThread(ts, "other").id, "cccc3333-0000"); // exact title beats a longer title containing it
+  assert.equal(t.pickThread(ts, "pr review").id, "aaaa1111-0000");
+  assert.throws(() => t.pickThread(ts, "snig"), /AMBIGUOUS: 2 threads match "snig"[\s\S]*aaaa1112-0000  Snig fixes/);
+});
+
+test("sensitivePath: dotfiles, dot folders and token, auth, secret, credential or .env names are never copied", () => {
+  const root = path.join(path.sep, "w", "proj");
+  for (const f of [".env", ".env.production", "config/.npmrc", ".ssh/id_rsa", "secrets/db.txt", "api_token.txt", "auth.json", "creds/credentials.json", "my.env", "server.pem", "TOKEN"])
+    assert.equal(t.sensitivePath(path.join(root, f), root), true, f);
+  for (const f of ["src/app.ts", "README.md", "docs/guide.md"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
+  assert.equal(t.sensitivePath(path.join(path.sep, "home", ".hidden", "proj", "a.ts"), path.join(path.sep, "home", ".hidden", "proj")), false); // a dot folder above the root is fine
+});

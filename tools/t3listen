@@ -20,13 +20,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
 
 // ---------- config ----------
+// minutes after which an old request is skipped at startup; missing or unreadable means the documented 1440 (a day), 0 turns it off
+const staleMinutes = (v) => (v === undefined || v === null || v === "" || !Number.isFinite(+v) || +v < 0 ? 1440 : +v);
 function loadConfig() {
   const c = readJSON(CONF, null);
-  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: +(optv("--skip-stale") ?? 0) };
+  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: staleMinutes(optv("--skip-stale")) };
     die("NO_LISTEN_CONFIG", `no listen.json next to t3listen. Create it with: node "${path.join(DIR, "t3listen")}" setup  (or use --dry-run)`); }
   if (!DRY && !/^https:\/\//.test(c.url || "") && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(c.url || "")) die("BAD_LISTEN_CONFIG", "listen.json url must start with https:// (http only for localhost)");
   return { url: c.url, headers: c.headers || {}, machine: c.machine || os.hostname().replace(/\.local$/, ""), approvals: c.approvals === true || flag("--approvals"),
-    skipStaleMinutes: Number.isFinite(+c.skipStaleMinutes) ? +c.skipStaleMinutes : 0 };
+    skipStaleMinutes: staleMinutes(c.skipStaleMinutes) };
 }
 function lockDown(f) {
   if (process.platform !== "win32") { fs.chmodSync(f, 0o600); return; }
@@ -71,7 +73,9 @@ async function threadSnap(ep, id) {
 // ---------- request details (same shape as `t3ctl pending --json`) ----------
 const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
 // short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
-const RED = /(sk-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{10,}|gh[ousr]_[A-Za-z0-9]{10,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{12,}|AIza[0-9A-Za-z_-]{20,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S{8,})/gi;
+// SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
+const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
+const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S{8,})`, "gi");
 const trim = (t, n) => { t = String(t).replace(RED, "[redacted]").split(HOME).join("~").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t; };
 function contextOf(p, it) {
   const items = p.turnItems || [], end = it ? items.indexOf(it) : items.length; let user = null;
@@ -465,5 +469,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, localTime, approvalsLine };
+if (require.main !== module) module.exports = { pickThread, localTime, approvalsLine, staleMinutes, RED };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

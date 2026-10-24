@@ -145,6 +145,18 @@ class SyncSkills(unittest.TestCase):
         r = self.sync("--dry-run"); self.assertIn("in repo only", r.stdout); self.assertTrue((self.repo / "skills" / "t3-b").exists())
         r = self.sync("--prune"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertFalse((self.repo / "skills" / "t3-b").exists())
 
+    def test_cleans_its_staging_folder_and_shows_the_no_words_warning(self):
+        tmpdir = self.tmp / "tmp"; tmpdir.mkdir()
+        self.skill("t3-a", "a\n")
+        for extra in ([], ["--dry-run"]):
+            env = {k: v for k, v in os.environ.items() if k != "T3TOTS_PRIVATE_WORDS"}; env.update(HOME=str(self.tmp), TMPDIR=str(tmpdir))
+            r = subprocess.run([sys.executable, str(self.repo / "scripts" / "sync-skills"), "--from", str(self.live), *extra], capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("warning: no private words", r.stdout)
+            self.assertEqual([p.name for p in tmpdir.glob("t3tots-sync-*") if not p.name.startswith("t3tots-sync-old-")], [], extra)
+        self.skill("t3-b", "Ask someone" + "@gmail.com\n")  # a blocked sync cleans up too
+        r = subprocess.run([sys.executable, str(self.repo / "scripts" / "sync-skills"), "--from", str(self.live)], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1); self.assertEqual([p for p in tmpdir.glob("t3tots-sync-*") if not p.name.startswith("t3tots-sync-old-")], [])
+
 
 
 class ScanPrivate(unittest.TestCase):
@@ -168,8 +180,50 @@ class ScanPrivate(unittest.TestCase):
 
     def test_allows_placeholders_and_generic_paths(self):
         for sample in ["/Users" + "/you/t3-tots", "/Users" + "/Shared", "/home" + "/user/x", "C:" + "\\Users\\you\\t3-tots",
-                       "~/t3-tots", "~/.claude/skills", "$HOME/.t3", "~/Library/Caches", "a MacBook Pro or a Windows PC", "user@example.com"]:
+                       "~/t3-tots", "~/.claude/skills", "$HOME/.t3", "~/Library/Caches", "a MacBook Pro or a Windows PC", "user@example.com",
+                       "git" + "@github.com:owner/repo", "123+x" + "@users.noreply.github.com", "desktop-notifications", "LAPTOP-stand"]:
             self.assertEqual(self.hits(sample), [], sample)
+
+    def test_case_and_anchoring_gaps_are_closed(self):
+        for sample in ["Mail ME" + "@CORP.COM", "admin" + "@example.com.evil.com", "notgit" + "@github.com.evil", "/users" + "/alice", "/HOME" + "/bob",
+                       "c:" + "\\users\\carol", "desktop-" + "ab12cd3", "Laptop-" + "q1w2e3r", "~" + "/projects/x", "~" + "/developer/x", "$HOME" + "/DESKTOP/y",
+                       "github_pat_" + "A1" * 15, "glpat-" + "x" * 22]:
+            self.assertTrue(self.hits(sample), sample)
+
+    def run_scan(self, *args, words="", optout=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("T3TOTS_PRIVATE_WORDS", "T3TOTS_NO_PRIVATE_WORDS")}
+        env.update(HOME=str(self.tmp), T3TOTS_PRIVATE_WORDS=words, **({"T3TOTS_NO_PRIVATE_WORDS": "1"} if optout else {}))
+        f = self.tmp / "ok.md"; f.write_text("nothing private\n")
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "scan-private.py"), *args, str(f)], capture_output=True, text=True, env=env)
+
+    def test_no_private_words_fails_when_required_unless_opted_out(self):
+        r = self.run_scan("--require-words"); self.assertEqual(r.returncode, 1); self.assertIn("NO_PRIVATE_WORDS", r.stdout); self.assertIn("warning:", r.stdout)
+        r = self.run_scan("--require-words", optout=True); self.assertEqual(r.returncode, 0, r.stdout); self.assertIn("on purpose", r.stdout)
+        self.assertEqual(self.run_scan("--require-words", words="zorbly").returncode, 0)
+        r = self.run_scan(); self.assertEqual(r.returncode, 0); self.assertIn("warning:", r.stdout)  # plain scans only warn
+
+    def test_tools_redact_with_the_same_secret_patterns(self):
+        for f in ("tools/t3listen", "tools/export.js"):
+            m = re.search(r"const SECRET_KEYS = String\.raw`([^`]*)`;", (ROOT / f).read_text())
+            self.assertTrue(m, f); self.assertEqual(m.group(1), self.m.SECRET_KEYS, f)
+
+
+class SmallTools(unittest.TestCase):
+    def test_export_and_survey_use_the_same_settled_rule_as_t3ctl(self):
+        rule = 't.settledOverride==="settled"||(!!t.settledAt&&t.settledOverride!=="unsettled")'
+        self.assertIn("settled:" + rule + ",", (ROOT / "tools/export.js").read_text())
+        self.assertIn("if(!(" + rule + ")&&", (ROOT / "tools/survey.js").read_text())
+        js = (ROOT / "tools/t3ctl").read_text()
+        self.assertIn('const isSettled = (t) => t.settledOverride === "settled" || (!!t.settledAt && t.settledOverride !== "unsettled");', js)
+        cases = [{}, {"settledAt": "x"}, {"settledAt": "x", "settledOverride": "unsettled"}, {"settledOverride": "unsettled"}, {"settledOverride": "settled"}]
+        out = subprocess.run(["node", "-e", f"const ts={json.dumps(cases)};const a=t=>{rule};const b=require({json.dumps(str(ROOT / 'tools/t3ctl'))}).isSettled;"
+                              "console.log(JSON.stringify(ts.map(t=>[a(t),b(t)])))"], capture_output=True, text=True)
+        self.assertEqual(json.loads(out.stdout), [[False, False], [True, True], [False, False], [False, False], [True, True]], out.stderr)
+
+    def test_report_tz_without_a_zone_exits_with_usage(self):
+        for extra in (["--tz"], ["--tz", "--other"]):
+            r = subprocess.run([sys.executable, str(ROOT / "tools/report/report.py"), "in.json", "out.html", *extra], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1); self.assertIn("usage:", r.stderr); self.assertNotIn("Traceback", r.stderr)
 
 
 if __name__ == "__main__":

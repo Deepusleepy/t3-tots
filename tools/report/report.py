@@ -3,6 +3,8 @@
 import json, sys, html, re, collections, datetime as dt
 if len(sys.argv) < 3: sys.exit("usage: report.py <export.json> <out.html> [--tz <IANA zone>]  (Python 3.9+)")
 src, dst = sys.argv[1], sys.argv[2]
+if "--tz" in sys.argv and (sys.argv.index("--tz") + 1 >= len(sys.argv) or sys.argv[sys.argv.index("--tz") + 1].startswith("--")):
+    sys.exit("usage: report.py <export.json> <out.html> [--tz <IANA zone>]  (--tz needs a zone name, e.g. Asia/Tokyo)")
 try:
     from zoneinfo import ZoneInfo
     tz = ZoneInfo(sys.argv[sys.argv.index("--tz")+1]) if "--tz" in sys.argv else dt.timezone.utc

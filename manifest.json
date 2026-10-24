@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.1",
+ "version": "v1.4.2",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.1/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.2/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -12,8 +12,8 @@
    "path": "tools/t3q.py",
    "dest": "t3q.py",
    "kind": "tool",
-   "bytes": 22854,
-   "sha256": "0e298a606626dec4895d06828b304755cca3a03bdd2f190b56326860c64355d3",
+   "bytes": 23664,
+   "sha256": "0d457279efd3f56ec3cb5b20a5b9910fdea5fed6b239a37fab890bcc8300d5b5",
    "targets": [
     "macos",
     "linux",
@@ -26,8 +26,8 @@
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 71009,
-   "sha256": "f8973b22a4b19723bafe1fe7f7cd208245d91361cd1834498a5358a568daa999",
+   "bytes": 73939,
+   "sha256": "06ff14e04deefee12711e60a362ccf0498dbfaa6a4ab7c7ecfe13516245e88ad",
    "targets": [
     "macos",
     "linux",
@@ -52,8 +52,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 46652,
-   "sha256": "57f23776a46ccdc7d9702c832fd9288d91ab6c4de26c3e5cd1acdffa1f6106be",
+   "bytes": 47313,
+   "sha256": "829a7439bbf50a89154639d92602f43326f3279f90c777e886dced60205cc82d",
    "targets": [
     "macos",
     "linux",
@@ -78,8 +78,8 @@
    "path": "tools/export.js",
    "dest": "export.js",
    "kind": "tool",
-   "bytes": 5002,
-   "sha256": "fdfa0cc128c5b345dfc243f4b4c9f2f676e8f4a4c36cc96568c20ebbefae74be",
+   "bytes": 5449,
+   "sha256": "6a53bb7672dbfd2bcf3c59cd0f39a63b043b73393a405b43b620fee7546de4e1",
    "targets": [
     "macos",
     "linux",
@@ -92,8 +92,8 @@
    "path": "tools/survey.js",
    "dest": "survey.js",
    "kind": "tool",
-   "bytes": 3969,
-   "sha256": "49a21096cc9c2b4674456bb68eafc4d8e4343ef7a3cd2b638f0d79b3d9494e0c",
+   "bytes": 4008,
+   "sha256": "63917f69d6118d9a751614a175b26059bd4a76befd0a8e006ed752c33b99a5c7",
    "targets": [
     "macos",
     "linux",
@@ -203,8 +203,8 @@
    "path": "tools/report/report.py",
    "dest": "report/report.py",
    "kind": "tool",
-   "bytes": 7633,
-   "sha256": "4de739e0eef04198de4a05147b06860c57feb53428b7daaa3b663e23ffd74209",
+   "bytes": 7883,
+   "sha256": "cbc0f9af0a8429e5e86b48e56f31b872982c6d22aa4d6ec64eb391317a59601b",
    "targets": [
     "box"
    ],
@@ -221,29 +221,29 @@
    "path": "skills/t3-cleanup/SKILL.md",
    "dest": "t3-cleanup/SKILL.md",
    "kind": "skill",
-   "bytes": 19380,
-   "sha256": "9ef6fce49f6ff8c913d7133866201bc9c354133a57b9c4b5fe20c374951d0b99"
+   "bytes": 19518,
+   "sha256": "68efc5a696ff582c6755ab1de32812f00e93908a1524e391fbf58ef397808e0e"
   },
   {
    "path": "skills/t3-digest/SKILL.md",
    "dest": "t3-digest/SKILL.md",
    "kind": "skill",
-   "bytes": 1969,
-   "sha256": "b0f2c73f80303c560bfc96cd0d7c9b85e770055a6ca6096b29297c792e2c5f34"
+   "bytes": 2107,
+   "sha256": "36385aa6960b663a9bbb226e97faa32bd163eff944c3d7da3f01c8e8e8872d4c"
   },
   {
    "path": "skills/t3-get-output/SKILL.md",
    "dest": "t3-get-output/SKILL.md",
    "kind": "skill",
-   "bytes": 1884,
-   "sha256": "23a1ed7c52ee224e7ccd438f25a50e79a9ec5d24ce13a879fcfdc8eb48f3eb1c"
+   "bytes": 2185,
+   "sha256": "8cd0aa5b19a5f5361d1937d3fc6635b7c1920d2e5d92bb7f04c0e65c083dc856"
   },
   {
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 9325,
-   "sha256": "e532162ee6c5a73fd34dd4b9c1bbe7de217254ebc3a202dab6ac59493e12b9f1"
+   "bytes": 9381,
+   "sha256": "562f1196b8e0a76fb54c98b9cd14440c0466fdc75c22ffda7f5c09914d1354bf"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -256,8 +256,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 17204,
-   "sha256": "306d4ed928a3e8531a6046ea8c593966c9ab9a82dac54f8a602cb7af4c6eae45"
+   "bytes": 17384,
+   "sha256": "59da5f6a596f4a837c084ab320ea86b49b6a9c91c666a9247cae03a6fc65f86e"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -270,22 +270,22 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 10406,
-   "sha256": "79384f94c5fed949ac8544e7f7101cafe1648d9880ddc0e04c939cd1216141ff"
+   "bytes": 10551,
+   "sha256": "911002c5d09c916662bb3ff6ea98bf7e173f1922d24c114426a42a4d488a9ce6"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
    "dest": "t3-pm-thread/SKILL.md",
    "kind": "skill",
-   "bytes": 4514,
-   "sha256": "222b3069cb37a335a92ac14fa548b204ac97a6c4a50b5262ed9c13e365ca657f"
+   "bytes": 4652,
+   "sha256": "078115a55159dccdec665ea7df6b42dabbe96f5b8f74bd2ccba6c5357fc88dba"
   },
   {
    "path": "skills/t3-project-report/SKILL.md",
    "dest": "t3-project-report/SKILL.md",
    "kind": "skill",
-   "bytes": 1396,
-   "sha256": "eb537c3c688e31d6cabaa60e3fc04640323f938df0e1ee32e2a68a401bad6bd0"
+   "bytes": 1534,
+   "sha256": "3aab9ac6170d23789b084736f30a034f81993b767859f1376f3a22ae2f859601"
   },
   {
    "path": "skills/t3-project-tracker/SKILL.md",
@@ -312,8 +312,8 @@
    "path": "skills/t3-sync/SKILL.md",
    "dest": "t3-sync/SKILL.md",
    "kind": "skill",
-   "bytes": 5062,
-   "sha256": "e3d9ad16aa4a54c1ef79b61eea4996dacbe36dd7a6b21e9a3a76928267947ce8"
+   "bytes": 5200,
+   "sha256": "a7fd24c9304bde8ffd370a8e050424822427e9712dcd6d298d360c6750be9a82"
   },
   {
    "path": "skills/t3-templates/SKILL.md",
@@ -333,8 +333,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 20913,
-   "sha256": "3a427be2c4b37304b31bce085ed99445cc686b81a7ad6b96202b5323a379d7a7"
+   "bytes": 22664,
+   "sha256": "ccdf21d9f092f155dc8c210a68dc197f8ea0b2fe26d63606e1e643cf09a9588d"
   },
   {
    "path": "skills/t3-update/SKILL.md",
@@ -361,8 +361,8 @@
    "path": "skills/t3-watch/SKILL.md",
    "dest": "t3-watch/SKILL.md",
    "kind": "skill",
-   "bytes": 4935,
-   "sha256": "0fc63b0bd9b96f930e7d1dea6d0908d151b24500c9938f7bee671c088d19dd74"
+   "bytes": 5073,
+   "sha256": "63570e5b38410d60be78062d6432082e4b5482d779b7b0d6f12ce7cac28fce1a"
   }
  ]
 }

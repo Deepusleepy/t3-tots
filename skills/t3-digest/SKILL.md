@@ -6,7 +6,7 @@ description: >-
   this week", "where do my projects stand", "what happened today", or the Daily digest
   and Weekly wrap-up routines.
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only. Leave out usage and cost figures; those belong to t3-usage, on request only.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Read-only. Leave out usage and cost figures; those belong to t3-usage, on request only.
 
 ## 1. Collect from every connected computer
 - T3: `node survey.js` for activity and stale threads, and `node export.js --project all --days <1|7> --out out/digest.json`, then CopyToBox the export. `t3q.py waiting` lists what needs the user.
