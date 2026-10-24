@@ -3,7 +3,7 @@
 #   t3ui new  <project search> <model search> <effort label> <prompt>   e.g. t3ui new MyProject "haiku 5.5" Low "hi"
 #   t3ui send <exact sidebar thread title> <prompt>
 set -e
-D=${0:A:h}
+D=${0:A:h}; [[ -f $D/ui-press.applescript ]] || D=$D/macos  # installed: next to t3ui; repo checkout: tools/macos
 [[ "$(uname)" == Darwin ]] || { echo "t3ui only works on macOS"; exit 1; }
 ks(){ local s=${1//\\/\\\\}; s=${s//\"/\\\"}; osascript -e "tell application \"System Events\" to keystroke \"$s\""; }
 ret(){ osascript -e 'tell application "System Events" to key code 36'; }

@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Copy the live T3 Tots skills into skills/, check them for private details, and update manifest.json.
+
+Usage: scripts/sync-skills [--from DIR] [--dry-run] [--prune]
+  --from DIR   folder holding the live t3-*/SKILL.md skills
+               (default: $T3TOTS_SKILLS_SRC, else /home/box/agent-data/workflows, the Grok Bot box)
+  --dry-run    show what would change; write nothing
+  --prune      also remove repo skills that are no longer live (they are only listed otherwise)
+
+It never edits a skill's wording. The only changes are CRLF to LF and a final newline.
+Exits 1, copying nothing, if any skill has a private detail (see scan-private.py) or bad frontmatter;
+fix the live skill and run it again. Replaced or pruned folders are moved to a temp folder, not deleted.
+"""
+import importlib.util, os, pathlib, re, shutil, subprocess, sys, tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+DEST = ROOT / "skills"
+spec = importlib.util.spec_from_file_location("scan_private", ROOT / "scripts" / "scan-private.py")
+scan_private = importlib.util.module_from_spec(spec); spec.loader.exec_module(scan_private)
+
+
+def arg(name, default=None):
+    a = sys.argv[1:]
+    return a[a.index(name) + 1] if name in a and a.index(name) + 1 < len(a) else default
+
+
+def live_files(folder):
+    return sorted(p for p in folder.rglob("*") if p.is_file() and not p.name.startswith(".") and "__pycache__" not in p.parts)
+
+
+def normalize(data: bytes) -> bytes:
+    if b"\0" in data[:8192]:
+        return data  # binary: copy as is
+    data = data.replace(b"\r\n", b"\n")
+    return data if data.endswith(b"\n") or not data else data + b"\n"
+
+
+def frontmatter_problem(slug, text):
+    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    if not m:
+        return "SKILL.md must start with --- frontmatter ---"
+    name = re.search(r"^name:\s*(\S+)\s*$", m.group(1), re.M)
+    if not name or name.group(1).strip("\"'") != slug:
+        return f"frontmatter name must be {slug}"
+    if not re.search(r"^description:\s*\S", m.group(1), re.M):
+        return "frontmatter needs a description"
+    return None
+
+
+def main():
+    src = pathlib.Path(arg("--from") or os.environ.get("T3TOTS_SKILLS_SRC") or "/home/box/agent-data/workflows").expanduser()
+    dry, prune = "--dry-run" in sys.argv, "--prune" in sys.argv
+    live = sorted(d for d in src.glob("t3-*") if (d / "SKILL.md").is_file()) if src.is_dir() else []
+    if not live:
+        print(f"NO_SKILLS: no t3-*/SKILL.md in {src}")
+        return 1
+    stage = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-sync-"))
+    problems = []
+    for d in live:
+        for f in live_files(d):
+            out = stage / d.name / f.relative_to(d)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(normalize(f.read_bytes()))
+        bad = frontmatter_problem(d.name, (stage / d.name / "SKILL.md").read_text(encoding="utf-8"))
+        if bad:
+            problems.append(f"{d / 'SKILL.md'}: {bad}")
+    leaks = [h.replace(str(stage), str(src)) for h in scan_private.scan(list(scan_private.files([stage])), scan_private.private_words())]
+    if problems or leaks:
+        print("\n".join(problems + leaks))
+        print(f"SYNC_BLOCKED: {len(leaks)} private details, {len(problems)} frontmatter problems. Fix the live skills; nothing was copied.")
+        return 1
+
+    def tree(d):
+        return {p.relative_to(d).as_posix(): p.read_bytes() for p in live_files(d)} if d.is_dir() else None
+
+    names = [d.name for d in live]
+    changed = [n for n in names if tree(stage / n) != tree(DEST / n)]
+    extra = sorted(d.name for d in DEST.iterdir() if d.is_dir() and d.name not in names) if DEST.is_dir() else []
+    for n in names:
+        print(f"  {n}  {'new' if not (DEST / n).exists() else 'changed' if n in changed else 'same'}")
+    for n in extra:
+        print(f"  {n}  {'removed' if prune else 'in repo only (--prune removes it)'}")
+    if dry:
+        print(f"dry run: {len(changed)} of {len(names)} skills would change")
+        return 0
+    old = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-sync-old-"))
+    DEST.mkdir(exist_ok=True)
+    for n in changed + (extra if prune else []):
+        if (DEST / n).exists():
+            shutil.move(str(DEST / n), str(old / n))
+        if n in changed:
+            shutil.copytree(stage / n, DEST / n)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "make-manifest.py")])
+    print(f"synced {len(names)} skills, {len(changed)} changed" + (f"; old copies in {old}" if any(old.iterdir()) else ""))
+    return r.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

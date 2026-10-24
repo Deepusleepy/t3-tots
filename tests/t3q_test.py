@@ -1,7 +1,7 @@
 """Tests for t3q.py against a tiny fake T3 database. Run: python3 tests/t3q_test.py"""
 import json, os, sqlite3, subprocess, sys, tempfile, datetime as dt, unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__)); T3Q = os.path.join(HERE, "..", "t3q.py")
+HERE = os.path.dirname(os.path.abspath(__file__)); T3Q = os.path.join(HERE, "..", "tools", "t3q.py")
 NOW = dt.datetime.now(dt.timezone.utc)
 iso = lambda h=0: (NOW - dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 

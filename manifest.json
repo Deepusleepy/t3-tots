@@ -1,15 +1,17 @@
 {
  "name": "t3-tots",
- "version": "v1.3.1",
+ "version": "v1.4.0",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.3.1/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.0/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
  },
  "files": [
   {
-   "path": "t3q.py",
+   "path": "tools/t3q.py",
+   "dest": "t3q.py",
+   "kind": "tool",
    "bytes": 22854,
    "sha256": "0e298a606626dec4895d06828b304755cca3a03bdd2f190b56326860c64355d3",
    "targets": [
@@ -21,19 +23,23 @@
    "purpose": "read-only T3 database queries"
   },
   {
-   "path": "t3ctl",
-   "bytes": 63958,
-   "sha256": "d5d3caeecc283aff8a4326589dd0b9eb3b52610df5c8e9183f30bfde642f5446",
+   "path": "tools/t3ctl",
+   "dest": "t3ctl",
+   "kind": "tool",
+   "bytes": 70927,
+   "sha256": "e86bdea92b05319f93d29d6def203f6ca955c2daa242e6dac17006966e344227",
    "targets": [
     "macos",
     "linux",
     "windows",
     "box"
    ],
-   "purpose": "T3 local API client (Node 22+)"
+   "purpose": "T3 local API client and skills installer (Node 22+)"
   },
   {
-   "path": "t3ctl.cmd",
+   "path": "tools/windows/t3ctl.cmd",
+   "dest": "t3ctl.cmd",
+   "kind": "tool",
    "bytes": 23,
    "sha256": "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e",
    "targets": [
@@ -43,7 +49,9 @@
    "purpose": "Windows wrapper for t3ctl"
   },
   {
-   "path": "t3listen",
+   "path": "tools/t3listen",
+   "dest": "t3listen",
+   "kind": "tool",
    "bytes": 45639,
    "sha256": "d8240b752669852e794dbeb68539b839a9fcf578aec9b5758316b5c40823e897",
    "targets": [
@@ -55,7 +63,9 @@
    "purpose": "pushes T3 questions (open and close) and thread finish, fail and cancel events to your webhook (Node 22+, optional)"
   },
   {
-   "path": "t3listen.cmd",
+   "path": "tools/windows/t3listen.cmd",
+   "dest": "t3listen.cmd",
+   "kind": "tool",
    "bytes": 26,
    "sha256": "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5",
    "targets": [
@@ -65,7 +75,9 @@
    "purpose": "Windows wrapper for t3listen"
   },
   {
-   "path": "export.js",
+   "path": "tools/export.js",
+   "dest": "export.js",
+   "kind": "tool",
    "bytes": 5002,
    "sha256": "fdfa0cc128c5b345dfc243f4b4c9f2f676e8f4a4c36cc96568c20ebbefae74be",
    "targets": [
@@ -77,7 +89,9 @@
    "purpose": "redacted project export"
   },
   {
-   "path": "survey.js",
+   "path": "tools/survey.js",
+   "dest": "survey.js",
+   "kind": "tool",
    "bytes": 3969,
    "sha256": "49a21096cc9c2b4674456bb68eafc4d8e4343ef7a3cd2b638f0d79b3d9494e0c",
    "targets": [
@@ -89,9 +103,11 @@
    "purpose": "thread activity survey"
   },
   {
-   "path": "t3ui",
-   "bytes": 1710,
-   "sha256": "0c14305ecdff61bf126592ba403db9b9ca7662efad1662df5638c836061c0b8b",
+   "path": "tools/t3ui",
+   "dest": "t3ui",
+   "kind": "tool",
+   "bytes": 1813,
+   "sha256": "9ff2e0e5a3d1f0817bdd0443bbf6dae88c478c91fdc08dca85d096c88bdf412a",
    "targets": [
     "macos",
     "box"
@@ -99,7 +115,9 @@
    "purpose": "macOS UI fallback"
   },
   {
-   "path": "ui-dump.applescript",
+   "path": "tools/macos/ui-dump.applescript",
+   "dest": "ui-dump.applescript",
+   "kind": "tool",
    "bytes": 1301,
    "sha256": "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1",
    "targets": [
@@ -109,7 +127,9 @@
    "purpose": "macOS UI fallback helper"
   },
   {
-   "path": "ui-menuitem.applescript",
+   "path": "tools/macos/ui-menuitem.applescript",
+   "dest": "ui-menuitem.applescript",
+   "kind": "tool",
    "bytes": 1154,
    "sha256": "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111",
    "targets": [
@@ -119,7 +139,9 @@
    "purpose": "macOS UI fallback helper"
   },
   {
-   "path": "ui-model.applescript",
+   "path": "tools/macos/ui-model.applescript",
+   "dest": "ui-model.applescript",
+   "kind": "tool",
    "bytes": 1072,
    "sha256": "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae",
    "targets": [
@@ -129,7 +151,9 @@
    "purpose": "macOS UI fallback helper"
   },
   {
-   "path": "ui-press.applescript",
+   "path": "tools/macos/ui-press.applescript",
+   "dest": "ui-press.applescript",
+   "kind": "tool",
    "bytes": 1075,
    "sha256": "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858",
    "targets": [
@@ -139,7 +163,9 @@
    "purpose": "macOS UI fallback helper"
   },
   {
-   "path": "ui-type.applescript",
+   "path": "tools/macos/ui-type.applescript",
+   "dest": "ui-type.applescript",
+   "kind": "tool",
    "bytes": 1074,
    "sha256": "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125",
    "targets": [
@@ -149,7 +175,9 @@
    "purpose": "macOS UI fallback helper"
   },
   {
-   "path": "cleanup/scan.py",
+   "path": "tools/cleanup/scan.py",
+   "dest": "cleanup/scan.py",
+   "kind": "tool",
    "bytes": 9791,
    "sha256": "a5781f6217e1647e1162b5cd361ec7c1504f50e981e43ce9efbe5e19feeb54c2",
    "targets": [
@@ -161,7 +189,9 @@
    "purpose": "read-only disk scan"
   },
   {
-   "path": "cleanup/make_report.py",
+   "path": "tools/cleanup/make_report.py",
+   "dest": "cleanup/make_report.py",
+   "kind": "tool",
    "bytes": 15071,
    "sha256": "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca",
    "targets": [
@@ -170,13 +200,169 @@
    "purpose": "cleanup report builder"
   },
   {
-   "path": "report/report.py",
+   "path": "tools/report/report.py",
+   "dest": "report/report.py",
+   "kind": "tool",
    "bytes": 7633,
    "sha256": "4de739e0eef04198de4a05147b06860c57feb53428b7daaa3b663e23ffd74209",
    "targets": [
     "box"
    ],
    "purpose": "project report builder"
+  },
+  {
+   "path": "skills/t3-checkup/SKILL.md",
+   "dest": "t3-checkup/SKILL.md",
+   "kind": "skill",
+   "bytes": 1231,
+   "sha256": "07457d93f24d4e8726d270c4bef7a1eaa0bf2a3b05500c4d51d6612ada9124dd"
+  },
+  {
+   "path": "skills/t3-cleanup/SKILL.md",
+   "dest": "t3-cleanup/SKILL.md",
+   "kind": "skill",
+   "bytes": 19522,
+   "sha256": "4faef3a648d2b5492456e5d89f7b4af85af63b3d75155c909d1dcb849eb6843e"
+  },
+  {
+   "path": "skills/t3-digest/SKILL.md",
+   "dest": "t3-digest/SKILL.md",
+   "kind": "skill",
+   "bytes": 2089,
+   "sha256": "922763af0b1d10da343d361569e21f9f98e57fcd6fd3bb727d8ef02e0e9ee3e7"
+  },
+  {
+   "path": "skills/t3-get-output/SKILL.md",
+   "dest": "t3-get-output/SKILL.md",
+   "kind": "skill",
+   "bytes": 1844,
+   "sha256": "c6545304b09c9af9a042d263d474c59dc14af62c1e7c6c0bc88f9a795c5959e9"
+  },
+  {
+   "path": "skills/t3-getting-started/SKILL.md",
+   "dest": "t3-getting-started/SKILL.md",
+   "kind": "skill",
+   "bytes": 8989,
+   "sha256": "d7f902fd4d127b8367a5bf0d6a9d8f6bbf0ea92614304d018cb0676f48f7b091"
+  },
+  {
+   "path": "skills/t3-handoff/SKILL.md",
+   "dest": "t3-handoff/SKILL.md",
+   "kind": "skill",
+   "bytes": 1694,
+   "sha256": "3a678aa075092d9412184b0400fa6dc57a6b49861d4d06b1409b6260bcec68d9"
+  },
+  {
+   "path": "skills/t3-install-tools/SKILL.md",
+   "dest": "t3-install-tools/SKILL.md",
+   "kind": "skill",
+   "bytes": 16670,
+   "sha256": "2712ae9c5c96aa141ec7b2e6ee6e8e19bcab4389f7e5ac20d797740042b5989f"
+  },
+  {
+   "path": "skills/t3-new-thread/SKILL.md",
+   "dest": "t3-new-thread/SKILL.md",
+   "kind": "skill",
+   "bytes": 2552,
+   "sha256": "9073560b3af340910da853eef92c044bc40211794490f6b38075119bf0b1ed95"
+  },
+  {
+   "path": "skills/t3-phone-answers/SKILL.md",
+   "dest": "t3-phone-answers/SKILL.md",
+   "kind": "skill",
+   "bytes": 11074,
+   "sha256": "9b42a83107bbf6dde2d6053bc5a1dd9089e0959520737c16e16cabaa9edda79a"
+  },
+  {
+   "path": "skills/t3-pm-thread/SKILL.md",
+   "dest": "t3-pm-thread/SKILL.md",
+   "kind": "skill",
+   "bytes": 4477,
+   "sha256": "2e79483184b0c07c58ce7b5db2086e84ea4951c0e31dcc256e2776a64c7b3a4c"
+  },
+  {
+   "path": "skills/t3-project-report/SKILL.md",
+   "dest": "t3-project-report/SKILL.md",
+   "kind": "skill",
+   "bytes": 1356,
+   "sha256": "3f37b127fac3cda104dbf1c0ddbc97e9a6c91e4340f2bbbd6ee01edb275e2280"
+  },
+  {
+   "path": "skills/t3-project-tracker/SKILL.md",
+   "dest": "t3-project-tracker/SKILL.md",
+   "kind": "skill",
+   "bytes": 1700,
+   "sha256": "996de2e167837bdaf05c98ca68df7d6365b53567606de457b0c694c95a641c99"
+  },
+  {
+   "path": "skills/t3-save-learnings/SKILL.md",
+   "dest": "t3-save-learnings/SKILL.md",
+   "kind": "skill",
+   "bytes": 1103,
+   "sha256": "bc2b7d594c2e077b047195cd9157cba3b06fee9d5f04fec5ee1782f612aa105f"
+  },
+  {
+   "path": "skills/t3-status/SKILL.md",
+   "dest": "t3-status/SKILL.md",
+   "kind": "skill",
+   "bytes": 1711,
+   "sha256": "ff021b3bbb8618a5f2e55298ad336b5b50546cd4be2e59908cee70ea3f25245a"
+  },
+  {
+   "path": "skills/t3-sync/SKILL.md",
+   "dest": "t3-sync/SKILL.md",
+   "kind": "skill",
+   "bytes": 5139,
+   "sha256": "ab123324634bd2fd775b6701929eb3005683c2ba37e4a55465b722b730720200"
+  },
+  {
+   "path": "skills/t3-templates/SKILL.md",
+   "dest": "t3-templates/SKILL.md",
+   "kind": "skill",
+   "bytes": 1250,
+   "sha256": "1e5f0033026791182ef6a1ac8c1107dcff7ebc15439abe831b5565e27385ba95"
+  },
+  {
+   "path": "skills/t3-thread-actions/SKILL.md",
+   "dest": "t3-thread-actions/SKILL.md",
+   "kind": "skill",
+   "bytes": 2434,
+   "sha256": "ae3b04c6272ef9225ad762f36cdb52f2d240982b3b048a1ba735fd45c8cb5afc"
+  },
+  {
+   "path": "skills/t3-tots-rules/SKILL.md",
+   "dest": "t3-tots-rules/SKILL.md",
+   "kind": "skill",
+   "bytes": 18422,
+   "sha256": "41d89184b50d0bdd69d6ff7b23b220110db6d6a4f269ea612244a2a0d0ef2ee9"
+  },
+  {
+   "path": "skills/t3-update/SKILL.md",
+   "dest": "t3-update/SKILL.md",
+   "kind": "skill",
+   "bytes": 7282,
+   "sha256": "57228720a34099c0c206116714081fdd86bb154776a60112d511099df495131e"
+  },
+  {
+   "path": "skills/t3-usage/SKILL.md",
+   "dest": "t3-usage/SKILL.md",
+   "kind": "skill",
+   "bytes": 909,
+   "sha256": "697c4abeff39de9731019eed49be3afc75ae20d0b620413c5cad962bae335520"
+  },
+  {
+   "path": "skills/t3-waiting/SKILL.md",
+   "dest": "t3-waiting/SKILL.md",
+   "kind": "skill",
+   "bytes": 2121,
+   "sha256": "efb3db4b7b70e857940ec9e22677ad6c08b916cbf079f0244bd824ce2ce3f1a6"
+  },
+  {
+   "path": "skills/t3-watch/SKILL.md",
+   "dest": "t3-watch/SKILL.md",
+   "kind": "skill",
+   "bytes": 4950,
+   "sha256": "baf3c5a8f25b1a24d9f5e78c8108394d6184a7f2404cd5d629ed45a879d74f34"
   }
  ]
 }

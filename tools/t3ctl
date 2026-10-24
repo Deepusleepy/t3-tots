@@ -367,9 +367,72 @@ async function verifyDelivery(t, messageId, wantQueue) {
   if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return; }
   throw new Error(`SEND_STUCK: the message is ${d} in "${t.title}" and resuming the queue didn't start it. Try: t3ctl queue --thread ${t.id} --resume, then t3ctl status --thread ${t.id}`);
 }
+// --- skills: copy the T3 Tots skills into an agent's skills folder (no T3 or token needed) ---
+// Source: --from <repo checkout | release folder | skills folder>, else skills/ next to t3ctl, else ../skills (repo checkout).
+// A manifest.json beside the skills folder pins every file; any mismatch installs nothing.
+// <to>/.t3-tots-skills.json records what was installed, so a skill edited after install is kept unless --force.
+const SKILLS_RECORD = ".t3-tots-skills.json";
+const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
+const expandHome = (p) => String(p).replace(/^~(?=$|[\/\\])/, HOME);
+function skillFiles(dir) { // relative paths (with /) of every file in a skill folder, sorted; dotfiles skipped
+  const out = []; const walk = (d, rel) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name.startsWith(".") || e.name === "__pycache__") continue;
+    const r = rel ? `${rel}/${e.name}` : e.name; if (e.isDirectory()) walk(path.join(d, e.name), r); else if (e.isFile()) out.push(r); } };
+  walk(dir, ""); return out.sort(); }
+function skillHash(dir) { // one hash per skill folder: its file list and every file's sha256
+  if (!fs.existsSync(path.join(dir, "SKILL.md"))) return null;
+  return sha256(skillFiles(dir).map((r) => `${r}\0${sha256(fs.readFileSync(path.join(dir, ...r.split("/"))))}\n`).join("")); }
+function skillsSource(from) {
+  const cands = from && from !== true ? [path.join(expandHome(from), "skills"), expandHome(from)] : [path.join(__dirname, "skills"), path.join(__dirname, "..", "skills")];
+  const isOurs = (d) => { try { return JSON.parse(fs.readFileSync(path.join(d, "..", "manifest.json"), "utf8")).name === "t3-tots"; } catch { return false; } };
+  const dir = cands.find((d) => fs.existsSync(d) && fs.readdirSync(d).some((n) => fs.existsSync(path.join(d, n, "SKILL.md"))) && ((from && from !== true) || isOurs(d)));
+  if (!dir) die("NO_SKILLS_SOURCE", `no skills found in ${cands.join(" or ")}. Pass --from <repo checkout or release folder>.`);
+  const names = fs.readdirSync(dir).filter((n) => !n.startsWith(".") && fs.existsSync(path.join(dir, n, "SKILL.md"))).sort();
+  const mf = path.join(dir, "..", "manifest.json"); let pinned = null;
+  if (fs.existsSync(mf)) { let m; try { m = JSON.parse(fs.readFileSync(mf, "utf8")); } catch (e) { die("BAD_MANIFEST", `${mf}: ${e.message}`); }
+    pinned = new Map((m.files || []).filter((f) => f.kind === "skill").map((f) => [f.path, f.sha256]));
+    const bad = [];
+    for (const n of names) for (const r of skillFiles(path.join(dir, n))) { const p = `skills/${n}/${r}`; if (pinned.get(p) !== sha256(fs.readFileSync(path.join(dir, n, ...r.split("/"))))) bad.push(p); }
+    for (const p of pinned.keys()) if (!fs.existsSync(path.join(dir, "..", ...p.split("/")))) bad.push(p);
+    if (bad.length) die("HASH_MISMATCH", `${bad.join(", ")} differ from ${mf}. Nothing installed.`);
+    return { dir, names, version: m.version || "?", verified: true }; }
+  return { dir, names, version: "unversioned", verified: false }; }
+function moveDir(a, b) { try { fs.renameSync(a, b); } catch (e) { if (e.code !== "EXDEV") throw e; fs.cpSync(a, b, { recursive: true }); fs.rmSync(a, { recursive: true }); } } // EXDEV: another drive
+function skillsCmd(sub, o) {
+  if (!["list", "install"].includes(sub)) throw new Error("usage: skills list [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
+  const src = skillsSource(o.from), to = o.to && o.to !== true ? path.resolve(expandHome(o.to)) : null;
+  if (sub === "install" && !to) throw new Error("--to <skills folder> is required, e.g. ~/.claude/skills");
+  const only = o.only && o.only !== true ? String(o.only).split(",").map((s) => s.trim()).filter(Boolean) : null;
+  const unknown = (only || []).filter((n) => !src.names.includes(n)); if (unknown.length) throw new Error(`no skill named ${unknown.join(", ")} in ${src.dir}`);
+  let rec = { skills: {} }; if (to) try { rec = JSON.parse(fs.readFileSync(path.join(to, SKILLS_RECORD), "utf8")); rec.skills = rec.skills || {}; } catch {}
+  const rows = (only || src.names).map((n) => { const want = skillHash(path.join(src.dir, n)); if (!to) return { n, st: "available" };
+    const have = skillHash(path.join(to, n)), was = rec.skills[n] && rec.skills[n].hash;
+    const st = !fs.existsSync(path.join(to, n)) ? "new" : have === want ? "same" : have && have === was ? "update" : "edited";
+    return { n, st, want }; });
+  console.log(`skills ${src.version} from ${src.dir}${src.verified ? " (hashes verified)" : " (no manifest.json, hashes not verified)"}${to ? ` -> ${to}` : ""}`);
+  const dry = sub === "list" || !!o["dry-run"], stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const label = { available: "", new: "install", update: "update", same: "up to date", edited: o.force ? "replace (changed here; old copy kept in out/skills-backup)" : "kept: changed here (--force replaces it)" };
+  if (to && !dry) fs.mkdirSync(to, { recursive: true });
+  for (const r of rows) {
+    console.log(`  ${r.n}  ${label[r.st]}`.trimEnd());
+    if (dry || (r.st === "edited" && !o.force)) continue;
+    if (r.st === "same") { rec.skills[r.n] = { hash: r.want, version: src.version }; continue; }
+    const dst = path.join(to, r.n), tmp = path.join(to, `.${r.n}.t3tots-tmp`);
+    fs.rmSync(tmp, { recursive: true, force: true }); // our own scratch folder from an interrupted run
+    for (const f of skillFiles(path.join(src.dir, r.n))) { const t = path.join(tmp, ...f.split("/")); fs.mkdirSync(path.dirname(t), { recursive: true }); fs.copyFileSync(path.join(src.dir, r.n, ...f.split("/")), t); }
+    if (fs.existsSync(dst)) { const bk = path.join(__dirname, "out", "skills-backup", stamp); fs.mkdirSync(bk, { recursive: true }); moveDir(dst, path.join(bk, r.n)); r.backup = path.join(bk, r.n); }
+    fs.renameSync(tmp, dst); rec.skills[r.n] = { hash: r.want, version: src.version };
+    if (r.backup) console.log(`    old copy: ${r.backup}`);
+  }
+  const n = (s) => rows.filter((r) => r.st === s).length;
+  if (!to) console.log(`${rows.length} skills. Add --to <folder> to compare with an installed copy.`);
+  else if (sub === "list") console.log(`${n("new")} not installed, ${n("update")} to update, ${n("same")} up to date, ${n("edited")} changed here`);
+  else console.log(`${dry ? "dry run: would install" : "installed"} ${n("new")} new, ${dry ? "update" : "updated"} ${n("update") + (o.force ? n("edited") : 0)}, ${n("same")} up to date, ${o.force ? 0 : n("edited")} kept (changed here)`);
+  if (to && !dry) { rec.version = src.version; fs.writeFileSync(path.join(to, SKILLS_RECORD), JSON.stringify(rec, null, 1) + "\n"); }
+}
 const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw", "limits", "resume-at-reset", "snooze-until-reset", "snooze", "unsnooze", "model", "search", "tasks", "prs", "pr", "fork", "stop", "subtasks", "subagent-stop", "watch"];
 const main = async () => {
   const cmd = process.argv[2], o = args();
+  if (cmd === "skills") return skillsCmd(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "list", args(process.argv.slice(3)));
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
   else if (cmd === "models") { const m = new Map(); for (const t of (await shell()).threads) if (t.modelSelection) m.set(`${t.modelSelection.instanceId} ${t.modelSelection.model}`, (t.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id))?.id || "-"); for (const [k, v] of [...m].sort()) console.log(`${k}  (effort key: ${v})`); }
@@ -537,7 +600,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e --wait] | send --thread id|title --prompt t [--wait] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { args, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { skillHash, args, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); console.error("error:", m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message); process.exit(1); });

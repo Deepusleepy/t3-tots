@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
-const t = require(path.join(__dirname, "..", "t3ctl"));
+const t = require(path.join(__dirname, "..", "tools", "t3ctl"));
 
 test("riskOf: read-only commands are low", () => {
   for (const p of ["git status", "ls -la && git log --oneline -5", "rg TODO src", "go vet ./...", "npm test"]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
@@ -149,7 +149,7 @@ test("limitLine: title first, id last", () => {
 });
 test("localT: names the zone (IST, not GMT+5:30)", () => {
   const { execFileSync } = require("child_process");
-  const out = (tz) => execFileSync(process.execPath, ["-e", `console.log(require(${JSON.stringify(path.join(__dirname, "..", "t3ctl"))}).localT("2026-01-01T12:00:00Z"))`], { env: { ...process.env, TZ: tz } }).toString().trim();
+  const out = (tz) => execFileSync(process.execPath, ["-e", `console.log(require(${JSON.stringify(path.join(__dirname, "..", "tools", "t3ctl"))}).localT("2026-01-01T12:00:00Z"))`], { env: { ...process.env, TZ: tz } }).toString().trim();
   assert.match(out("Asia/Kolkata"), /5:30 PM IST$|17:30 IST$/i);
   assert.doesNotMatch(out("America/Los_Angeles"), /GMT/);
   assert.equal(t.localT(null), "-");
