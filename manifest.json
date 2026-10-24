@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.3.0",
+ "version": "v1.3.1",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.3.0/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.3.1/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -10,8 +10,8 @@
  "files": [
   {
    "path": "t3q.py",
-   "bytes": 20423,
-   "sha256": "024a665d02e48d1031a7c49f885c7c3d74f03f2de45e0bdcac38fe500dc1af4c",
+   "bytes": 22552,
+   "sha256": "530095e433bd183109f6392e2c2a0317044ab002c0681ff7fb9fa0950babfd44",
    "targets": [
     "macos",
     "linux",
@@ -22,8 +22,8 @@
   },
   {
    "path": "t3ctl",
-   "bytes": 62218,
-   "sha256": "e3141e2016b54d3ce4d1425200770309228fc6d7840c8ddd853e546d41f24952",
+   "bytes": 63724,
+   "sha256": "e7d78a2b63f694f03d586d2c6b197949c7406833fc7ee5377dfb08899d1b8284",
    "targets": [
     "macos",
     "linux",
@@ -44,8 +44,8 @@
   },
   {
    "path": "t3listen",
-   "bytes": 44226,
-   "sha256": "86c956c609df6aabf71928246d7a62cb59d627f69e63cd42f69bd0e7dea1df09",
+   "bytes": 45639,
+   "sha256": "d8240b752669852e794dbeb68539b839a9fcf578aec9b5758316b5c40823e897",
    "targets": [
     "macos",
     "linux",

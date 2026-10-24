@@ -5,29 +5,37 @@ HERE = os.path.dirname(os.path.abspath(__file__)); T3Q = os.path.join(HERE, ".."
 NOW = dt.datetime.now(dt.timezone.utc)
 iso = lambda h=0: (NOW - dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-def make_db(folder, legacy_approvals=False):
+def make_db(folder, legacy_approvals=False, extra_threads=False):
     db = sqlite3.connect(os.path.join(folder, "statev2.sqlite"))
     db.executescript("""
-    create table projection_projects (project_id text, title text, workspace_root text);
+    create table projection_projects (project_id text, title text, workspace_root text, deleted_at text);
     create table orchestration_v2_projection_threads (thread_id text, project_id text, title text, created_at text, updated_at text, archived_at text, deleted_at text, payload_json text);
-    create table orchestration_v2_projection_runs (run_id text, thread_id text, ordinal int, status text, requested_at text, payload_json text);
+    create table orchestration_v2_projection_runs (run_id text, thread_id text, ordinal int, status text, requested_at text, completed_at text, payload_json text);
     create table orchestration_v2_projection_runtime_requests (thread_id text, kind text, status text, created_at text, payload_json text);
     create table orchestration_v2_projection_messages (thread_id text, role text, created_at text, payload_json text);""")
     if legacy_approvals: db.execute("create table projection_pending_approvals (thread_id text, status text)")
-    db.execute("insert into projection_projects values ('p1', 'Demo', '/tmp/demo')")
-    def thread(tid, title, run_status, held=False, reply="Done."):
-        db.execute("insert into orchestration_v2_projection_threads values (?,?,?,?,?,null,null,?)", (tid, "p1", title, iso(5), iso(1), json.dumps({"creationSource": "web"})))
-        db.execute("insert into orchestration_v2_projection_runs values (?,?,1,?,?,?)", ("r-" + tid, tid, run_status, iso(3), json.dumps({"queueHeld": held})))
-        db.execute("insert into orchestration_v2_projection_messages values (?,?,?,?)", (tid, "assistant", iso(1), json.dumps({"text": reply})))
+    db.execute("insert into projection_projects values ('p1', 'Demo', '/tmp/demo', null)")
+    def thread(tid, title, run_status, held=False, reply="Done.", age=1, updated=None, source="web", **extra):
+        db.execute("insert into orchestration_v2_projection_threads values (?,?,?,?,?,null,null,?)", (tid, "p1", title, iso(age + 4), iso(updated if updated is not None else age), json.dumps({"creationSource": source, **extra})))
+        db.execute("insert into orchestration_v2_projection_runs values (?,?,1,?,?,null,?)", ("r-" + tid, tid, run_status, iso(age + 2), json.dumps({"queueHeld": held})))
+        db.execute("insert into orchestration_v2_projection_messages values (?,?,?,?)", (tid, "assistant", iso(age), json.dumps({"text": reply})))
     thread("t-held", "Held queue", "queued", held=True)
     thread("t-queued", "Behind a run", "queued")
     thread("t-done", "Finished work", "completed")
     thread("t-ask", "Asks a question", "completed", reply="Should I merge it?")
+    if extra_threads:
+        thread("t-settled", "Settled question", "completed", reply="Want me to open the PR?", settledAt=iso(0))
+        thread("t-old", "Old work touched today", "completed", age=24 * 20, updated=0)  # settled or renamed today; last real activity 20 days ago
+        thread("t-pm", "Notchbot PM", "completed", age=2)
+        thread("t-pm2", "Notchbot release notes", "completed", age=3)
+        thread("t-snig-a", "Snig review round", "completed", age=2)
+        thread("t-snig-b", "Snig review pass", "completed", age=2)
+        thread("t-spawn", "Spawned helper task", "completed", source="mcp")
     db.execute("insert into orchestration_v2_projection_runtime_requests values ('t-done', 'command', 'pending', ?, '{}')", (iso(2),))
     db.commit(); db.close()
 
-def run(folder, cmd):
-    env = {**os.environ, "T3_HOME": folder}
+def run(folder, cmd, **env_extra):
+    env = {**os.environ, "T3_HOME": folder, **env_extra}
     return subprocess.run([sys.executable, T3Q, cmd], capture_output=True, text=True, env=env, timeout=60).stdout
 
 class T3qTest(unittest.TestCase):
@@ -60,5 +68,45 @@ class T3qTest(unittest.TestCase):
         self.assertIn("queue held: Held queue", out)
         self.assertNotIn("STUCK? live run: Held queue", out)
         self.assertNotIn("\u2014", out)                  # no em dashes in output
+
+    def test_settled_thread_is_not_waiting(self):
+        make_db(self.dir, extra_threads=True)
+        self.assertNotIn("Settled question", run(self.dir, "waiting"))
+        self.assertIn("Settled question | settled", run(self.dir, "overview"))
+
+    def test_activity_time_ignores_updated_at(self):
+        make_db(self.dir, extra_threads=True)
+        self.assertNotIn("Old work touched today", run(self.dir, "overview", T3_DAYS="3"))
+        self.assertIn("Old work touched today", run(self.dir, "overview", T3_DAYS="30"))
+
+    def test_projects_last_uses_activity(self):
+        make_db(self.dir, extra_threads=True)
+        out = run(self.dir, "projects")
+        self.assertIn("Demo", out); self.assertNotIn("T3_SCHEMA_CHANGED", out)
+
+    def test_thread_picks_clear_match(self):
+        make_db(self.dir, extra_threads=True)
+        out = run(self.dir, "thread", T3_Q="notchbot pm")
+        self.assertIn("THREAD Notchbot PM", out); self.assertNotIn("AMBIGUOUS", out)
+
+    def test_thread_by_id(self):
+        make_db(self.dir, extra_threads=True)
+        self.assertIn("THREAD Settled question", run(self.dir, "thread", T3_Q="t-settled"))
+
+    def test_thread_close_matches_are_ambiguous(self):
+        make_db(self.dir, extra_threads=True)
+        out = run(self.dir, "thread", T3_Q="snig review")
+        self.assertIn("AMBIGUOUS", out); self.assertIn("Snig review round", out); self.assertIn("Snig review pass", out)
+        self.assertNotIn("THREAD ", out)
+
+    def test_thread_no_good_match(self):
+        make_db(self.dir, extra_threads=True)
+        out = run(self.dir, "thread", T3_Q="zzz nonexistent thread")
+        self.assertIn("NO_GOOD_MATCH", out); self.assertNotIn("THREAD ", out)
+
+    def test_thread_skips_spawned_unless_all(self):
+        make_db(self.dir, extra_threads=True)
+        self.assertNotIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task"))
+        self.assertIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task", T3_ALL="1"))
 
 if __name__ == "__main__": unittest.main(verbosity=1)
