@@ -66,18 +66,46 @@ test("reportEnd redacts the event before it is first saved to listen-state.json"
   assert.ok(body.includes("cleanEvent(e)"), "reportEnd cleans the event");
   assert.ok(body.indexOf("cleanEvent(e)") < body.indexOf("saveState()"), "cleanEvent runs before the first saveState");
 });
-test("restart catch-up: any non-busy thread in the window, not only END[t.status]; buildEnd still skips", () => {
+test("restart catch-up: any thread in the window (busy too), not only END[t.status]; buildEnd still skips", () => {
   const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
   const start = src.indexOf("const since = S.lastAlive");
   const end = src.indexOf("S.lastAlive = Date.now()", start);
   const block = src.slice(start, end);
+  assert.ok(block.includes("catchUpThreads("), block);
   assert.ok(block.includes("reportEnd(ep, t, null, { since })"), block);
   assert.ok(!block.includes("END[t.status]"), block);
-  assert.ok(block.includes("!isBusy(t)"), block);
+  assert.ok(!block.includes("!isBusy(t)"), block); // failed ends must still report when the thread is busy
   assert.ok(!/\b36e5\b/.test(block) && !block.includes("3600000"), block); // no hour cap; buildEnd skips completedAt < since
   assert.ok(src.includes('skip: "ended before the listener\'s last run"'));
   assert.ok(src.includes("sub-task thread that didn't fail"));
   assert.ok(src.includes("thread is going on with its next queued message"));
+  assert.ok(src.includes("listening = false"), "socket close freezes lastAlive");
+});
+
+test("endedAt: missing completedAt uses now, not Date.parse(0)", () => {
+  const now = Date.parse("2026-10-25T12:00:00Z");
+  assert.equal(l.endedAt({ completedAt: "2026-10-25T11:00:00Z" }, now), Date.parse("2026-10-25T11:00:00Z"));
+  assert.equal(l.endedAt({}, now), now);
+  assert.equal(l.endedAt({ completedAt: "" }, now), now);
+  assert.equal(l.endedAt({ completedAt: "not-a-date" }, now), now);
+  assert.ok(l.endedAt({}, now) !== Date.parse(0));
+  assert.ok(l.endedAt({}, now) > 1e12); // a real "now", not epoch / year-2000 Date.parse(0)
+});
+
+test("tickLastAlive: freeze lastAlive while the socket is down", () => {
+  const last = Date.parse("2026-10-25T10:00:00Z"), now = Date.parse("2026-10-25T12:00:00Z");
+  assert.equal(l.tickLastAlive(true, last, now), now);
+  assert.equal(l.tickLastAlive(false, last, now), last);
+  assert.equal(l.tickLastAlive(false, undefined, now), undefined);
+});
+
+test("catchUpThreads: includes a busy thread so a failed downtime end is still seen", () => {
+  const since = Date.parse("2026-10-25T10:00:00Z");
+  const idle = { id: "a", status: "idle", updatedAt: "2026-10-25T11:00:00Z" };
+  const busy = { id: "b", status: "running", activeRunId: "r2", updatedAt: "2026-10-25T11:30:00Z" };
+  const old = { id: "c", status: "idle", updatedAt: "2026-10-25T09:00:00Z" };
+  const got = l.catchUpThreads([idle, busy, old], since).map((t) => t.id);
+  assert.deepEqual(got, ["a", "b"]);
 });
 
 test("restart catch-up: reportEnd with since and no run id reports every ended run, not only ended.at(-1)", () => {

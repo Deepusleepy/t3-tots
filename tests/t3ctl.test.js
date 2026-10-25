@@ -352,6 +352,73 @@ test("riskOf: single-quoted git.exe / git.cmd are judged like double-quoted", ()
     assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
 });
 
+test("riskOf: push -d and quoted delete refspecs are high; HEAD:branch stays normal", () => {
+  for (const p of ["git push -d origin feature", "git push origin ':feature'", 'git push origin ":feature"', "git push -u origin ':gone'"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push HEAD:branch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+});
+
+test("riskOf: checkout pathspec / tree-ish+path / --ours/--theirs are high; checkout -b is not", () => {
+  for (const p of ["git checkout .", "git checkout HEAD file", "git checkout HEAD~1 src/app.js", "git checkout --ours file", "git checkout --theirs path"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --help" }).level, "high");
+});
+
+test("riskOf: unique prefixes of restore --worktree and switch --discard-changes are high", () => {
+  for (const p of ["git restore --staged --work file", "git restore --staged --workt file", "git restore --w file", "git switch --discard-c main", "git switch --dis main"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+});
+
+test("riskOf: PowerShell rm -Recurse/-Force is high; Unix rm -r stays a single Unix match", () => {
+  for (const p of ["rm -Recurse build", "rm -Force build", "rm -fo build", 'pwsh -Command "rm -Recurse build"']) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.ok(r.reasons.some((x) => /PowerShell rm/i.test(x)), p);
+  }
+  const unix = t.riskOf({ requestKind: "command", prompt: "rm -r build" });
+  assert.equal(unix.level, "high");
+  assert.equal(unix.reasons.filter((x) => /PowerShell rm/i.test(x)).length, 0);
+  assert.equal(unix.reasons.length, 1);
+});
+
+test("riskOf: find -exec quoted rm, wrappers, unlink/rmdir, and -execdir sh -c rm are high and not read-only", () => {
+  const high = [
+    "find . -exec 'rm' {} \\;", "find . -exec command rm {} \\;", "find . -exec env rm {} \\;",
+    "find . -execdir sh -c 'rm \"$1\"' _ {} \\;", "find . -exec unlink {} \\;", "find . -exec rmdir {} \\;",
+    "find . -okdir env rm {} \\;", "find . -ok unlink {} \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+});
+
+test("riskOf: fetch --force/-f, pull prune, and remote prune are high; bare fetch stays low", () => {
+  for (const p of ["git fetch --force", "git fetch -f origin feature", "git pull -p", "git pull --prune", "git remote prune origin"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of ["git fetch", "git fetch origin feature"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+});
+
+test("riskOf: unique prefixes of already-high long options; skip prefixes git itself rejects", () => {
+  for (const p of ["git push --al origin", "git push --mi origin", "git push --pru origin", "git branch --del feature", "git branch --delet feature", "git branch --mov old new", "rm -d emptydir", "rm --rec build"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  // git branch --for is ambiguous (--force vs --format); git fetch --pru is ambiguous (--prune vs --prune-tags)
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pru" }).level, "high");
+});
+
+test("uopt: unique prefixes of --all start at --al, not the ambiguous --a", () => {
+  const re = new RegExp(t.uopt("all", 2) + "\\b");
+  assert.ok(re.test("--al")); assert.ok(re.test("--all")); assert.ok(!re.test("--a")); assert.ok(!re.test("--atomic"));
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");

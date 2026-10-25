@@ -231,7 +231,7 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   const delegated = t.id.startsWith(DELEGATED);
   if (delegated && event !== "thread.failed") return { skip: "sub-task thread that didn't fail" };
   if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
-  if (opts.since && Date.parse(run.completedAt || 0) < opts.since) return { skip: "ended before the listener's last run" };
+  if (opts.since && endedAt(run) < opts.since) return { skip: "ended before the listener's last run" };
   const items = p.turnItems || [], txt = (x) => x.text ?? x.content ?? (x.message && x.message.text);
   const said = items.filter((x) => x.type === "assistant_message" && typeof txt(x) === "string" && txt(x).trim());
   const reply = said.filter((x) => x.runId === run.id).at(-1) || said.at(-1);
@@ -311,7 +311,18 @@ async function checkFinish(ep, t, prev) {
   await reportEnd(ep, t, prev.activeRunId, { live: true });
 }
 function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k]; }
-setInterval(() => { if (DRY || !C) return; S.lastAlive = Date.now(); try { saveState(); } catch {} }, 60000).unref();
+// lastAlive is a connected-session watermark. Do not advance it while the socket is down, or catch-up
+// `since` shrinks to ~2 min and finishes from a longer outage are skipped.
+let listening = false;
+const endedAt = (run, now = Date.now()) => { const t = Date.parse(run && run.completedAt); return Number.isFinite(t) ? t : now; };
+const tickLastAlive = (open, lastAlive, now = Date.now()) => open ? now : lastAlive;
+const catchUpThreads = (threads, since) => (threads || []).filter((t) => Date.parse(t.updatedAt || 0) > since); // busy too: failed always fires
+setInterval(() => {
+  if (DRY || !C) return;
+  const next = tickLastAlive(listening, S.lastAlive, Date.now());
+  if (next === S.lastAlive) return;
+  S.lastAlive = next; try { saveState(); } catch {};
+}, 60000).unref();
 
 function connect(ep) {
   return new Promise((resolve) => {
@@ -330,7 +341,7 @@ function connect(ep) {
         for (const v of m.values || []) work(() => onItem(ep, v, first && v.kind === "snapshot" && (first = false, true)));
       }
     };
-    ws.onerror = () => {}; ws.onclose = () => { clearInterval(hb); busy.then(() => resolve(!first)); };
+    ws.onerror = () => {}; ws.onclose = () => { listening = false; clearInterval(hb); busy.then(() => resolve(!first)); };
   });
 }
 async function onItem(ep, v, full) {
@@ -347,7 +358,9 @@ async function onItem(ep, v, full) {
       for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); // not delivered before the restart
       const since = S.lastAlive ? S.lastAlive - 120000 : 0; // first run with this feature: nothing to catch up on
       // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
-      if (since) for (const t of v.snapshot.threads || []) if (!isBusy(t) && Date.parse(t.updatedAt || 0) > since) await reportEnd(ep, t, null, { since });
+      // look at busy threads too so a failed end from downtime is still reported (failed always fires)
+      if (since) for (const t of catchUpThreads(v.snapshot.threads, since)) await reportEnd(ep, t, null, { since });
+      listening = true;
       S.lastAlive = Date.now(); saveState();
     }
     log(`watching ${live.size} threads (${[...runSeen.values()].filter(isActive).length} running); ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped; run ends on`);
@@ -509,5 +522,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo };
+if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
