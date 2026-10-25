@@ -176,6 +176,38 @@ test("usageLimitFields: autoResumeSet matches the ended run id, not a later late
   assert.equal(same.autoResumeSet, true);
 });
 
+test("usageLimitFields: server_error text mentioning usage limit is not a usage limit", () => {
+  const reset = "2026-01-01T05:00:00Z";
+  const run = { id: "r1", status: "failed", lastErrorClass: "server_error",
+    lastError: { message: "upstream said usage limit" }, usageLimitResetAt: reset };
+  const t = { id: "t", status: "failed", latestRunId: "r1", lastErrorClass: "server_error",
+    lastError: { message: "upstream said usage limit" }, usageLimitResetAt: reset };
+  assert.equal(l.usageLimitFields(t, run), null);
+  assert.equal(l.usageLimitFields(t, { ...run, error: "upstream said usage limit" }), null);
+  const noClass = { id: "r2", status: "failed", lastError: { message: "hit a usage limit" }, usageLimitResetAt: reset };
+  assert.equal(l.usageLimitFields({ id: "t", status: "failed", latestRunId: "r2" }, noClass).usageLimit, true);
+});
+
+test("canArmResume: only the latest ended run; shellReadyToArm retries while busy", () => {
+  const ended = { id: "r1", status: "failed", lastErrorClass: "usage_limit", usageLimitResetAt: "2026-01-01T05:00:00Z" };
+  const olderFailed = { id: "t", status: "failed", latestRunId: "r2", lastErrorClass: "server_error" };
+  assert.equal(l.usageLimitFields(olderFailed, ended).usageLimit, true);
+  assert.equal(l.canArmResume(olderFailed, ended), false);
+  assert.equal(l.canArmResume({ id: "t", status: "failed", latestRunId: "r1" }, ended), true);
+  assert.equal(l.canArmResume({ id: "t", status: "failed" }, ended), true);
+  assert.equal(l.shellReadyToArm({ id: "t", status: "running", activeRunId: "r2", latestRunId: "r2" }), false);
+  assert.equal(l.shellReadyToArm({ id: "t", status: "failed", latestRunId: "r1" }), true);
+  assert.equal(l.shellReadyToArm(null), false);
+  assert.equal(l.canArmResume({ id: "t", status: "running", activeRunId: "r2", latestRunId: "r2" }, ended), false);
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const start = src.indexOf("async function armResume");
+  const end = src.indexOf("\n}\n", start);
+  const body = src.slice(start, end);
+  assert.ok(body.includes("!shellReadyToArm(t)"), body);
+  assert.ok(body.includes("canArmResume(t, run)"), body);
+  assert.ok(!/for \(let i = 0; i < 3 && !t;/.test(body), body);
+});
+
 test("catchUpThreads: includes a busy thread so a failed downtime end is still seen", () => {
   const since = Date.parse("2026-10-25T10:00:00Z");
   const idle = { id: "a", status: "idle", updatedAt: "2026-10-25T11:00:00Z" };

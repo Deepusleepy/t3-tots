@@ -563,6 +563,63 @@ test("uopt: unique prefixes of --all start at --al, not the ambiguous --a", () =
   assert.ok(re.test("--al")); assert.ok(re.test("--all")); assert.ok(!re.test("--a")); assert.ok(!re.test("--atomic"));
 });
 
+test("riskOf: find -exec mksh/rbash/time/flock/setsid/gtimeout/perl/node/python3 deletes are high and not read-only", () => {
+  const high = [
+    "find . -exec mksh -c 'rm {}' \\;",
+    "find . -exec rbash -c 'rm {}' \\;",
+    "find . -exec time rm {} \\;",
+    "find . -exec flock /tmp/l rm {} \\;",
+    "find . -exec setsid rm {} \\;",
+    "find . -exec gtimeout 1 rm {} \\;",
+    "find . -exec perl -e 'unlink @ARGV' {} \\;",
+    "find . -exec node -e 'require(\"fs\").unlinkSync(\"a\")' \\;",
+    "find . -exec python3 -c 'os.remove(\"a\")' \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }).level, "low");
+});
+
+test("riskOf: push --branches/--branch/--br are high like --all", () => {
+  for (const p of ["git push --branches", "git push --branch", "git push --br", "git push --all", "git push --al"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  const re = new RegExp(t.uopt("branches", 2) + "\\b");
+  assert.ok(re.test("--br")); assert.ok(re.test("--branch")); assert.ok(re.test("--branches"));
+  assert.ok(!re.test("--b")); assert.ok(!re.test("--atomic"));
+});
+
+test("riskOf: extensionless and magic pathspec checkouts are high; bare branch and -b stay normal", () => {
+  for (const p of [
+    "git checkout Makefile",
+    "git checkout README",
+    'git checkout "README"',
+    "git checkout ':(literal)README'",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
+});
+
+test("riskOf: backslash-newline continuation on branch/checkout/clean/reset is high", () => {
+  for (const p of [
+    "git branch \\\n  -f existing HEAD",
+    "git checkout \\\n  -- f",
+    "git clean \\\n  -f",
+    "git reset \\\n--hard",
+    "git reset \\\n  --hard",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+});
+
+test("riskOf: ANSI-C $':…' delete refspecs are high", () => {
+  for (const p of ["git push origin $':gone'", "git push origin $':feature'", "git push origin $'+feature'"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
