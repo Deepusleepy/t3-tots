@@ -268,23 +268,47 @@ function wsRpc(ep, tag, payload) {
     ws.onerror = (e) => { clearTimeout(to); reject(new Error(`ws error ${e.message || ""}`)); };
   });
 }
-async function armResume(ep, threadId) { // -> { autoResumeSet, autoResumeNote }
+// usageLimitFields: webhook fields for a usage-limit stop. The thread may already be busy with
+// its next run (catch-up); still return usageLimit / autoResumeSet / resumeAt from the ended run
+// or leftover shell fields so those don't disappear just because status is no longer "failed".
+function usageLimitFields(t, run) {
+  const err = [run && run.lastErrorClass, run && (run.error || (run.lastError && run.lastError.message)),
+    t && t.lastErrorClass, t && t.lastError && t.lastError.message].filter(Boolean).map(String).join(" ");
+  const limited = (t && t.lastErrorClass === "usage_limit") || (run && run.lastErrorClass === "usage_limit")
+    || !!(t && t.usageLimitResetAt && run && (run.status === "failed" || run.status === "error"))
+    || /usage[_\s-]?limit/i.test(err);
+  if (!limited) return null;
+  const resetAt = (t && t.usageLimitResetAt) || (run && run.usageLimitResetAt) || null;
+  const rec = t && t.limitRecovery;
+  const runId = (run && run.id) || (t && t.latestRunId);
+  const armed = !!(rec && rec.autoResume && (!resetAt || !rec.resetAt || rec.resetAt === resetAt)
+    && (!rec.runId || rec.runId === runId || rec.runId === (t && t.latestRunId)));
+  const busy = !!(t && t.status && t.status !== "failed");
+  return { usageLimit: true, autoResumeSet: armed, ...(resetAt ? { resumeAt: resetAt } : {}),
+    ...(armed || !busy ? {} : { autoResumeNote: "thread is already busy" }) };
+}
+async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet, ... } or null
   let t = null;
   for (let i = 0; i < 3 && !(t && t.lastErrorClass === "usage_limit" && t.usageLimitResetAt); i++) {
     if (i) await sleep(1500);
     try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); const sh = r.ok ? await r.json() : {}; for (const p of sh.projects || []) if (!meta.projects.has(p.id)) meta.projects.set(p.id, p.title); t = (sh.threads || []).find((x) => x.id === threadId) || null; } catch {}
   }
-  if (!t || t.status !== "failed" || t.lastErrorClass !== "usage_limit") return null; // not a usage-limit stop
-  if (!autoResumeWanted(t)) return { autoResumeSet: false, autoResumeNote: "project not in autoresume.json and thread not started by T3 Tots" };
-  if (!t.latestRunId || !t.usageLimitResetAt) return { autoResumeSet: false, autoResumeNote: "T3 reported no reset time" };
-  if (t.archivedAt || t.settledOverride === "settled" || t.pendingRuntimeRequest) return { autoResumeSet: false, autoResumeNote: "thread is settled/archived or has an open question" };
-  const r = t.limitRecovery; if (r && r.runId === t.latestRunId && r.resetAt === t.usageLimitResetAt && r.autoResume) return { autoResumeSet: true, resumeAt: t.usageLimitResetAt, autoResumeNote: "already armed" };
-  if (DRY) return { autoResumeSet: false, resumeAt: t.usageLimitResetAt, autoResumeNote: "dry run" };
+  const fields = usageLimitFields(t, run);
+  if (!fields) return null; // not a usage-limit stop
+  if (!t || t.status !== "failed") { // busy or gone: cannot arm, but the webhook still gets the fields
+    const note = fields.autoResumeSet ? "already armed" : (t && autoResumeWanted(t) ? (fields.autoResumeNote || "thread is already busy") : "project not in autoresume.json and thread not started by T3 Tots");
+    return { ...fields, autoResumeNote: note, ...(fields.resumeAt ? { resumeAtLocal: localTime(fields.resumeAt) } : {}) };
+  }
+  if (!autoResumeWanted(t)) return { ...fields, autoResumeSet: false, autoResumeNote: "project not in autoresume.json and thread not started by T3 Tots" };
+  if (!t.latestRunId || !t.usageLimitResetAt) return { ...fields, autoResumeSet: false, autoResumeNote: "T3 reported no reset time" };
+  if (t.archivedAt || t.settledOverride === "settled" || t.pendingRuntimeRequest) return { ...fields, autoResumeSet: false, autoResumeNote: "thread is settled/archived or has an open question" };
+  const r = t.limitRecovery; if (r && r.runId === t.latestRunId && r.resetAt === t.usageLimitResetAt && r.autoResume) return { ...fields, autoResumeSet: true, resumeAt: t.usageLimitResetAt, autoResumeNote: "already armed" };
+  if (DRY) return { ...fields, autoResumeSet: false, resumeAt: t.usageLimitResetAt, autoResumeNote: "dry run" };
   try { await wsRpc(ep, "orchestration.dispatchCommand", { type: "thread.metadata.update", commandId: crypto.randomUUID(), threadId: t.id,
       limitRecovery: { runId: t.latestRunId, resetAt: t.usageLimitResetAt, autoResume: true } });
     log(`usage limit in "${clean(t.title)}": resume-at-reset armed for ${t.usageLimitResetAt}`);
-    return { autoResumeSet: true, resumeAt: t.usageLimitResetAt, resumeAtLocal: localTime(t.usageLimitResetAt) };
-  } catch (err) { log(`usage limit in "${clean(t.title)}": couldn't arm resume-at-reset: ${err.message}`); return { autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
+    return { ...fields, autoResumeSet: true, resumeAt: t.usageLimitResetAt, resumeAtLocal: localTime(t.usageLimitResetAt) };
+  } catch (err) { log(`usage limit in "${clean(t.title)}": couldn't arm resume-at-reset: ${err.message}`); return { ...fields, autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
 }
 async function reportEnd(ep, t, runId, opts = {}) {
   if (runId && S.finished[runId]) return;
@@ -299,7 +323,7 @@ async function reportEnd(ep, t, runId, opts = {}) {
   const { e, skip } = await buildEnd(ep, t, runId, opts);
   if (!e) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
-  if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id); if (a) Object.assign(e, { usageLimit: true }, a); }
+  if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, { id: e.runId, status: e.status, error: e.error, lastErrorClass: t.lastErrorClass, usageLimitResetAt: t.usageLimitResetAt }); if (a) Object.assign(e, { usageLimit: true }, a); }
   cleanEvent(e); // before it is saved: listen-state.json never holds a raw title, project or reply
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
 }
@@ -313,9 +337,13 @@ async function checkFinish(ep, t, prev) {
 function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k]; }
 // lastAlive is a connected-session watermark. Do not advance it while the socket is down, or catch-up
 // `since` shrinks to ~2 min and finishes from a longer outage are skipped.
-let listening = false;
+let listening = false, liveGen = 0;
 const endedAt = (run, now = Date.now()) => { const t = Date.parse(run && run.completedAt); return Number.isFinite(t) ? t : now; };
 const tickLastAlive = (open, lastAlive, now = Date.now()) => open ? now : lastAlive;
+// afterSnapshotListen: stamp listening/lastAlive only if this snapshot's socket is still the live one.
+// onclose increments liveGen and sets listening=false; a late in-flight snapshot must not undo that.
+const afterSnapshotListen = ({ socketOpen, gen, liveGen: g, lastAlive, now = Date.now() }) =>
+  (socketOpen && gen === g) ? { listening: true, lastAlive: now } : { listening: false, lastAlive };
 const catchUpThreads = (threads, since) => (threads || []).filter((t) => Date.parse(t.updatedAt || 0) > since); // busy too: failed always fires
 setInterval(() => {
   if (DRY || !C) return;
@@ -327,6 +355,7 @@ setInterval(() => {
 function connect(ep) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${ep.base.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: ep.H });
+    const gen = ++liveGen;
     let first = true, last = Date.now(), busy = Promise.resolve(); const id = String(Date.now());
     const work = (fn) => { busy = busy.then(fn).catch((err) => log("error:", err.message)); };
     const hb = setInterval(() => { if (Date.now() - last > 75000) { log("T3 stopped answering; reconnecting"); ws.close(); } else try { ws.send(JSON.stringify({ _tag: "Ping" })); } catch {} }, 25000);
@@ -338,13 +367,13 @@ function connect(ep) {
         if (m._tag === "Exit" || m._tag === "Defect") { log("T3 ended the stream:", clean(JSON.stringify(m.exit || m)).slice(0, 300)); ws.close(); continue; }
         if (m._tag !== "Chunk") continue;
         ws.send(JSON.stringify({ _tag: "Ack", requestId: m.requestId }));
-        for (const v of m.values || []) work(() => onItem(ep, v, first && v.kind === "snapshot" && (first = false, true)));
+        for (const v of m.values || []) work(() => onItem(ep, v, first && v.kind === "snapshot" && (first = false, true), { ws, gen }));
       }
     };
-    ws.onerror = () => {}; ws.onclose = () => { listening = false; clearInterval(hb); busy.then(() => resolve(!first)); };
+    ws.onerror = () => {}; ws.onclose = () => { listening = false; if (liveGen === gen) liveGen++; clearInterval(hb); busy.then(() => resolve(!first)); };
   });
 }
-async function onItem(ep, v, full) {
+async function onItem(ep, v, full, ctx = {}) {
   if (v.kind === "snapshot") {
     for (const p of v.snapshot.projects || []) meta.projects.set(p.id, p.title);
     if (!full) return; // later snapshots are project-metadata refreshes with no threads
@@ -360,8 +389,9 @@ async function onItem(ep, v, full) {
       // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
       // look at busy threads too so a failed end from downtime is still reported (failed always fires)
       if (since) for (const t of catchUpThreads(v.snapshot.threads, since)) await reportEnd(ep, t, null, { since });
-      listening = true;
-      S.lastAlive = Date.now(); saveState();
+      const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
+      listening = next.listening;
+      if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
     }
     log(`watching ${live.size} threads (${[...runSeen.values()].filter(isActive).length} running); ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped; run ends on`);
   } else if (v.kind === "project.updated") meta.projects.set(v.project.id, v.project.title);
@@ -522,5 +552,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads };
+if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

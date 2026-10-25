@@ -69,7 +69,7 @@ test("reportEnd redacts the event before it is first saved to listen-state.json"
 test("restart catch-up: any thread in the window (busy too), not only END[t.status]; buildEnd still skips", () => {
   const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
   const start = src.indexOf("const since = S.lastAlive");
-  const end = src.indexOf("S.lastAlive = Date.now()", start);
+  const end = src.indexOf("afterSnapshotListen(", start);
   const block = src.slice(start, end);
   assert.ok(block.includes("catchUpThreads("), block);
   assert.ok(block.includes("reportEnd(ep, t, null, { since })"), block);
@@ -80,6 +80,7 @@ test("restart catch-up: any thread in the window (busy too), not only END[t.stat
   assert.ok(src.includes("sub-task thread that didn't fail"));
   assert.ok(src.includes("thread is going on with its next queued message"));
   assert.ok(src.includes("listening = false"), "socket close freezes lastAlive");
+  assert.ok(src.includes("afterSnapshotListen("), "snapshot completion goes through afterSnapshotListen");
 });
 
 test("endedAt: missing completedAt uses now, not Date.parse(0)", () => {
@@ -97,6 +98,53 @@ test("tickLastAlive: freeze lastAlive while the socket is down", () => {
   assert.equal(l.tickLastAlive(true, last, now), now);
   assert.equal(l.tickLastAlive(false, last, now), last);
   assert.equal(l.tickLastAlive(false, undefined, now), undefined);
+});
+
+test("afterSnapshotListen: a close wins over an in-flight snapshot completion", async () => {
+  const st = { listening: false, lastAlive: 1000, liveGen: 1 };
+  const snapshotGen = st.liveGen;
+  let finish;
+  const inflight = new Promise((r) => { finish = r; }).then(() => {
+    const next = l.afterSnapshotListen({
+      socketOpen: false, gen: snapshotGen, liveGen: st.liveGen, lastAlive: st.lastAlive, now: 9999,
+    });
+    st.listening = next.listening;
+    st.lastAlive = next.lastAlive;
+  });
+  st.listening = false; // onclose first
+  st.liveGen += 1;
+  finish();
+  await inflight;
+  assert.equal(st.listening, false);
+  assert.equal(st.lastAlive, 1000);
+});
+
+test("afterSnapshotListen: still-open same generation advances lastAlive; gen mismatch does not", () => {
+  assert.deepEqual(l.afterSnapshotListen({ socketOpen: true, gen: 3, liveGen: 3, lastAlive: 1000, now: 2000 }),
+    { listening: true, lastAlive: 2000 });
+  assert.deepEqual(l.afterSnapshotListen({ socketOpen: true, gen: 1, liveGen: 2, lastAlive: 1000, now: 2000 }),
+    { listening: false, lastAlive: 1000 });
+  assert.deepEqual(l.afterSnapshotListen({ socketOpen: false, gen: 1, liveGen: 1, lastAlive: 1000, now: 2000 }),
+    { listening: false, lastAlive: 1000 });
+});
+
+test("usageLimitFields: busy failed run still carries usageLimit / autoResumeSet / resumeAt", () => {
+  const reset = "2026-01-01T05:00:00Z";
+  const busy = { id: "t", status: "running", activeRunId: "r2", lastErrorClass: "usage_limit", usageLimitResetAt: reset, latestRunId: "r2" };
+  const ended = { id: "r1", status: "failed" };
+  const a = l.usageLimitFields(busy, ended);
+  assert.equal(a.usageLimit, true);
+  assert.equal(a.autoResumeSet, false);
+  assert.equal(a.resumeAt, reset);
+  assert.equal(a.autoResumeNote, "thread is already busy");
+  const armed = l.usageLimitFields({ ...busy, limitRecovery: { runId: "r1", resetAt: reset, autoResume: true } }, ended);
+  assert.equal(armed.usageLimit, true);
+  assert.equal(armed.autoResumeSet, true);
+  assert.equal(armed.resumeAt, reset);
+  const fromRun = l.usageLimitFields({ id: "t", status: "running", activeRunId: "r2" }, { id: "r1", status: "failed", lastErrorClass: "usage_limit", usageLimitResetAt: reset });
+  assert.equal(fromRun.usageLimit, true);
+  assert.equal(fromRun.resumeAt, reset);
+  assert.equal(l.usageLimitFields({ id: "t", status: "failed", lastErrorClass: "other" }, { id: "r", status: "failed" }), null);
 });
 
 test("catchUpThreads: includes a busy thread so a failed downtime end is still seen", () => {
