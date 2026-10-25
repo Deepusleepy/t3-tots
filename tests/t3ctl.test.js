@@ -16,8 +16,8 @@ test("riskOf: ordinary build commands are normal", () => {
   assert.equal(t.riskOf({ requestKind: "file_change" }).level, "normal");
   assert.equal(t.riskOf({}).level, "normal");
 });
-test("riskOf: find with -delete is not read-only", () => {
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "find . -name '*.tmp' -delete" }).level, "low");
+test("riskOf: find with -delete is high", () => {
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -name '*.tmp' -delete" }).level, "high");
 });
 
 test("deliveryOf: classifies where a sent message ended up", () => {
@@ -266,4 +266,63 @@ test("sensitivePath: acronyms before a sensitive word (HTTPAuth, getHTTPAuth, XM
   for (const f of ["HTTPAuth.json", "getHTTPAuth.ts", "XMLAuth.json"])
     assert.equal(t.sensitivePath(path.join(root, f), root), true, f);
   for (const f of ["author.md", "AUTHORS", "docs/authority.md"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
+});
+
+test("riskOf: git branch --delete/-m and fetch refspecs are not read-only; listing and bare fetch stay low", () => {
+  for (const p of ["git branch --delete feature", "git branch -D feature", "git branch -m old new", "git branch -M old new"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of ["git fetch origin main:main", "git fetch . +refs/heads/experiment:refs/heads/main", "git fetch origin +main"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
+  for (const p of ["git branch", "git branch --list", "git branch --show-current", "git branch -v", "git fetch", "git fetch origin", "git fetch origin feature", "git fetch https://example.com/repo.git", "git fetch git@github.com:foo/bar.git"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+});
+test("riskOf: sibling git forms (clustered -f, tokens before --hard, clean -f anywhere, push :, git.exe quotes, attached -C, git.cmd) are high", () => {
+  const high = [
+    "git push -fv", "git push -fqu", "git push -vfu",
+    "git reset HEAD --hard", "git reset -q HEAD --hard",
+    "git clean -x -f", "git clean -d --force",
+    "git push :foo",
+    '"C:\\Program Files\\Git\\cmd\\git.exe" push --force',
+    "git -C'repo' push --force",
+    "git.cmd push --force",
+    "git checkout -f", "git switch --discard-changes", "git restore --worktree --source=HEAD .", "git push --mirror",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p);
+  }
+});
+test("riskOf: long-form rm/find/Remove-Item deletes are high", () => {
+  for (const p of ["rm --recursive --force", "rm --force", "find . -delete", "find . -exec rm {} +", "Remove-Item -r -fo"]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p); assert.ok(r.reasons.length, p);
+  }
+});
+
+test("findThread: archivedThreads are searched like search/preview-finish", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
+  const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
+  assert.match(src, /pickThread\(\[\.\.\.s\.threads, \.\.\.\(s\.archivedThreads \|\| \[\]\)\], q\)/);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-find-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const threads = [{ id: "live-thread-01", title: "Live One", status: "idle" }];
+  const archivedThreads = [{ id: "arch-thread-99", title: "Old archived", status: "completed" }];
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads, archivedThreads }));
+    const known = [...threads, ...archivedThreads];
+    const hit = known.find((x) => u === "/api/orchestration/threads/" + x.id);
+    if (hit) return res.end(JSON.stringify({ projection: { thread: hit, turnItems: [], runs: [], runtimeRequests: [] } }));
+    res.statusCode = 404; res.end("{}");
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = (cmd, q) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3ctl"), cmd, "--thread", q],
+    { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
+  try {
+    let r = await run("read", "arch-thread-99"); assert.equal(r.code, 0, r.out); assert.match(r.out, /arch-thread-99/);
+    r = await run("read", "Old archived"); assert.equal(r.code, 0, r.out); assert.match(r.out, /Old archived/);
+    r = await run("pending", "arch-thread-99"); assert.equal(r.code, 0, r.out);
+    r = await run("read", "no-such-thread-xx"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
+  } finally { srv.close(); }
 });

@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.5",
+ "version": "v1.4.6",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.5/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.6/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -26,8 +26,8 @@
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 76434,
-   "sha256": "db1e64e2a37942d34efb9e374b2270035d7930583c150218e99ad872d3b15f5b",
+   "bytes": 77039,
+   "sha256": "f1c16af7144591d3a630ba3ae2525b1012d3a6046d43c93d1154acbec27c5ca4",
    "targets": [
     "macos",
     "linux",
@@ -52,8 +52,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 50374,
-   "sha256": "ba9d0c59e099a968ff9ceed4c5efeba0d5b56c787a299349097f95f2590ef071",
+   "bytes": 50468,
+   "sha256": "46aa8656962a7585a37fbe3e94a4b501f9eb4f5517f9576f62515045125439d9",
    "targets": [
     "macos",
     "linux",
@@ -221,8 +221,8 @@
    "path": "skills/t3-cleanup/SKILL.md",
    "dest": "t3-cleanup/SKILL.md",
    "kind": "skill",
-   "bytes": 19864,
-   "sha256": "b3e0cf80a94229717abd0f8830c6331cf2416910ef56868f3b92f32a3ced3340"
+   "bytes": 19968,
+   "sha256": "d1a3a980756c5564fa45afe26839c7c769b5ea671085784e0f46820bf1688506"
   },
   {
    "path": "skills/t3-digest/SKILL.md",
@@ -257,7 +257,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 17384,
-   "sha256": "a30e564308ccc8ca69e66ab97ef4ccbb0a077927feaee33dd4dea28bf3d36102"
+   "sha256": "bab6b3b6a98adb6e88294c36199d4eb28f7f2330a11b2f84c19a1a57847fc36e"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -270,8 +270,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 10963,
-   "sha256": "5ced61523763f6e2ec2b24e749fedfa54295aed58ff2de30c70aeb9173972b19"
+   "bytes": 11067,
+   "sha256": "8160efda910412a8d4ea052f28144b84539d89ad58a27dc6d2f78a6f93f3b366"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",

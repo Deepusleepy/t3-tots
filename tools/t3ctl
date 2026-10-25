@@ -80,7 +80,7 @@ function pickProject(all, q) {
 }
 async function findThread(q) {
   if (!q || q === true) throw new Error("--thread <id|title> is required");
-  q = String(q); const s = await shell(); return pickThread(s.threads, q);
+  q = String(q); const s = await shell(); return pickThread([...s.threads, ...(s.archivedThreads || [])], q);
 }
 // exact id, else an id prefix of 8+ characters, else an exact title, else one title containing the words. Several matches: AMBIGUOUS, never a guess
 function pickThread(all, q) {
@@ -212,14 +212,15 @@ function printRequest(r) {
 }
 // --- pure helpers (unit-tested in tests/t3ctl.test.js; no network) ---
 // riskOf: a hint for approvals so a watcher can approve routine ones and hold risky ones. The agent still decides.
-// GIT: "git" or "git.exe", plus any global options before the subcommand (-C path, -c k=v,
-// --git-dir/--work-tree/--namespace =value or the next token, --no-pager)
-const GIT = String.raw`\bgit(?:\.exe)?(?:\s+(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+(?:"[^"]*"|'[^']*'|\S+))|--?[\w-]+(?:=\S+)?))*\s+`;
+// GIT: "git", "git.exe" or "git.cmd" (optional quote after the name), plus any global options
+// before the subcommand (-C path or -Cpath, -c k=v, --git-dir/--work-tree/--namespace =value or the next token, --no-pager)
+const GIT = String.raw`\bgit(?:\.exe|\.cmd)?"?(?:\s+(?:-[Cc]\s*(?:"[^"]*"|'[^']*'|\S+)|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+(?:"[^"]*"|'[^']*'|\S+))|--?[\w-]+(?:=\S+)?))*\s+`;
 const git = (rest) => new RegExp(GIT + rest, "i");
 const RISK_HIGH = [
-  [/\brm\s+-[a-z]*[rf]/i, "deletes files (rm -r/-f)"], [git(String.raw`push\b[^\n]*(\s--force\b|\s--force-with-lease\b|\s-[A-Za-z]*f\b|\s-fu\b|\s\+\S)`), "force push"],
-  [git(String.raw`push\b[^\n]*\b(main|master)\b`), "pushes to main/master"], [git(String.raw`(reset(?:\s+-\S+)*\s+--hard|clean\s+(?:-[a-z]*f|--force\b)|branch\s+-D|push\b[^\n]*\s--delete\b|push\s+\S+\s+:)`), "discards or deletes git work"],
-  [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-recurse\b|\s-force\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
+  [/\brm\b[^\n]*(\s-[a-z]*[rf][a-z]*\b|\s--(?:recursive|force|dir)\b)/i, "deletes files (rm -r/-f)"], [/\bfind\b[^\n]*(\s-delete\b|\s-exec\s+rm\b)/i, "deletes files (find -delete/-exec rm)"],
+  [git(String.raw`push\b[^\n]*(\s--force\b|\s--force-with-lease\b|\s-[A-Za-z]*f[A-Za-z]*\b|\s\+\S)`), "force push"],
+  [git(String.raw`push\b[^\n]*\b(main|master)\b`), "pushes to main/master"], [git(String.raw`(reset\b[^\n]*--hard|clean\b[^\n]*(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b[^\n]*(\s-[dm]\b|\s--(?:delete|move)\b)|push\b[^\n]*\s--delete\b|push\s+(?:\S+\s+)?:|checkout\b[^\n]*(?:-[a-z]*f[a-z]*\b|--force\b)|switch\b[^\n]*--discard-changes|restore\b[^\n]*--worktree|push\b[^\n]*--mirror\b|fetch\b[^\n]*(\s\+\S+|:(?:refs/heads/)?(?:main|master)\b))`), "discards or deletes git work"],
+  [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-r(?:ecurse)?\b|\s-fo(?:rce)?\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
   [/\bsudo\b|\bdoas\b|\brunas\b|-verb\s+runas\b|\bset-executionpolicy\b/i, "runs as admin"], [/\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(ba|z)?sh\b|\biex\b/i, "runs a downloaded script"],
   [/\b(mkfs|diskutil\s+erase|format\s+[a-z]:|format-volume|clear-disk|dd\s+if=)/i, "touches disks"], [/\bchmod\s+-R\s+777\b|\bchown\s+-R\b/i, "changes permissions recursively"],
   [/(^|[\s"'\/\\])(\.env\b|secrets?[\/\\]|id_(rsa|ed25519)|\.ssh[\/\\]|credentials?\b|[\w.-]*token[\w.-]*\.(json|txt)\b|\.cli-proxy-api|keychain)/i, "reads or writes secrets"],
@@ -227,7 +228,7 @@ const RISK_HIGH = [
   [/\b(vercel|netlify|fly|wrangler)\b[^\n]*\b(--prod|deploy)\b|\bkubectl\s+(apply|delete)\b|\bterraform\s+(apply|destroy)\b/i, "deploys"],
   [/\bdrop\s+(table|database)\b|\btruncate\s+table\b/i, "drops data"], [/\b(shutdown|reboot|killall|pkill|taskkill|stop-process|restart-computer|stop-computer)\b|\bkill\s+-9\b/i, "kills processes or the machine"],
 ];
-const READ_ONLY = /^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![^\n]*(-delete|-exec\s+rm))|tree|du|df|git\s+(status|log|diff|show|branch|remote\s+-v|rev-parse|ls-files|blame|fetch)|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b/i;
+const READ_ONLY = /^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![^\n]*(-delete|-exec\s+rm))|tree|du|df|git\s+(status|log|diff|show|branch(?:(?:\s+(?:--list|--show-current|-v{1,2}|--verbose))+(?:\s+\S+)*|\s*)?$|remote\s+-v|rev-parse|ls-files|blame|fetch(?![^\n]*(\s\+\S+|\s(?![\w.+-]+:\/\/)[^\s:@]+:[^\s]+)))|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b/i;
 // unwrapShell: Codex shows commands as `bash -lc '...'` or `pwsh -Command "..."`; judge the inner command.
 function unwrapShell(c) { const m = String(c).trim().match(/^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?"?\s+-l?c\s+([\s\S]+)$|^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:pwsh|powershell)(?:\.exe)?"?\s+(?:-\w+\s+)*?-c(?:ommand)?\s+([\s\S]+)$/i);
   if (!m) return String(c); const x = (m[1] || m[2]).trim(); return /^(['"]).*\1$/s.test(x) ? x.slice(1, -1) : x; }
