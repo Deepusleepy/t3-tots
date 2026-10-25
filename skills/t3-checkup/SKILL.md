@@ -4,7 +4,7 @@ description: >-
   Health check of T3 Code and the computer it runs on. Use for "health", "checkup",
   "is T3 ok", "is my computer ok", "why is T3 slow", or the Weekly health check routine.
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only. For the Weekly health check routine, t3-getting-started section 5 says when to add the t3-cleanup scan.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Read-only. For the Weekly health check routine, t3-getting-started section 5 says when to add the t3-cleanup scan.
 
 1. Run `t3q.py health` on every computer.
 2. Per computer, give one line with these parts:

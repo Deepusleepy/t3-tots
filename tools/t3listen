@@ -74,9 +74,17 @@ async function threadSnap(ep, id) {
 const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
 // short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
 // SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
-const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
+const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
 const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S{8,})`, "gi");
-const trim = (t, n) => { t = String(t).replace(RED, "[redacted]").split(HOME).join("~").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t; };
+const clean = (t) => { t = String(t).replace(RED, "[redacted]"); return HOME && HOME.length > 1 ? t.split(HOME).join("~") : t; };
+// every text field of an event (questions, option labels, approval prompt, title, answers, errors) is redacted before it is sent, logged or previewed; ids are kept
+function cleanEvent(v, k = "") {
+  if (typeof v === "string") return /(^id$|Id$)/.test(k) ? v : clean(v);
+  if (Array.isArray(v)) return v.map((x) => cleanEvent(x, k));
+  if (v && typeof v === "object") { for (const key of Object.keys(v)) v[key] = cleanEvent(v[key], key); return v; }
+  return v;
+}
+const trim = (t, n) => { t = clean(t).replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t; };
 function contextOf(p, it) {
   const items = p.turnItems || [], end = it ? items.indexOf(it) : items.length; let user = null;
   for (let i = (end < 0 ? items.length : end) - 1; i >= 0; i--) {
@@ -132,7 +140,7 @@ function markDelivered(e) {
   saveState();
 }
 async function deliver(e) {
-  e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);
+  cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
     const r = await post(e);
@@ -272,14 +280,14 @@ async function armResume(ep, threadId) { // -> { autoResumeSet, autoResumeNote }
   if (DRY) return { autoResumeSet: false, resumeAt: t.usageLimitResetAt, autoResumeNote: "dry run" };
   try { await wsRpc(ep, "orchestration.dispatchCommand", { type: "thread.metadata.update", commandId: crypto.randomUUID(), threadId: t.id,
       limitRecovery: { runId: t.latestRunId, resetAt: t.usageLimitResetAt, autoResume: true } });
-    log(`usage limit in "${t.title}": resume-at-reset armed for ${t.usageLimitResetAt}`);
+    log(`usage limit in "${clean(t.title)}": resume-at-reset armed for ${t.usageLimitResetAt}`);
     return { autoResumeSet: true, resumeAt: t.usageLimitResetAt, resumeAtLocal: localTime(t.usageLimitResetAt) };
-  } catch (err) { log(`usage limit in "${t.title}": couldn't arm resume-at-reset: ${err.message}`); return { autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
+  } catch (err) { log(`usage limit in "${clean(t.title)}": couldn't arm resume-at-reset: ${err.message}`); return { autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
 }
 async function reportEnd(ep, t, runId, opts = {}) {
   if (runId && S.finished[runId]) return;
   const { e, skip } = await buildEnd(ep, t, runId, opts);
-  if (!e) { if (VERBOSE) log(`run end in "${t.title}" not reported: ${skip}`); return; }
+  if (!e) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
   if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id); if (a) Object.assign(e, { usageLimit: true }, a); }
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
@@ -336,11 +344,11 @@ async function onItem(ep, v, full) {
     const t = v.thread; meta.threads.set(t.id, { title: t.title, projectId: t.projectId });
     if (v.location === "archive") { if (Object.values(S.sent).some((s) => s.threadId === t.id)) await reconcile(ep, t.id, { gone: "archived" }); known.delete(t.id); runSeen.delete(t.id); return; }
     const prevRun = noteRun(t);
-    if (VERBOSE && prevRun && (prevRun.status !== t.status || prevRun.activeRunId !== (t.activeRunId || null))) log(`thread.updated "${t.title}" status ${prevRun.status} -> ${t.status}, run ${prevRun.activeRunId ? prevRun.activeRunId.slice(-12) : "-"} -> ${t.activeRunId ? t.activeRunId.slice(-12) : "-"}`);
+    if (VERBOSE && prevRun && (prevRun.status !== t.status || prevRun.activeRunId !== (t.activeRunId || null))) log(`thread.updated "${clean(t.title)}" status ${prevRun.status} -> ${t.status}, run ${prevRun.activeRunId ? prevRun.activeRunId.slice(-12) : "-"} -> ${t.activeRunId ? t.activeRunId.slice(-12) : "-"}`);
     await checkFinish(ep, t, prevRun);
     const now = t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null, before = known.has(t.id) ? known.get(t.id) : null; known.set(t.id, now);
     const tracked = Object.values(S.sent).filter((s) => s.threadId === t.id && !s.skipped).length;
-    if (VERBOSE && (tracked || now !== before)) log(`thread.updated "${t.title}" pending ${before ? before.slice(-12) : "-"} -> ${now ? now.slice(-12) : "-"} (tracked ${tracked})`);
+    if (VERBOSE && (tracked || now !== before)) log(`thread.updated "${clean(t.title)}" pending ${before ? before.slice(-12) : "-"} -> ${now ? now.slice(-12) : "-"} (tracked ${tracked})`);
     if (now !== before || tracked > 1 || (tracked === 1 && !now)) await reconcile(ep, t.id);
   } else if (v.kind === "thread.removed") { known.delete(v.threadId); runSeen.delete(v.threadId); if (Object.values(S.sent).some((s) => s.threadId === v.threadId)) await reconcile(ep, v.threadId, { gone: "deleted" }); }
 }
@@ -451,23 +459,33 @@ async function previewFinish() { // print the run-end event the listener would s
   const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
   let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
-  const hit = pickThread(sh.threads || [], q), id = hit ? hit.id : q;
+  let id = q; if ((sh.threads || []).length) { try { id = pickThread(sh.threads, q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); die(w, rest.join(": ")); } }
   const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
-  e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
+  cleanEvent(e); e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
 }
 
-// pickThread: exact id, else id prefix, else the newest thread whose title contains the text
-function pickThread(threads, q) { const s = String(q || "").toLowerCase(); if (!s) return null;
-  return threads.find((t) => t.id === q) || threads.find((t) => String(t.id).startsWith(q)) ||
-    threads.filter((t) => String(t.title || "").toLowerCase().includes(s)).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0] || null; }
+// pickThread: the same rules as t3ctl (tests/t3listen.test.js checks they agree): exact id, else an id prefix of 8+ characters,
+// else one exact title, else one title containing the text. Several matches: AMBIGUOUS, never a guess
+const normT = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
+function pickThread(all, q) {
+  q = String(q); const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
+  const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };
+  const exact = all.find((t) => t.id === q); if (exact) return exact;
+  if (q.length >= 8) { const pre = all.filter((t) => String(t.id).startsWith(q)); if (pre.length === 1) return pre[0]; if (pre.length > 1) amb(pre); }
+  const same = all.filter((t) => normT(t.title || "") === normT(q)); if (same.length === 1) return same[0]; if (same.length > 1) amb(same);
+  const m = all.filter((t) => normT(t.title || "").includes(normT(q)));
+  if (!m.length) throw new Error(`NOT_FOUND: no thread matches "${q}"${/^[0-9a-f-]{1,7}$/i.test(q) ? " (an id prefix needs 8 or more characters)" : ""}`);
+  if (m.length > 1) amb(m);
+  return m[0];
+}
 
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
 t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, localTime, approvalsLine, staleMinutes, RED };
+if (require.main !== module) module.exports = { pickThread, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

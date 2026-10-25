@@ -14,7 +14,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use t
 3. Start it: `t3ctl new --project '<P>' --model <m> --effort <e> --title '<short>' --prompt-file <file> --wait --timeout 600`. For long renders, leave out `--wait` and check later with `t3ctl read`.
 
 ## 2. Fetch
-- `t3ctl files --thread '<t>' --last-turn` copies the files the last turn created or changed into `<tools folder>/out/`. Leave out `--last-turn` for the whole thread. It never copies dotfiles, files whose path names a token, auth, secret, credential or `.env`, symlinks, or files outside the project; it lists them as not copied.
+- `t3ctl files --thread '<t>' --last-turn` copies the files the last turn created or changed into `<tools folder>/out/`, keeping each file's path inside the project (`out/src/index.ts`), so files with the same name don't overwrite each other. Leave out `--last-turn` for the whole thread. It never copies dotfiles, files whose path names a token, auth, secret, credential or `.env`, symlinks, or files outside the project; it lists them as not copied.
 - Files outside the project appear only if a reply names them. Take the path from `t3ctl read`.
 - `t3ctl diff --thread '<t>'` gives the diff in a git project.
 - For videos and other files already on the computer, CopyToBox them directly.

@@ -190,6 +190,11 @@ class ScanPrivate(unittest.TestCase):
                        "github_pat_" + "A1" * 15, "glpat-" + "x" * 22]:
             self.assertTrue(self.hits(sample), sample)
 
+    def test_stripe_style_keys_are_flagged(self):
+        for sample in ["sk_" + "live_" + "a1B2" * 6, "sk_" + "test_" + "Z9y8" * 5, "rk_" + "live_" + "q" * 24, "whsec_" + "w" * 24]:
+            self.assertTrue(self.hits(sample), sample)
+        self.assertEqual(self.hits("task_list_items"), [])   # ordinary snake_case words are not keys
+
     def run_scan(self, *args, words="", optout=False):
         env = {k: v for k, v in os.environ.items() if k not in ("T3TOTS_PRIVATE_WORDS", "T3TOTS_NO_PRIVATE_WORDS")}
         env.update(HOME=str(self.tmp), T3TOTS_PRIVATE_WORDS=words, **({"T3TOTS_NO_PRIVATE_WORDS": "1"} if optout else {}))
@@ -225,6 +230,31 @@ class SmallTools(unittest.TestCase):
             r = subprocess.run([sys.executable, str(ROOT / "tools/report/report.py"), "in.json", "out.html", *extra], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1); self.assertIn("usage:", r.stderr); self.assertNotIn("Traceback", r.stderr)
 
+
+class T3uiQuoting(unittest.TestCase):
+    """t3ui's ks() must hand the text to osascript as an argument, never paste it into script text (no UI is driven)"""
+    PAYLOAD = 'a"b $(touch PWNED1) `touch PWNED2` \\ \' -e x'
+    def ks_line(self):
+        line = [l for l in (ROOT / "tools" / "t3ui").read_text().splitlines() if l.startswith("ks(){")][0]
+        return line
+    def test_text_is_an_argument_with_a_stub(self):
+        d = tempfile.mkdtemp(); stub = os.path.join(d, "osascript")
+        with open(stub, "w") as f: f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > "$(dirname "$0")/args"\n')
+        os.chmod(stub, 0o755)
+        subprocess.run(["bash", "-c", self.ks_line() + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, env={**os.environ, "PATH": d + os.pathsep + os.environ["PATH"]}, check=True)
+        args = open(os.path.join(d, "args")).read().split("\0")[:-1]
+        self.assertEqual(args[-1], self.PAYLOAD); self.assertEqual(args[-2], "--")
+        self.assertFalse(any(self.PAYLOAD in a for a in args[:-1]))
+        self.assertFalse(os.path.exists(os.path.join(d, "PWNED1")) or os.path.exists(os.path.join(d, "PWNED2")))
+        shutil.rmtree(d, ignore_errors=True)
+    @unittest.skipUnless(shutil.which("osascript"), "macOS only")
+    def test_real_osascript_returns_text_literally(self):
+        d = tempfile.mkdtemp()
+        line = self.ks_line().replace('tell application "System Events" to keystroke (item 1 of argv)', "return item 1 of argv")
+        self.assertNotIn("System Events", line)
+        out = subprocess.run(["bash", "-c", line + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, capture_output=True, text=True, check=True).stdout.rstrip("\n")
+        self.assertEqual(out, self.PAYLOAD); self.assertEqual(os.listdir(d), [])
+        shutil.rmtree(d, ignore_errors=True)
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

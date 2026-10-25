@@ -29,16 +29,16 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.2"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.3"
 PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN release; a changed repo can't change what gets installed
- "tools/t3q.py": ["t3q.py", "0d457279efd3f56ec3cb5b20a5b9910fdea5fed6b239a37fab890bcc8300d5b5"],
- "tools/t3ctl": ["t3ctl", "06ff14e04deefee12711e60a362ccf0498dbfaa6a4ab7c7ecfe13516245e88ad"],
+ "tools/t3q.py": ["t3q.py", "c3a1f8b46f217592b539dee25c89835dc8b820254c839ba506eeb8520aaaad7d"],
+ "tools/t3ctl": ["t3ctl", "c168321231062696e1504bcaafa3964866cd9386341dce86f313f27d60658a1e"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "829a7439bbf50a89154639d92602f43326f3279f90c777e886dced60205cc82d"],
+ "tools/t3listen": ["t3listen", "becddd6373a342381d5508a5dee7f4ccadd672fd6d21578d6e59c1eb9992a80d"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "6a53bb7672dbfd2bcf3c59cd0f39a63b043b73393a405b43b620fee7546de4e1"],
+ "tools/export.js": ["export.js", "0cb90008eafe8e52a1a0cfceee485b389572bad247daccaf5ba09b01fa066a68"],
  "tools/survey.js": ["survey.js", "63917f69d6118d9a751614a175b26059bd4a76befd0a8e006ed752c33b99a5c7"],
- "tools/t3ui": ["t3ui", "9ff2e0e5a3d1f0817bdd0443bbf6dae88c478c91fdc08dca85d096c88bdf412a"],
+ "tools/t3ui": ["t3ui", "221951527b7250375dc97ec63fababa09e693b3af0e5ae1132d42aee67f2b23f"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],

@@ -5,7 +5,7 @@ description: >-
   in <X>", "anything running?", "is <X> done?", "recap/where is <thread> at". Not for
   "catch me up/brief me" (t3-project-report) or "what needs me" (t3-waiting).
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Read-only.
 
 ## Pick the mode
 - No target ("status", "what's up in T3"): run `t3q.py overview` on every computer. `T3_DAYS` defaults to 7.
