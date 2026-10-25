@@ -6,7 +6,7 @@ description: >-
   onto the box and the user's T3 computers. Use during setup, when a skill says the
   tools are missing or differ, or for "update T3 Tots tools".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.9` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.10` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder.
 
@@ -29,12 +29,12 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.9"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.10"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
- "tools/t3ctl": ["t3ctl", "a0fd91a22ecb4a7aafb59af8b67b60566c3b17c0734f6e34005ad0abda975e79"],
+ "tools/t3ctl": ["t3ctl", "254d2072b94f0a98c844fc5e1452ca6af052ef478889923ec4b14fd9ecc80590"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "8f47701ae02a41d2c037021adf2b6f625e8f7bb1335290beb7047fdc3c0570cb"],
+ "tools/t3listen": ["t3listen", "55f1d58f09f4f4b800259f29c66ded1b7aee4881e8dfad89a1e4f061d6ac1b8e"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "c25e93bc3515d554de7086adec3b79b32f58f6b869b220b015899b4d6253a3eb"],
  "tools/survey.js": ["survey.js", "206fff36b57e111fd061417f2c21eb7ee09fa5dfe1537843a81242d47e5d6052"],
