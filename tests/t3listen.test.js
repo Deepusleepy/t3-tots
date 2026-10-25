@@ -74,9 +74,20 @@ test("restart catch-up: any non-busy thread in the window, not only END[t.status
   assert.ok(block.includes("reportEnd(ep, t, null, { since })"), block);
   assert.ok(!block.includes("END[t.status]"), block);
   assert.ok(block.includes("!isBusy(t)"), block);
+  assert.ok(!/\b36e5\b/.test(block) && !block.includes("3600000"), block); // no hour cap; buildEnd skips completedAt < since
   assert.ok(src.includes('skip: "ended before the listener\'s last run"'));
   assert.ok(src.includes("sub-task thread that didn't fail"));
   assert.ok(src.includes("thread is going on with its next queued message"));
+});
+
+test("restart catch-up: reportEnd with since and no run id reports every ended run, not only ended.at(-1)", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const start = src.indexOf("async function reportEnd");
+  const end = src.indexOf("\n}\n", start);
+  const body = src.slice(start, end);
+  assert.ok(body.includes("!runId && opts.since"), body);
+  assert.ok(body.includes("for (const run of ended) await reportEnd(ep, t, run.id, opts)"), body);
+  assert.ok(!/ended\.at\(-1\)/.test(body), body);
 });
 
 test("idLike: a full id or an 8+ character prefix, never a title with spaces", () => {
