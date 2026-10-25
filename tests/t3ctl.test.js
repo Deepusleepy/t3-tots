@@ -1596,6 +1596,61 @@ test("riskOf: brace expansion of flags and delete refspecs is high", () => {
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
 });
 
+test("riskOf: quote/escape/brace breaks after a fetch colon dest are high", () => {
+  // v1.4.23 FETCH_HEAD qenc'd the colon, then matched refs/heads/ and main|master
+  // as literal text. bash still joins :m''ain / :m\\ain / $':m'{ain,} / feature:m''ain
+  // to argv :main (or feature:main). Same qflex joins as flags.
+  for (const p of [
+    "git fetch origin :m''ain",
+    "git fetch origin :refs/heads/m''ain",
+    "git fetch origin feature:m''ain",
+    "git fetch origin :m\\ain",
+    "git fetch origin $':m'{ain,}",
+    "git fetch origin :main",
+    "git fetch origin :refs/heads/main",
+    "git fetch origin feature:main",
+    "git fetch origin :master",
+    "git fetch origin :refs/heads/master",
+    "git fetch origin :re''fs/heads/main",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch '--{force,}'" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin ':m{ain,}'" }).level, "high");
+});
+
+test("riskOf: quote/escape/brace breaks of a push dest main/master are high", () => {
+  // v1.4.23 scored push with \\b(main|master)\\b, so m''ain / $'\\x6dain' /
+  // HEAD:m''ain / m{''ain,} stayed normal while argv is main / HEAD:main.
+  for (const p of [
+    "git push origin m''ain",
+    "git push origin $'\\x6dain'",
+    "git push origin HEAD:m''ain",
+    "git push origin m{''ain,}",
+    "git push origin m\\ain",
+    "git push origin main",
+    "git push origin HEAD:main",
+    "git push origin master",
+    "git push origin HEAD:master",
+    "git push origin 'main'",
+    "git push origin $'main'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin remain" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin domain" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin feature" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
