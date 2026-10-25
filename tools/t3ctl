@@ -240,10 +240,6 @@ const FIND_SH = FIND_BIN(FIND_SH_NAME);
 const FIND_INT = FIND_BIN(FIND_INT_NAME);
 const FIND_WRAP = String.raw`${FIND_BIN(FIND_WRAP_NAME)}(?:\s+(?!${FIND_BIN(FIND_DEL_NAME)}|${FIND_BIN(FIND_SH_NAME)}|${FIND_BIN(FIND_INT_NAME)})\S+)*`;
 const FIND_EXEC_DEL = String.raw`-(?:exec|execdir|ok|okdir)\s+(?:${FIND_WRAP}\s+)*(?:${FIND_RM}|${FIND_SH}[\s\S]*?\b${FIND_DEL_NAME}\b|${FIND_INT}[\s\S]*?\b${FIND_INT_DEL}\b)`;
-// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone', bash $'+feature', and \+feature
-const PLUS_SPEC = String.raw`(?:\\?\+\S+|['"]\+\s*[^'"]+['"]|\$['"]\+\s*[^'"]+['"])`;
-// delete refspec :gone, including quoted ':feature' and bash $':gone'
-const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 // quoted or ANSI-C $'...' flag: empty quotes / $'', a quote, or a backslash may wrap the
 // token, sit after the dashes, or sit between letters; a backslash-newline inside quotes
 // joins the next line; and $'...\xHH...' / \x{HH} / \nnn / \u / \U may spell a letter or a
@@ -255,8 +251,12 @@ const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 // ($'\x{2d}C' / $'\x{12d}C' / $'\x{12dp' / $'\x{102d}C' are -C / -p).
 // --pru"ne" / --''prune / ''--prune / $'--pr\x75ne' / $'\x2d\x2dprune' / $'--pr\165ne'
 // / $'\u2d\u2dprune' / $'\x{2d}p' / -n"p" / -S"W" / -v\rf equal argv.
-// (?![\\$'"]*[A-Za-z0-9]) after the token keeps unique prefixes from eating a longer word
-// (--word is not --worktree; --follow-tags is not --force).
+// (?![\\$'"]*[A-Za-z0-9…]) after the token keeps unique prefixes from eating a longer word
+// (--word is not --worktree; --follow-tags is not --force). The class must contain a real
+// backslash so \x / \u / \U / octal continue the word ($'--fo\x{6c}low-tags' is
+// --follow-tags, not --fo). A template needs \\\\ to emit that backslash in the source.
+// protectU rewrites \U to \ + U_ESC, so U_ESC counts as a continuing letter (the byte
+// after \ is no longer U).
 // QWRAP/QSEP take one quote per iteration (not {1,2}): n quotes is linear, not Fibonacci.
 const QWRAP = String.raw`(?:\$?['"])*`;
 const QSEP = String.raw`(?:\$?['"]|\\\n[ \t]*|\\)*`;
@@ -336,7 +336,13 @@ function qflex(s) {
   }
   return out;
 }
-const qflag = (inner) => `${QWRAP}${qflex(String(inner))}${QWRAP}(?![\\$'"]*[A-Za-z0-9])`;
+const qflag = (inner) => `${QWRAP}${qflex(String(inner))}${QWRAP}(?![\\\\$'"]*[A-Za-z0-9${U_ESC}])`;
+// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone', bash $'+feature',
+// \+feature, and qenc spellings of + (0x2b): $'\x{2b}main' / $'\x2bmain' / $'\x{12b}' /
+// $'\x{2bmain' / $'\u002bmain' / $'\U0000002bmain'
+const PLUS_SPEC = String.raw`(?:\\?${qhex("+")}\S+|['"]${qhex("+")}\s*[^'"]+['"]|\$['"]${qhex("+")}\s*[^'"]+['"])`;
+// delete refspec :gone, including quoted ':feature', bash $':gone', and qenc of : (0x3a)
+const DEL_SPEC = String.raw`(?:${QWRAP}${qhex(":")}${QSEP}\S|\$['"]${qhex(":")}\s*[^'"]+['"])`;
 // same git command: indented continuation, or a backslash-newline with optional indent
 const MORE = String.raw`[^\n]*(?:(?:\n[ \t]+|\\\n[ \t]*)[^\n]*)*`;
 // checkout discards: -f/-2/-3/--force/--ours/--theirs always (even with -b/--orphan on the same command).
