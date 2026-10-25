@@ -246,3 +246,24 @@ test("riskOf: git options before push (git -C path, git -c k=v) don't hide a for
   }
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git -C /repo push origin feature" }).level, "high");
 });
+test("riskOf: --git-dir/--work-tree/--namespace take the next token; git.exe, clustered -f, reset options, clean --force, push --delete", () => {
+  const high = [
+    "git --git-dir /repo push --force", "git --work-tree /repo push --force", "git -C /repo --work-tree /wt push --force",
+    "git --git-dir /repo reset --hard", "git --work-tree /repo reset --hard", "git -C /repo --work-tree /wt reset --hard",
+    "git --git-dir /repo branch -D", "git --work-tree /repo branch -D", "git -C /repo --work-tree /wt branch -D",
+    "git --namespace foo push --force", "git --git-dir=/repo push --force",
+    "git -C /repo push -uf origin feature", "git -C /repo push -fu origin feature",
+    "git -C /repo reset --quiet --hard", "git -C /repo reset -q --hard",
+    "git -C /repo clean --force", "git -C /repo push --delete origin foo",
+    "git.exe -C /repo push --force",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p);
+  }
+});
+test("sensitivePath: acronyms before a sensitive word (HTTPAuth, getHTTPAuth, XMLAuth) are caught", () => {
+  const root = path.join(path.sep, "proj");
+  for (const f of ["HTTPAuth.json", "getHTTPAuth.ts", "XMLAuth.json"])
+    assert.equal(t.sensitivePath(path.join(root, f), root), true, f);
+  for (const f of ["author.md", "AUTHORS", "docs/authority.md"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
+});

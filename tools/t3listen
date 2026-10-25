@@ -470,8 +470,8 @@ async function previewFinish() { // print the run-end event the listener would s
   const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
   let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
-  // a thread missing from the shell list (archived, or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
-  let id = q; if ((sh.threads || []).length) { try { id = pickThread(sh.threads, q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); } }
+  // live + archived: a thread missing from both (or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
+  let id = q; try { id = pickThread([...(sh.threads || []), ...(sh.archivedThreads || [])], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); }
   const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip } = await buildEnd(ep, t, null, { preview: true });
@@ -482,7 +482,7 @@ async function previewFinish() { // print the run-end event the listener would s
 // pickThread: the same rules as t3ctl (tests/t3listen.test.js checks they agree): exact id, else an id prefix of 8+ characters,
 // else one exact title, else one title containing the text. Several matches: AMBIGUOUS, never a guess
 const normT = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
-const idLike = (q) => /^[A-Za-z0-9_-]{8,}$/.test(String(q)); // a full id or 8+ character prefix: no spaces
+const idLike = (q) => /^[A-Za-z0-9_:-]{8,}$/.test(String(q)); // no whitespace, 8+ chars, colons allowed (thread:project:…, thread:delegated-task:…)
 function pickThread(all, q) {
   q = String(q); const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
   const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };

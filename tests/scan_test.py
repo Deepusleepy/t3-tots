@@ -11,7 +11,7 @@ class Dupes(unittest.TestCase):
         tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
         body = b"same bytes " * 20000
         plain = ["a/movie.bin", "b/movie copy.bin", "author.md", "docs/authority.bin"]
-        sensitive = ["secrets/movie.bin", ".ssh/id_backup", "app/.env", "app/.env.development", "MyToken.bin", "keys/server.pem", "auth/cache.bin", "googleAuth.bin", "x/id_ed25519"]
+        sensitive = ["secrets/movie.bin", ".ssh/id_backup", "app/.env", "app/.env.development", "MyToken.bin", "keys/server.pem", "auth/cache.bin", "googleAuth.bin", "x/id_ed25519", "HTTPAuth.bin", "getHTTPAuth.ts", "XMLAuth.bin"]
         for rel in plain + sensitive:
             p = tmp / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(body)
         opened, real_open = [], builtins.open

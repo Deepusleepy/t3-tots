@@ -32,11 +32,13 @@ CATEGORIES = [  # substring (lowercased, '/'-normalized) -> category
 ]
 SYSTEM_SKIP = {"/proc","/sys","/dev","/run","/System/Volumes/VM"}
 # SENSITIVE_NAME: word for word the same as tools/t3ctl (tests/install_test.py checks). One path part, case-insensitive, after
-# camelCase is split ("googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
+# acronyms then camelCase are split ("HTTPAuth" -> "HTTP_Auth", "googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
 SENSITIVE_NAME = r"token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))"
 _SENSITIVE = re.compile(SENSITIVE_NAME, re.I)
 def sensitive_path(rel):  # --dupes never opens or hashes a file whose path (below the scan root) has a sensitive part
-    return any(_SENSITIVE.search(re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", part)) for part in re.split(r"[\\/]+", rel) if part)
+    def split_name(n):
+        n = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", n); return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", n)
+    return any(_SENSITIVE.search(split_name(part)) for part in re.split(r"[\\/]+", rel) if part)
 
 def onsize(st):
     # allocated bytes (handles sparse/compressed); Windows lacks st_blocks
