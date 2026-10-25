@@ -939,6 +939,70 @@ test("riskOf: more extensionless checkout names are high; -b / --orphan / branch
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
 });
 
+test("riskOf: quoted short restore -W/-SW are high; file-W stays a path; my-Script stays high", () => {
+  // v1.4.15 restored (?<=\\s) on -W/-S so file-W is a path, but a quote between space and dash
+  // hid whole-token '-W' / "-W" / $'-W' / '-SW' (argv -W / -SW, discards the worktree).
+  for (const p of [
+    "git restore --staged '-W' file",
+    'git restore --staged "-W" file',
+    "git restore --staged $'-W' file",
+    "git restore --staged '-SW' file",
+    "git restore --staged --worktree file",
+    "git restore --staged --\"worktree\" file",
+    "git restore --staged --\"w\" file",
+    "git restore --staged \\\n  --worktree f",
+    "git restore my-Script",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file-W" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
+});
+
+test("riskOf: git remote update --p / quoted -p / joined --prune are high; --pr stays high; --pro / -v / origin-p are not", () => {
+  // git 2.43 accepts --p/--pr/--pru/--prun/--prune on update. v1.4.15 floored at --pr and
+  // (?<=\\s)-p, so --p and quoted/joined -p/--prune (argv -p / --prune) stayed normal.
+  for (const p of [
+    "git remote update --p origin",
+    'git remote update "-p"',
+    "git remote update '-p'",
+    "git remote update $'-p'",
+    'git remote update --"prune"',
+    'git remote update -"p"',
+    "git remote update --pr origin",
+    "git remote update --prune origin",
+    "git remote update -p",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update --pro origin" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote -v && echo prune" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update origin-p" }).level, "high");
+});
+
+test("riskOf: ANSI-C $ after the dashes is high; fetch is not read-only; harmless quoted args stay normal", () => {
+  // qflag allowed quote/backslash immediately after -/-- and whole-token $'--prune' / $'-rf',
+  // but not -$'' / --$'' (and rm -v"rf" → argv -vrf). Fetch's high path and READ_ONLY share FETCH_FLAG.
+  for (const p of [
+    "git fetch -$'p' origin",
+    "git fetch --$'prune' origin",
+    "git fetch -$'f' origin",
+    "rm -$'rf' dir",
+    "rm --$'force' dir",
+    "git pull --$'force'",
+    "git push --$'force'",
+    "git restore --staged --$'worktree' file",
+    'rm -v"rf" dir',
+    'rm -"rf" dir',
+    'rm --"force" dir',
+    'git fetch "--prune" origin',
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
