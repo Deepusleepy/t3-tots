@@ -1651,6 +1651,90 @@ test("riskOf: quote/escape/brace breaks of a push dest main/master are high", ()
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }).level, "high");
 });
 
+test("riskOf: encoded colon/slash joins on a push dest main/master are high", () => {
+  // v1.4.24 push used (?<!\\w) before MAIN_DEST. A qenc of : or / ends on a
+  // hex/octal digit, so $'\\x3amain' / $'\\x2fmain' scored normal while bash
+  // argv is HEAD:main / refs/heads/main. FETCH_HEAD already consumes qhex(":")
+  // and does not look behind; push now uses that colon join plus a slash join.
+  // $'\\x{3a}main' / $'\\x{2f}main' ended on } and already stayed high.
+  const { execFileSync } = require("child_process");
+  const argvLast = (src) => execFileSync("bash", ["-c", 'n(){ printf %s "${@: -1}"; }; eval n ' + src], { encoding: "utf8" });
+  for (const [p, argv] of [
+    ["git push origin $'HEAD\\x3amain'", "HEAD:main"],
+    ["git push origin HEAD$'\\x3amain'", "HEAD:main"],
+    ["git push origin $'HEAD\\72main'", "HEAD:main"],
+    ["git push origin HEAD$'\\72main'", "HEAD:main"],
+    ["git push origin $'HEAD\\072main'", "HEAD:main"],
+    ["git push origin $'HEAD\\u003amain'", "HEAD:main"],
+    ["git push origin $'HEAD\\x3am''ain'", "HEAD:main"],
+    ["git push origin $'HEAD\\x3a\\x6d\\x61\\x69\\x6e'", "HEAD:main"],
+    ["git push origin feature$'\\x3amain'", "feature:main"],
+    ["git push origin feature$'\\x3am''ain'", "feature:main"],
+    ["git push origin $'feature\\x3amain'", "feature:main"],
+    ["git push origin $'HEAD\\x3amaster'", "HEAD:master"],
+    ["git push origin $'refs/heads\\x2fmain'", "refs/heads/main"],
+    ["git push origin refs/heads$'\\x2fmain'", "refs/heads/main"],
+    ["git push origin $'refs/heads\\57main'", "refs/heads/main"],
+    ["git push origin refs/heads$'\\57main'", "refs/heads/main"],
+    ["git push origin $'refs/heads\\057main'", "refs/heads/main"],
+    ["git push origin $'refs/heads\\u002fmain'", "refs/heads/main"],
+    ["git push origin $'refs\\x2f\\x68\\x65\\x61\\x64\\x73\\x2f\\x6d\\x61\\x69\\x6e'", "refs/heads/main"],
+    ["git push origin $'\\x72\\x65\\x66\\x73\\x2f\\x68\\x65\\x61\\x64\\x73\\x2f\\x6d\\x61\\x69\\x6e'", "refs/heads/main"],
+    ["git push origin $'HEAD\\x{3a}main'", "HEAD:main"],
+    ["git push origin $'refs/heads\\x{2f}main'", "refs/heads/main"],
+    ["git push origin HEAD:main", "HEAD:main"],
+    ["git push origin refs/heads/main", "refs/heads/main"],
+  ]) {
+    assert.equal(argvLast(p), argv, p);
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin remain" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin domain" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mainline" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mastery" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin ':m{ain,}'" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }).level, "high");
+});
+
+test("riskOf: encoded colon after dest main/master is a word boundary", () => {
+  // v1.4.24 MAIN_DEST used qflag's trailing lookahead, which treats \\x / octal
+  // / \\u as more of the word. $'\\x3afeature' after main scored normal (argv
+  // main:feature) and :main$'\\x3a'feature dropped from high. Literal
+  // main\\:feature already stayed high. Encoded colon before a fetch dest
+  // (feature$'\\x3amain') already stayed high.
+  const { execFileSync } = require("child_process");
+  const argvLast = (src) => execFileSync("bash", ["-c", 'n(){ printf %s "${@: -1}"; }; eval n ' + src], { encoding: "utf8" });
+  for (const [p, argv] of [
+    ["git push origin $'main\\x3afeature'", "main:feature"],
+    ["git push origin main$'\\x3a'feature", "main:feature"],
+    ["git push origin $'main\\72feature'", "main:feature"],
+    ["git push origin main$'\\72'feature", "main:feature"],
+    ["git push origin $'main\\x{3a}feature'", "main:feature"],
+    ["git push origin $'master\\x3afeature'", "master:feature"],
+    ["git fetch origin :main$'\\x3a'feature", ":main:feature"],
+    ["git fetch origin $'\\x3amain\\x3afeature'", ":main:feature"],
+    ["git fetch origin feature$'\\x3amain'", "feature:main"],
+    ["git push origin main\\:feature", "main:feature"],
+  ]) {
+    assert.equal(argvLast(p), argv, p);
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin remain" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin domain" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mainline" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mastery" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");

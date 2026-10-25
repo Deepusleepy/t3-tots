@@ -357,11 +357,21 @@ const PLUS_SPEC = String.raw`(?:\\?${qhex("+")}\S+|['"]${qhex("+")}\s*[^'"]+['"]
 const DEL_SPEC = String.raw`(?:${QWRAP}\\?${qhex(":")}${QSEP}\S|\$['"]${qhex(":")}\s*[^'"]+['"])`;
 // dest main/master with the same quote / $'' / backslash / qenc joins as flags
 // (m''ain / m\ain / $'\x6dain' / $':m'ain are argv main).
-const MAIN_DEST = qflag("(?:main|master)\\b");
+// qflag's trailing lookahead treats \x / octal / \u as more of the word so unique
+// prefixes don't end at an escape ($'--fo\x{6c}low-tags' is --follow-tags). After
+// main/master a qenc of : or / is a word boundary in argv (main:feature), so
+// MAIN_DEST allows those encodings as the end of the dest. Literal main\:feature
+// already ended the word (backslash then :); keep that.
+const MAIN_SEP = String.raw`(?:${qhex(":")}|${qhex("/")})`;
+const MAIN_DEST = `${QWRAP}${qflex("(?:main|master)\\b")}${QWRAP}(?=${QSEP}${MAIN_SEP}|(?![\\\\$'"]*[A-Za-z0-9${U_ESC}]))`;
 // fetch :main / :refs/heads/main (qenc colon: $'\x{3a}main' / $'\72main' / $'\472main';
 // dest also qflex so :m''ain / :m\ain / $':m'ain / feature:m''ain are argv :main).
 // No lookbehind after the colon: $'\72main' ends the encoding on a hex/octal digit.
 const FETCH_HEAD = String.raw`${QWRAP}\\?${qhex(":")}${QSEP}(?:${qflex("refs/heads/")})?${MAIN_DEST}`;
+// push dest main/master: the same colon join as FETCH_HEAD, slash join
+// refs/heads/main (qenc of / ends on a hex/octal digit the same way), or
+// MAIN_DEST after space. Don't look behind ($'\x3amain' / $'\x2fmain').
+const PUSH_MAIN = String.raw`(?:${FETCH_HEAD}|${QWRAP}${qflex("refs/heads/")}${MAIN_DEST}|(?<=\s)${MAIN_DEST})`;
 // same git command: indented continuation, or a backslash-newline with optional indent
 const MORE = String.raw`[^\n]*(?:(?:\n[ \t]+|\\\n[ \t]*)[^\n]*)*`;
 // checkout discards: -f/-2/-3/--force/--ours/--theirs always (even with -b/--orphan on the same command).
@@ -381,7 +391,7 @@ const RISK_HIGH = [
   [new RegExp(String.raw`\brm\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(String.raw`-[fidv]*[rfd][fidv]*\b`)}|${qflag(String.raw`(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b`)})`, "i"), "deletes files (rm -r/-f)"],
   [new RegExp(String.raw`\bfind\b[\s\S]*?(\s-delete\b|\s+${FIND_EXEC_DEL})`, "i"), "deletes files (find -delete/-exec rm)"],
   [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:${qflag("--force\\b")}|${qflag("--force-with-lease\\b")}|${qflag(String.raw`-[A-Za-z]*f[A-Za-z]*\b`)}|${PLUS_SPEC})`), "force push"],
-  [git(String.raw`push\b${MORE}(?<!\w)${MAIN_DEST}`), "pushes to main/master"],
+  [git(String.raw`push\b${MORE}${PUSH_MAIN}`), "pushes to main/master"],
   [git(String.raw`(?:reset\b${MORE}${qflag(uopt("hard", 1) + "\\b")}|clean\b${MORE}(?:${qflag(String.raw`-[a-z]*f[a-z]*\b`)}|${qflag("--force\\b")})|branch\b${MORE}(\s${qflag(String.raw`-[A-Za-z]*[dmf][A-Za-z]*\b`)}|\s(?:${qflag(uopt("delete", 1) + "\\b")}|${qflag(uopt("move", 2) + "\\b")}|${qflag(uopt("force", 4) + "\\b")}))|push\b${MORE}(?:\s(?:${qflag(uopt("delete", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*d[A-Za-z]*\b`)}|${DEL_SPEC})|\n[ \t]+(?:${qflag(uopt("delete", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*d[A-Za-z]*\b`)}|${DEL_SPEC}))|${CHECKOUT_DISCARD}|switch\b${MORE}(?:${qflag(uopt("discard-changes", 2) + "\\b")}|${qflag("--force-create\\b")}|${qflag("--force\\b")}|(?<=\s)${qflag(String.raw`-[A-Za-z]*f[A-Za-z]*\b`)})|restore\b${MORE}${qflag(uopt("worktree", 1) + "\\b")}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${qflag(uopt("mirror", 1) + "\\b")}|${qflag(uopt("all", 2) + "\\b")}|${qflag(uopt("branches", 1) + "\\b")}|${qflag(uopt("prune", 3) + "\\b")})|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|${FETCH_HEAD}|\s(?:${FETCH_FLAG})|\n[ \t]+(?:${FETCH_FLAG}|${PLUS_SPEC}))|pull\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(uopt("prune", 3) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}|${PLUS_SPEC})|remote(?:(?:\s|\\\n[ \t]*)(?:${qflag("-v\\b")}|${qflag("--verbose\\b")}))*(?:\s|\\\n[ \t]*)+(?:${qflag("prune\\b")}|${qflag("update\\b")}(?:[^&\n|;]|\\\n[ \t]*|\n[ \t]+)*(?:(?<=\s)${qflag(String.raw`-p\b`)}|${qflag(uopt("prune", 1) + "\\b")})))`), "discards or deletes git work"],
   [gitCs(String.raw`(?:branch\b${MORE}(?<=\s)${qflag(String.raw`-[A-Za-z]*C[A-Za-z]*\b`, false)}|checkout\b${MORE}(?<=\s)${qflag(String.raw`-[A-Za-z]*B[A-Za-z]*\b`, false)}|switch\b${MORE}(?<=\s)${qflag(String.raw`-[A-Za-z]*C[A-Za-z]*\b`, false)}|restore\b(?:${MORE}(?:${qflag(uopt("worktree", 1) + "\\b", false)}|(?<=\s)${qflag(String.raw`-[A-Za-z]*W[A-Za-z]*\b`, false)})|(?!${MORE}(?:${qflag("--staged\\b", false)}|(?<=\s)${qflag(String.raw`-[A-Za-z]*S[A-Za-z]*\b`, false)}))))`), "discards or deletes git work"],
   [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
