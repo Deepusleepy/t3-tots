@@ -2,8 +2,9 @@
 """report.py <export.json> <out.html> [--tz <IANA zone, e.g. Europe/London>] : self-contained HTML report from t3-tots export.js output."""
 import json, sys, html, re, collections, datetime as dt
 if len(sys.argv) < 3: sys.exit("usage: report.py <export.json> <out.html> [--tz <IANA zone>]  (Python 3.9+)")
+sys.argv = [x for a in sys.argv for x in (a.split("=", 1) if a.startswith("--tz=") else [a])]  # --tz=Zone works like --tz Zone
 src, dst = sys.argv[1], sys.argv[2]
-if "--tz" in sys.argv and (sys.argv.index("--tz") + 1 >= len(sys.argv) or sys.argv[sys.argv.index("--tz") + 1].startswith("--")):
+if "--tz" in sys.argv and (sys.argv.index("--tz") + 1 >= len(sys.argv) or sys.argv[sys.argv.index("--tz") + 1] == "" or sys.argv[sys.argv.index("--tz") + 1].startswith("--")):
     sys.exit("usage: report.py <export.json> <out.html> [--tz <IANA zone>]  (--tz needs a zone name, e.g. Asia/Tokyo)")
 try:
     from zoneinfo import ZoneInfo

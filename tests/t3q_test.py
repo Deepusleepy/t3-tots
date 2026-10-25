@@ -121,11 +121,13 @@ class T3qTest(unittest.TestCase):
 
     def test_health_size_skips_secret_folders_and_files_in_any_case(self):
         make_db(self.dir)
-        for rel in ("Secrets/blob", "SECRETS2/blob", "Auth.json", "MyToken.txt", "x/Credentials.db"):
+        for rel in ("Secrets/blob", "SECRETS2/blob", "Auth.json", "MyToken.txt", "x/Credentials.db", "oauth/blob", "AuthSessions/blob", ".env", "keys/id_rsa", "x/server.pem", ".ssh/blob", ".gnupg/blob"):
             p = os.path.join(self.dir, rel); os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "wb") as f: f.truncate(5 * 10**9)   # sparse: 5 GB if it were counted
         out = run(self.dir, "health")
         self.assertIn("T3 data folder: 0.00 GB", out)
+        with open(os.path.join(self.dir, "author.md"), "wb") as f: f.truncate(2 * 10**9)   # "auth" is a whole word: author.md is counted
+        self.assertIn("T3 data folder: 2.00 GB", run(self.dir, "health"))
 
     def test_health_never_runs_the_runtime_port_through_a_shell(self):
         make_db(self.dir)

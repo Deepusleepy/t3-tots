@@ -8,7 +8,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md), including "Sendi
 
 ## 1. Resolve (read-only)
 - Computer: the one the user names, else the one their message came from. For a follow-up, the computer that owns the thread.
-- Project: `t3ctl projects`. `--project` takes an id, title or path and ignores case. If the folder isn't a project yet, ask before `~/.t3/bin/t3 project add <path>` (Windows: `t3.cmd project add <path>`).
+- Project: `t3ctl projects`. `--project` takes an id, title or path. Titles and paths ignore case; ids must match exactly. If the folder isn't a project yet, ask before `~/.t3/bin/t3 project add <path>` (Windows: `t3.cmd project add <path>`).
 - Thread, for follow-ups: t3-tots-rules "Finding a thread".
 - Model: `t3ctl models` lists the models already used. Aliases are `haiku`, `sonnet` and `opus`, and pick the newest of that family; other ids look like `claude-sonnet-5-5`, `gpt-6.1-sol` or `grok-4.7`. Effort is low, medium, high, xhigh or max. With none given, the project default applies.
 

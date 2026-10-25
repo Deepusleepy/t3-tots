@@ -3,7 +3,7 @@
 Settings via env: T3_DAYS, T3_ALL=1, T3_Q (thread name or id), T3_LAST, T3_WEEK=1.
 Data folder: T3CODE_HOME (T3 Code's own setting, default ~/.t3) + /userdata; T3_HOME may point at either folder.
 Needs Python 3.8+. Opens statev2.sqlite read-only; never reads secrets/token/auth files."""
-import sqlite3, os, json, sys, datetime as dt, difflib
+import sqlite3, os, re, json, sys, datetime as dt, difflib
 if sys.version_info < (3, 8): print("PYTHON_TOO_OLD: t3q.py needs Python 3.8 or newer"); sys.exit(1)
 try: sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
 except Exception: pass
@@ -178,8 +178,12 @@ def projects():  # T3 projects with folder, thread count and last activity; also
         top = max(parents.items(), key=lambda x: x[1])
         if top[1] >= 2 or len(rows) == 1: print("projects folder guess:", tilde(top[0]))
 
-def secret_name(n):  # Secrets, SECRETS, auth.json, Token: never opened, not even sized (case-insensitive)
-    return any(k in n.lower() for k in ("secret", "token", "auth", "credential"))
+# SENSITIVE_NAME: word for word the same as tools/t3ctl (tests/install_test.py checks). One path part, case-insensitive, after
+# camelCase is split ("googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
+SENSITIVE_NAME = r"token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))"
+_SENSITIVE = re.compile(SENSITIVE_NAME, re.I)
+def secret_name(n):  # Secrets, auth.json, MyToken, .env, id_rsa: never opened, not even sized (author.md is fine)
+    return bool(_SENSITIVE.search(re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", n)))
 
 def health():
     import socket, subprocess, shutil, platform

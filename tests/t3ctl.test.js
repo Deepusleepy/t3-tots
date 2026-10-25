@@ -232,3 +232,17 @@ test("outPath: keeps the project-relative path so same-name files don't overwrit
   assert.equal(t.outPath(out, root, path.resolve("/elsewhere/x.md")), path.join(out, "x.md"));  // outside the project: never ../ out of out/
   assert.equal(t.outPath(out, null, path.resolve("/a/b.md")), path.join(out, "b.md"));
 });
+
+test("sensitivePath: auth is a whole word (author.md is fine); keys, .env, .ssh and .gnupg are caught", () => {
+  const root = path.join(path.sep, "proj");
+  for (const f of ["auth.json", "Auth.json", "oauth.json", "AuthSessions/x", "googleAuth.json", "auth-store/x", "authorize.ts", ".env", ".env.development", "prod.env", "id_rsa", "id_ed25519.pub", "key.pem", "cert.p12", ".ssh/config", ".gnupg/pubring.kbx", "private_key.txt"])
+    assert.equal(t.sensitivePath(path.join(root, f), root), true, f);
+  for (const f of ["author.md", "AUTHORS", "authors/list.md", "docs/authority.md", "envoy.yaml", "src/environment.ts"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
+});
+
+test("riskOf: git options before push (git -C path, git -c k=v) don't hide a force push or a push to main", () => {
+  for (const p of ["git -C /repo push --force", 'git -C "/a b/repo" push origin main', "git -c core.x=y push -f", "git --no-pager -C . push origin HEAD:master", "git -C repo reset --hard"]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p);
+  }
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git -C /repo push origin feature" }).level, "high");
+});

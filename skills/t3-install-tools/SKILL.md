@@ -6,7 +6,7 @@ description: >-
   onto the box and the user's T3 computers. Use during setup, when a skill says the
   tools are missing or differ, or for "update T3 Tots tools".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.2` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.4` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder.
 
@@ -29,24 +29,24 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.3"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.4"
 PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN release; a changed repo can't change what gets installed
- "tools/t3q.py": ["t3q.py", "c3a1f8b46f217592b539dee25c89835dc8b820254c839ba506eeb8520aaaad7d"],
- "tools/t3ctl": ["t3ctl", "c168321231062696e1504bcaafa3964866cd9386341dce86f313f27d60658a1e"],
+ "tools/t3q.py": ["t3q.py", "0a278acfd00dadb47fd250e9895c7a2c5490386943635e88af740b35046fa7a6"],
+ "tools/t3ctl": ["t3ctl", "cbbdf68cef5c5c568148f691d066f7a9e8c28645967e7dffd38f789c1f84ef00"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "becddd6373a342381d5508a5dee7f4ccadd672fd6d21578d6e59c1eb9992a80d"],
+ "tools/t3listen": ["t3listen", "9667c229d898c5772ad5e4f6f0fb9ab1777e76bf0a4e90d26f9a5badd42c340f"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "0cb90008eafe8e52a1a0cfceee485b389572bad247daccaf5ba09b01fa066a68"],
- "tools/survey.js": ["survey.js", "63917f69d6118d9a751614a175b26059bd4a76befd0a8e006ed752c33b99a5c7"],
+ "tools/export.js": ["export.js", "c25e93bc3515d554de7086adec3b79b32f58f6b869b220b015899b4d6253a3eb"],
+ "tools/survey.js": ["survey.js", "206fff36b57e111fd061417f2c21eb7ee09fa5dfe1537843a81242d47e5d6052"],
  "tools/t3ui": ["t3ui", "221951527b7250375dc97ec63fababa09e693b3af0e5ae1132d42aee67f2b23f"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "a5781f6217e1647e1162b5cd361ec7c1504f50e981e43ce9efbe5e19feeb54c2"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "98456ad7def23022753058bb0d0b0a69dbccc3403d6ecce00f8996d377fd9f2f"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
- "tools/report/report.py": ["report/report.py", "cbc0f9af0a8429e5e86b48e56f31b872982c6d22aa4d6ec64eb391317a59601b"]
+ "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }
 DST = pathlib.Path(os.environ.get("T3TOTS_DST", "/workspace/t3-tots-tools"))
 raw = lambda tag, p: os.environ.get("T3TOTS_RAW_BASE", f"https://raw.githubusercontent.com/{REPO}/{tag}/") + p

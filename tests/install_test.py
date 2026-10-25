@@ -31,8 +31,9 @@ class Fetcher(unittest.TestCase):
 
     def test_pins_match_this_release(self):
         pin = re.search(r'PIN = "([^"]*)"', FETCHER).group(1)
-        if pin != MANIFEST["version"]:
-            self.skipTest(f"skill pins {pin}, repo is {MANIFEST['version']}")
+        self.assertEqual(pin, MANIFEST["version"], "t3-install-tools PIN differs from VERSION: re-pin the fetcher, then run scripts/sync-skills")
+        prose = re.findall(r"pins release `([^`]+)`", SKILL)
+        self.assertEqual(prose, [pin], "the t3-install-tools text names a different release than its PIN")
         pinned = dict(re.findall(r'^ "([^"]+)": (\[[^\]]+\])', FETCHER, re.M))
         self.assertEqual({k: json.loads(v) for k, v in pinned.items()}, {f["path"]: [f["dest"], f["sha256"]] for f in TOOLS},
                          "t3-install-tools pins differ from manifest.json: re-pin the fetcher, then run scripts/sync-skills")
@@ -208,9 +209,20 @@ class ScanPrivate(unittest.TestCase):
         r = self.run_scan(); self.assertEqual(r.returncode, 0); self.assertIn("warning:", r.stdout)  # plain scans only warn
 
     def test_tools_redact_with_the_same_secret_patterns(self):
-        for f in ("tools/t3listen", "tools/export.js"):
+        for f in ("tools/t3listen", "tools/export.js", "tools/survey.js"):
             m = re.search(r"const SECRET_KEYS = String\.raw`([^`]*)`;", (ROOT / f).read_text())
             self.assertTrue(m, f); self.assertEqual(m.group(1), self.m.SECRET_KEYS, f)
+
+    def test_secret_patterns_catch_base64_webhook_secrets_and_underscored_stripe_keys(self):
+        keys = re.compile(self.m.SECRET_KEYS)
+        for s in ("whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw+/=_-", "sk_live_" + "51H8abc_DEF_ghi_jkl_mno", "rk_test_" + "abc_def_ghi_jkl_mno_pq"):
+            m = keys.search("value " + s + " end"); self.assertTrue(m, s); self.assertEqual(m.group(0), s)
+
+    def test_sensitive_names_are_the_same_in_t3ctl_t3q_and_scan(self):
+        js = re.search(r"const SENSITIVE_NAME = String\.raw`([^`]*)`;", (ROOT / "tools/t3ctl").read_text()).group(1)
+        for f in ("tools/t3q.py", "tools/cleanup/scan.py"):
+            m = re.search(r'^SENSITIVE_NAME = r"([^"]*)"$', (ROOT / f).read_text(), re.M)
+            self.assertTrue(m, f); self.assertEqual(m.group(1), js, f)
 
 
 class SmallTools(unittest.TestCase):
@@ -226,7 +238,7 @@ class SmallTools(unittest.TestCase):
         self.assertEqual(json.loads(out.stdout), [[False, False], [True, True], [False, False], [False, False], [True, True]], out.stderr)
 
     def test_report_tz_without_a_zone_exits_with_usage(self):
-        for extra in (["--tz"], ["--tz", "--other"]):
+        for extra in (["--tz"], ["--tz", "--other"], ["--tz="]):
             r = subprocess.run([sys.executable, str(ROOT / "tools/report/report.py"), "in.json", "out.html", *extra], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1); self.assertIn("usage:", r.stderr); self.assertNotIn("Traceback", r.stderr)
 
