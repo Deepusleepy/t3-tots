@@ -214,3 +214,21 @@ test("sensitivePath: dotfiles, dot folders and token, auth, secret, credential o
   for (const f of ["src/app.ts", "README.md", "docs/guide.md"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
   assert.equal(t.sensitivePath(path.join(path.sep, "home", ".hidden", "proj", "a.ts"), path.join(path.sep, "home", ".hidden", "proj")), false); // a dot folder above the root is fine
 });
+test("pickProject: id, folder, exact title, one title match; several or none is an error, never the first one", () => {
+  const P = [{ id: "p1", title: "Web", workspaceRoot: "/r/web" }, { id: "p2", title: "Web admin", workspaceRoot: "/r/admin" }, { id: "p3", title: "Website", workspaceRoot: "/r/site" }, { id: "p4", title: "API", workspaceRoot: "/r/api" }];
+  assert.equal(t.pickProject(P, "p3").id, "p3");
+  assert.equal(t.pickProject(P, "/r/admin/").id, "p2");
+  assert.equal(t.pickProject(P, "web").id, "p1");            // exact title beats the two that contain it
+  assert.equal(t.pickProject(P, "ap").id, "p4");             // one title contains it
+  assert.throws(() => t.pickProject(P, "eb"), /AMBIGUOUS: 3 projects/);
+  assert.throws(() => t.pickProject(P, "zzz"), /NOT_FOUND/);
+  for (const q of ["", "   "]) assert.throws(() => t.pickProject(P, q), /--project .* is required/);
+  assert.throws(() => t.pickProject([...P, { id: "p5", title: "web", workspaceRoot: "/x" }], "Web"), /AMBIGUOUS: 2/);
+});
+test("outPath: keeps the project-relative path so same-name files don't overwrite each other", () => {
+  const root = path.resolve("/proj"), out = path.resolve("/out");
+  const a = t.outPath(out, root, path.join(root, "src", "index.ts")), b = t.outPath(out, root, path.join(root, "test", "index.ts"));
+  assert.equal(a, path.join(out, "src", "index.ts")); assert.notEqual(a, b);
+  assert.equal(t.outPath(out, root, path.resolve("/elsewhere/x.md")), path.join(out, "x.md"));  // outside the project: never ../ out of out/
+  assert.equal(t.outPath(out, null, path.resolve("/a/b.md")), path.join(out, "b.md"));
+});

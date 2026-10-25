@@ -178,6 +178,9 @@ def projects():  # T3 projects with folder, thread count and last activity; also
         top = max(parents.items(), key=lambda x: x[1])
         if top[1] >= 2 or len(rows) == 1: print("projects folder guess:", tilde(top[0]))
 
+def secret_name(n):  # Secrets, SECRETS, auth.json, Token: never opened, not even sized (case-insensitive)
+    return any(k in n.lower() for k in ("secret", "token", "auth", "credential"))
+
 def health():
     import socket, subprocess, shutil, platform
     OS = platform.system()
@@ -222,9 +225,9 @@ def health():
         print(f"pending {kind}: {title} since {loc(at)}" + (" (stale >24h)" if ago_h(at) > 24 else ""))
     tot = 0
     for root, dirs, files in os.walk(D):
-        dirs[:] = [d for d in dirs if d != "secrets" and not any(k in d.lower() for k in ("token", "auth"))]
+        dirs[:] = [d for d in dirs if not secret_name(d)]
         for f in files:
-            if any(k in f.lower() for k in ("token", "auth")): continue
+            if secret_name(f): continue
             try: tot += os.path.getsize(os.path.join(root, f))
             except OSError: pass
     print(f"T3 data folder: {tot/1e9:.2f} GB (secret and token files skipped)")

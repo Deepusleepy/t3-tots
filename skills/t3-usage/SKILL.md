@@ -5,7 +5,7 @@ description: >-
   asks: "usage", "costs", "what did I spend", "how many tokens", or the Weekly usage
   estimate routine. Never include it in digests or unprompted reports.
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Read-only.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Read-only.
 
 1. Run `t3q.py usage` on every computer. `T3_DAYS` defaults to 7. `T3_WEEK=1` gives the calendar week from Monday. The script reads the newest `usage-scan-cache*.json` and `usage-model-rates.json`, counts each request once, and prices it at API list rates.
 2. If it prints `NO_USAGE_CACHE`, ask the user to open T3's Usage view once. If the cache is over 12 hours old, say so first and suggest opening the Usage view to refresh it.

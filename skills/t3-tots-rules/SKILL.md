@@ -43,7 +43,7 @@ Never delete or archive threads, and never change T3 settings. t3-update may upd
 ## Decisions
 This section is the one source for who decides; other skills and AGENTS.md point here. A thread asks for two kinds of decision. A question (`user_input`) asks what to build. An approval asks permission to run a command or change files. Who decides depends on the mode the user set, which is saved in memory:
 
-1. Default mode: show questions to the user as cards and answer only with their exact pick for that question (t3-phone-answers "Answering"). Summarise approvals and leave them for the app, unless a standing approval (item 3) covers them. Offer thread actions such as `resume-at-reset`; don't run them.
+1. Default mode: show questions to the user as cards (or numbered options; see "Grok Bot only") and answer only with their exact pick for that question (t3-phone-answers "Answering"). Summarise approvals and leave them for the app, unless a standing approval (item 3) covers them. Offer thread actions such as `resume-at-reset`; don't run them.
 2. Delegated mode starts when the user says something like "decide for me", "do whatever you need" or "I'm away, keep it moving". Record the scope and the end condition in memory. In this mode:
    - Answer routine questions yourself and tell the user afterwards what you picked and why.
    - Accept approvals whose risk hint is `low` or `normal`.
@@ -109,12 +109,12 @@ Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows 
 Read-only database queries. It needs no token. Commands: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. Settings: `T3_DAYS`, `T3_ALL=1`, `T3_Q` (thread words or id), `T3_LAST`, `T3_WEEK=1`.
 
 ### t3ctl
-Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for v1.4.1; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Updating". Don't retry other spellings.
+Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Updating". Don't retry other spellings.
 
 | Area | Commands |
 |---|---|
 | Find | `projects`, `models`, `threads [--project p] [--main] [--limit n]`, `search --query q [--limit n]` |
-| Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p [--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
+| Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p` (required) `[--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
 | Watch | `watch --thread a[,b] [--state file] [--stall-min 20] [--json]` |
 | Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise) |
 | Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d)` |
@@ -122,6 +122,8 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Thread actions | `settle`, `unsettle`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
+
+`--project` takes a project id, its folder, or its title: an exact title wins, else the one title containing the words. Several matches print `AMBIGUOUS` with the candidates (never the first one); an empty value is a usage error.
 
 `status --json` adds `queued` (messages waiting in the queue) and `queueHeld` (the queue was held on purpose); `threads` and `status` show a held queue as `queue held` and settled threads as `(settled)`. `threads --main` hides threads that agents spawned (reviewers, sub-tasks), the same split t3q.py uses. A PM's or a thread's sub-task threads are listed by `subtasks --thread t`. `models` lists the models already used in T3, with the name of each provider's effort setting; skip the `<synthetic>` entry. `limits` prints reset times in local time and marks a reset that already passed with `(passed)`.
 
@@ -145,10 +147,10 @@ The default token scopes don't cover usage or cost totals, T3 settings (includin
 | `unreadable` | That thread couldn't be read. Reported once per distinct error. The other threads still report |
 
 ### t3listen
-Optional. It needs the token and `listen.json`. It follows T3's live events and POSTs question and finish events to the user's webhook routine (t3-phone-answers). Commands: `setup`, `test`, `install [--approvals]`, `uninstall`, `status`, `preview-finish --thread id|title`; `--dry-run` prints instead of sending. It sends approvals too when `listen.json` has `"approvals": true` or the service was installed with `--approvals`; `status` prints which. Running `install` again keeps the `listen.json` setting and drops the flag unless you pass it again. When a main thread stops on a usage limit, t3listen arms T3's Resume at reset if the project is listed in `autoresume.json` (`{"enabled":true,"projects":[...]}`) or `t3ctl new` started the thread (recorded in `started-here.json` for 60 days).
+Optional. It needs the token and `listen.json`. It follows T3's live events and POSTs question and finish events to the user's webhook routine (t3-phone-answers). Commands: `setup`, `test`, `install [--approvals]`, `uninstall`, `status`, `preview-finish --thread id|title` (same thread rules as `t3ctl`: full id, an 8+ character prefix, an exact title or one title match, else `AMBIGUOUS`); `--dry-run` prints instead of sending. It sends approvals too when `listen.json` has `"approvals": true` or the service was installed with `--approvals`; `status` prints which. Running `install` again keeps the `listen.json` setting and drops the flag unless you pass it again. When a main thread stops on a usage limit, t3listen arms T3's Resume at reset if the project is listed in `autoresume.json` (`{"enabled":true,"projects":[...]}`) or `t3ctl new` started the thread (recorded in `started-here.json` for 60 days).
 
 ### Other scripts and data files
-- `export.js` writes a redacted JSON export for reports. `survey.js` lists activity and stale threads.
+- `export.js` writes a redacted JSON export for reports. Its `--project` is a filter: an id, folder or exact title picks that project; otherwise every project whose title contains the words is exported, and it prints a note naming them. `survey.js` lists activity and stale threads.
 - `t3ui` and `ui-*.applescript` are a macOS-only UI fallback. They use the running T3 Code app, or `T3_APP`.
 - Data files the skills create in the tools folder: `templates.md`, `trackers/`, `update-prefs.json`, `sync-prefs.json`, `sync-backups/`, `out/`, `README.md`, `watch-state.json`, `watch-<name>.json`, `autoresume.json`. `t3ctl new` writes `started-here.json`. t3listen writes `listen.json` (private), `listen-state.json`, `answered-here.json` and `listen.log`.
 - Don't leave scratch files (CSVs, `.bak` copies, screenshots) in the tools folder. Put scratch files in `out/`. On Grok Bot, pages are built on the box (`/workspace`).
@@ -170,7 +172,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `BAD_SETTING` | A number setting such as `T3_DAYS` or `T3_LAST` isn't a whole number of 1 or more. Fix it and rerun |
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
 | `NO_USAGE_CACHE` | Ask the user to open T3's Usage view once |
-| `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread" |
+| `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread". From `t3ctl` or `t3listen preview-finish`, several threads or projects match: it lists them; ask which, or pass the id (or the project folder) |
 | `NOT_FOUND` | No thread matches. List the closest ones and ask |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |

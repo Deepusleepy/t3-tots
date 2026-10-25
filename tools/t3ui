@@ -5,7 +5,8 @@
 set -e
 D=${0:A:h}; [[ -f $D/ui-press.applescript ]] || D=$D/macos  # installed: next to t3ui; repo checkout: tools/macos
 [[ "$(uname)" == Darwin ]] || { echo "t3ui only works on macOS"; exit 1; }
-ks(){ local s=${1//\\/\\\\}; s=${s//\"/\\\"}; osascript -e "tell application \"System Events\" to keystroke \"$s\""; }
+# the text goes in as an osascript argument, never inside the script text, so quotes, $(...) and backslashes are typed literally
+ks(){ osascript -e 'on run argv' -e 'tell application "System Events" to keystroke (item 1 of argv)' -e 'end run' -- "$1"; }
 ret(){ osascript -e 'tell application "System Events" to key code 36'; }
 case "$1" in
   new)

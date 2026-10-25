@@ -5,7 +5,7 @@ description: >-
   check first. Use for "update T3/AI/dev/everything", "update gh", "update claude and
   codex", "update just T3 on <computer>", "what's out of date", "change my update levels".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Updating is approved only for the items resolved this turn, or a saved level as its "Writes" section allows. Never touch a project's own lockfile or dependencies unless asked.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Updating is approved only for the items resolved this turn, or a saved level as its "Writes" section allows. Never touch a project's own lockfile or dependencies unless asked.
 
 ## 1. Resolve what to update
 - **By name (first-class):** "update gh", "update claude and codex", "update node on the Mac", "update just T3 on <computer>". Map words to item ids below; a computer name narrows the scope. Named items run even if they aren't in any level, and even if they're in `skip` (the user named them).
