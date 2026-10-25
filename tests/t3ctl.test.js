@@ -1389,6 +1389,83 @@ test("riskOf: under-width \\U002d is not -f; full-width \\u/\\U stay high", () =
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }).level, "high");
 });
 
+test("riskOf: qflag word-boundary lookahead treats backslash as continuing the word", () => {
+  // v1.4.21 qflag used (?![\\$'"]*[A-Za-z0-9]) in a template, so \\$ became \$ and
+  // the class lost the backslash. Unique prefixes (--fo/--for/--h/--f/--d/--al) then
+  // ended when the next letter was an ANSI-C escape, while bash still joined it:
+  // $'--fo\x{6c}low-tags' is argv --follow-tags (false high). A real backslash in
+  // the class lets \x / \u / \U / octal count as continuing the longer word.
+  for (const p of [
+    "git fetch $'--fo\\x{6c}low-tags'",
+    "git fetch $'--fo\\x6clow-tags'",
+    "git fetch $'--fo\\u006clow-tags'",
+    "git fetch $'--fo\\U0000006clow-tags'",
+    "git fetch $'--fo\\154low-tags'",
+    "git fetch $'--fo\\x{16c}low-tags'",
+    "git fetch $'--for\\x{6d}at'",
+    "git reset $'--h\\x{65}lp'",
+    "rm $'--f\\x{69}le' x",
+    "git branch $'--d\\x{72}y-run'",
+    "git push $'--al\\x{73}o'",
+  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of [
+    "git fetch $'--fo\\x{72}ce'",
+    "git fetch --force",
+    "git fetch --fo",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+});
+
+test("riskOf: qenc spellings of + / : refspecs are high like the literal forms", () => {
+  // v1.4.21 PLUS_SPEC / DEL_SPEC matched a literal + / : only. ANSI-C / qenc
+  // spellings of + (0x2b) and : (0x3a) bypassed them, so fetch $'\x{2b}main'
+  // stayed low (READ_ONLY) and push $'\x{3a}gone' stayed normal.
+  for (const p of [
+    "git fetch origin $'\\x{2b}main'",
+    "git fetch origin $'\\x2bmain'",
+    "git fetch origin $'\\x{12b}'",
+    "git fetch origin $'\\x{12b}main'",
+    "git fetch origin $'\\x{2bmain'",
+    "git fetch origin $'\\u002bmain'",
+    "git fetch origin $'\\u2bmain'",
+    "git fetch origin $'\\U002bmain'",
+    "git fetch origin $'\\U0000002bmain'",
+    "git push origin $'\\x{2b}feature'",
+    "git fetch origin +main",
+    "git fetch origin $'+main'",
+    "git fetch origin $' +main'",
+    "git push origin '+feature'",
+    "git pull origin $'\\x{2b}main:main'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  for (const p of [
+    "git push origin $'\\x{3a}gone'",
+    "git push origin $'\\x{3agone'",
+    "git push origin $'\\u003agone'",
+    "git push origin :gone",
+    "git push origin $':gone'",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:branch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin $'\\x{2bf}'" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin $'\\u2b0main'" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
