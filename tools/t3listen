@@ -288,6 +288,14 @@ async function armResume(ep, threadId) { // -> { autoResumeSet, autoResumeNote }
 }
 async function reportEnd(ep, t, runId, opts = {}) {
   if (runId && S.finished[runId]) return;
+  if (!runId && opts.since) { // catch-up: every ended run in the window, not only the newest
+    let p = null;
+    try { p = await threadSnap(ep, t.id); } catch (err) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: couldn't read thread: ${err.message}`); return; }
+    if (!p) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: thread gone`); return; }
+    const ended = (p.runs || []).filter((r) => r.startedAt && END[r.status]).sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
+    for (const run of ended) await reportEnd(ep, t, run.id, opts);
+    return;
+  }
   const { e, skip } = await buildEnd(ep, t, runId, opts);
   if (!e) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
@@ -338,8 +346,8 @@ async function onItem(ep, v, full) {
       pruneFinished();
       for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); // not delivered before the restart
       const since = S.lastAlive ? S.lastAlive - 120000 : 0; // first run with this feature: nothing to catch up on
-      // idle finished threads have status like "idle", not completed/failed; buildEnd decides whether to skip
-      if (since) for (const t of v.snapshot.threads || []) if (!isBusy(t) && Date.parse(t.updatedAt || 0) > since && Date.now() - Date.parse(t.updatedAt) < 36e5) await reportEnd(ep, t, null, { since });
+      // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
+      if (since) for (const t of v.snapshot.threads || []) if (!isBusy(t) && Date.parse(t.updatedAt || 0) > since) await reportEnd(ep, t, null, { since });
       S.lastAlive = Date.now(); saveState();
     }
     log(`watching ${live.size} threads (${[...runSeen.values()].filter(isActive).length} running); ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped; run ends on`);

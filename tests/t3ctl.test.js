@@ -298,6 +298,60 @@ test("riskOf: long-form rm/find/Remove-Item deletes are high", () => {
   }
 });
 
+test("riskOf: push delete-refspec is high anywhere after push; HEAD:branch is not", () => {
+  for (const p of ["git push :foo", "git push origin :foo", "git push -u origin :foo", "git push --atomic origin :feature", "git --no-pager push -u origin :gone"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push HEAD:branch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+});
+
+test("riskOf: switch/restore/checkout destructive forms are high; staged-only restore and create-branch are not", () => {
+  const high = [
+    "git switch -f", "git switch --force", "git switch -C existing", "git switch --force-create existing",
+    "git restore .", "git restore --source=HEAD .", "git restore -W .", "git restore --worktree --source=HEAD .",
+    "git restore --staged --worktree file", "git restore -S -W file",
+    "git checkout -- .", "git checkout HEAD -- file", "git checkout -B existing",
+  ];
+  for (const p of high) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+});
+
+test("riskOf: branch short-flag clusters and --force/-C are high; listing stays low", () => {
+  for (const p of ["git branch -d -v feature", "git branch -dv feature", "git branch -Dvf feature", "git branch -C dest", "git branch --force dest"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of ["git branch", "git branch --list", "git branch --show-current", "git branch -v"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+});
+
+test("riskOf: find -exec/-execdir/-ok/-okdir rm (and /rm) are high and not read-only; -execdir is not rm -rf", () => {
+  for (const p of ["find /var/tmp -name core -exec /bin/rm {} \\;", "find . -ok rm {} \\;", "find . -execdir rm {} +", "find . -okdir /usr/bin/rm {} \\;", "find . -exec rm {} +"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -name '*.tmp' -print" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+});
+
+test("riskOf: PowerShell Remove-Item unique prefixes of Recurse/Force are high; -filter is not", () => {
+  for (const p of ["Remove-Item -Recurse x", "Remove-Item -r x", "Remove-Item -Force x", "Remove-Item -fo x", "Remove-Item -Rec x", "Remove-Item -Re x", "Remove-Item -for x", "Remove-Item -forc x", "del -rec x"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "Remove-Item -filter x" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "Remove-Item x" }).level, "high");
+});
+
+test("riskOf: fetch --prune/-p and push --all/--prune are high; bare fetch stays low", () => {
+  for (const p of ["git fetch --prune", "git fetch -p", "git push --all", "git push --prune", "git push --mirror"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of ["git fetch", "git fetch origin", "git fetch origin feature"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+});
+
+test("riskOf: single-quoted git.exe / git.cmd are judged like double-quoted", () => {
+  for (const p of ["'git.exe' push --force", "'git.cmd' reset --hard", '"git.exe" push --force', '"git.cmd" reset --hard'])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
