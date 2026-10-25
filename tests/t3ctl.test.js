@@ -1466,6 +1466,136 @@ test("riskOf: qenc spellings of + / : refspecs are high like the literal forms",
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin $'\\u2b0main'" }).level, "high");
 });
 
+test("riskOf: qenc 3-digit octal value+256 is the same byte as in-range octal", () => {
+  // v1.4.22 qenc emitted \\53/\\053 for + and \\72/\\072 for :. bash 5.2 3-digit
+  // octal keeps the low 8 bits, so \\453 is + (299&0xff), \\472 is :, \\546 is f.
+  for (const p of [
+    "git fetch origin $'\\453main'",
+    "git push origin $'\\472gone'",
+    "git fetch $'-\\546' origin",
+    "git fetch $'--\\560rune' origin",
+    "git push $'--\\546orce' origin x",
+    "rm $'-\\546' x",
+    "rm $'-\\562f' dir",
+    "git clean $'-\\546'",
+    "git branch $'-\\544' gone",
+    "git fetch origin $'\\053main'",
+    "git push origin $'\\072gone'",
+    "git fetch $'-\\146' origin",
+    "rm $'-\\162f' dir",
+    "git fetch origin $'+main'",
+    "git push origin :gone",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+});
+
+test("riskOf: backslash before a delete refspec colon is high like :gone", () => {
+  // PLUS_SPEC already allowed \\ before +. DEL_SPEC missed \\:gone / ''\\:gone /
+  // \\:''gone (argv :gone). Literal :gone stays high.
+  for (const p of [
+    "git push origin \\:gone",
+    "git push origin ''\\:gone",
+    "git push origin \\:''gone",
+    "git push origin :gone",
+    "git push origin ':gone'",
+    "git push origin $':gone'",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:branch" }).level, "high");
+});
+
+test("riskOf: encoded fetch :main/:master is high; leading-colon fetch is not read-only", () => {
+  // v1.4.22 fetch high arm :(main|master) and READ_ONLY [^\s:@]+: wanted a literal
+  // colon, so $'\\x{3a}main' / $'\\72main' / $'\\472main' stayed low. Leading
+  // :gone stayed inside READ_ONLY because the source class is non-empty.
+  for (const p of [
+    "git fetch origin $'\\x{3a}main'",
+    "git fetch origin $'\\72main'",
+    "git fetch origin $'\\472main'",
+    "git fetch origin $'\\x{3a}refs/heads/main'",
+    "git fetch origin :main",
+    "git fetch origin :refs/heads/main",
+    "git fetch origin :master",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  for (const p of [
+    "git fetch origin :gone",
+    "git fetch origin :feature",
+    "git fetch origin $'\\x{3a}gone'",
+    "git fetch origin $'\\472gone'",
+  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+});
+
+test("riskOf: /i qcls encodes the other case of class letters", () => {
+  // git()/rm are /i, so [dmf] matches D/M and [rfd] matches R, but qcls only
+  // encoded the written case. $'-\\104' / $'-\\x44' (argv -D) stayed normal.
+  for (const p of [
+    "git branch $'-\\104' gone",
+    "git branch $'-\\x44' gone",
+    "git branch $'-\\115' other",
+    "git branch $'-\\x4d' other",
+    "rm $'-\\122' dir",
+    "rm $'-\\x52' dir",
+    "git fetch $'-\\120'",
+    "git branch -D gone",
+    "git branch -M other",
+    "rm -R dir",
+    "git fetch -P",
+    "git branch $'-\\144' gone",
+    "git fetch $'-\\146' origin",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch $'-\\143' dest" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch -c dest" }).level, "high");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+});
+
+test("riskOf: brace expansion of flags and delete refspecs is high", () => {
+  // bash expands {a,b} before argv. Contiguous flags split by braces
+  // (--{force,} / {-rf,} / {:gone,}) scored low/normal while argv is dangerous.
+  // {--force,} / {-f,} already contain the spelling; keep those high.
+  for (const p of [
+    "git fetch --{force,}",
+    "git fetch --{prune,}",
+    "git fetch --pr{une,}",
+    "rm {-rf,} dir",
+    "rm {-r,-f} dir",
+    "git push origin {:gone,}",
+    "git reset --{hard,}",
+    "git branch {-D,} gone",
+    "git pull --{force,}",
+    "git fetch {--force,}",
+    "rm {-f,} dir",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --{tags,}" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch '--{force,}'" }).level, "high");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
