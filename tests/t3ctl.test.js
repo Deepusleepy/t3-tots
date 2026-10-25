@@ -414,6 +414,79 @@ test("riskOf: unique prefixes of already-high long options; skip prefixes git it
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pru" }).level, "high");
 });
 
+test("riskOf: shorter unique prefixes git 2.43 / GNU rm already accept are high", () => {
+  // git push --de is --delete (unique vs --dry-run). git branch --d/--de is --delete; --mo is --move.
+  // rm --r/--re is --recursive; --f is --force; --d is --dir. git switch --di is --discard-changes.
+  for (const p of [
+    "git push --de origin feature", "git branch --d feature", "git branch --de feature", "git branch --mo old new",
+    "rm --r build", "rm --re build", "rm --f build", "rm --d emptydir", "git switch --di main",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  // skipped: git push --d is ambiguous (--delete vs --dry-run); git switch --d is (--discard-changes vs --detach);
+  // git branch --m is (--move vs --merged). git rejects these.
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push --d origin feature" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch --d main" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --m old new" }).level, "high");
+});
+
+test("riskOf: git pull --force/-f/--fo is high like fetch --force; --ff-only stays normal", () => {
+  for (const p of ["git pull -f", "git pull --force", "git pull --fo", "git pull -pf origin"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
+  // git pull --f is ambiguous (--force vs --ff-only); git rejects it
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --f" }).level, "high");
+});
+
+test("riskOf: find -exec wrappers, quoted/path shells, git rm, and multiline -exec are high and not read-only", () => {
+  const high = [
+    "find . -exec /bin/sh -c 'rm {}' \\;",
+    "find . -exec 'sh' -c 'rm {}' \\;",
+    "find . -exec \"bash\" -c 'rm {}' \\;",
+    "find . -exec /usr/bin/env rm {} \\;",
+    "find . -exec env -i rm {} \\;",
+    "find . -exec command -p rm {} \\;",
+    "find . -exec nice -n 19 rm {} \\;",
+    "find . -exec git rm {} \\;",
+    "find .\n  -exec rm {} \\;",
+    "find . -execdir /bin/sh -c 'rm {}' \\;",
+    "find . -ok env -i rm {} \\;",
+    "find . -okdir git rm {} \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+});
+
+test("riskOf: checkout path / tree-ish+path / --ours --theirs prefixes / -2 -3 are high; -b stays normal", () => {
+  const high = [
+    "git checkout ../file", "git checkout ..",
+    "git checkout './file'", 'git checkout "./src/app.js"',
+    "git checkout @ file", "git checkout @~1 file", "git checkout HEAD@{1} file", "git checkout 'HEAD' file",
+    "git checkout main file", "git checkout origin/main src/app.js",
+    "git checkout --our file", "git checkout --ou file", "git checkout --their file", "git checkout --th file",
+    "git checkout -2 file", "git checkout -3 file",
+  ];
+  for (const p of high) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --help" }).level, "high");
+  // git checkout --o is ambiguous (--ours vs --overwrite-ignore); --t is (--theirs vs --track)
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --o file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --t file" }).level, "high");
+});
+
+test("riskOf: quoted force refspecs on push and fetch are high like the unquoted form", () => {
+  for (const p of [
+    "git push origin '+feature'", 'git push origin "+feature"',
+    "git push origin '+ :gone'", "git push origin '+:gone'",
+    "git fetch origin '+feature:feature'", "git fetch origin '+refs/heads/a:refs/heads/b'",
+    'git fetch origin "+refs/heads/a:refs/heads/b"',
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
+});
+
 test("uopt: unique prefixes of --all start at --al, not the ambiguous --a", () => {
   const re = new RegExp(t.uopt("all", 2) + "\\b");
   assert.ok(re.test("--al")); assert.ok(re.test("--all")); assert.ok(!re.test("--a")); assert.ok(!re.test("--atomic"));
