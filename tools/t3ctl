@@ -248,7 +248,9 @@ const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 // token, sit after the dashes, or sit between letters; a backslash-newline inside quotes
 // joins the next line; and $'...\xHH...' / \x{HH} / \nnn / \u / \U may spell a letter or a
 // dash. bash 5.2 \u is 1–4 hex digits, \U is 1–8 (greedy, so $'\u2dC' is U+02DC not -C;
-// $'\u2d'C closes the quote first). \x{…} is brace-terminated, so $'\x{2d}C' is -C.
+// $'\u2d'C closes the quote first). At the width cap a further hex letter is the next
+// character ($'\u002df' / $'\U0000002df' are -f). \x{…} is brace-terminated and the value
+// mod 256 ($'\x{2d}C' / $'\x{12d}C' / $'\x{102d}C' are -C).
 // --pru"ne" / --''prune / ''--prune / $'--pr\x75ne' / $'\x2d\x2dprune' / $'--pr\165ne'
 // / $'\u2d\u2dprune' / $'\x{2d}p' / -n"p" / -S"W" / -v\rf equal argv.
 // (?![\\$'"]*[A-Za-z0-9]) after the token keeps unique prefixes from eating a longer word
@@ -257,12 +259,21 @@ const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 const QWRAP = String.raw`(?:\$?['"])*`;
 const QSEP = String.raw`(?:\$?['"]|\\\n[ \t]*|\\)*`;
 const hexd = (s) => [...s].map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d)).join("");
-function qenc(code) { // ANSI-C spellings of one byte; \u/\U stop before extra hex (bash-greedy)
+function qenc(code) { // ANSI-C spellings of one byte; bash \u/\U width cap and \x{} mod 256
   if (code > 255) return "";
-  const raw = code.toString(16), HEX = hexd(raw);
+  const raw = code.toString(16), HEX = hexd(raw), pad = hexd(raw.padStart(2, "0"));
   const oct = code.toString(8), oct3 = oct.padStart(3, "0");
   const octRe = oct === oct3 ? `\\\\${oct3}` : `\\\\${oct3}|\\\\${oct}`;
-  return `\\\\x${hexd(raw.padStart(2, "0"))}|\\\\x\\{0*${HEX}\\}|${octRe}|\\\\u0{0,${4 - raw.length}}${HEX}(?![0-9A-Fa-f])|\\\\U0{0,${8 - raw.length}}${HEX}(?![0-9A-Fa-f])`;
+  const uN = 4 - raw.length, UN = 8 - raw.length;
+  // Full-width \u/\U (4 / 8 hex digits): bash stops there, so a following hex letter is
+  // the next character ($'\u002df' → -f). Under-width keeps (?![0-9A-Fa-f]) so greed
+  // traps stay off ($'\u2df' / $'\U2df' are U+02DF, not dash + f).
+  const uShort = uN ? `\\\\u0{0,${uN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
+  const UShort = UN ? `\\\\U0{0,${UN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
+  // \x{…}: bash takes the value mod 256 ($'\x{12d}' / $'\x{102d}' are '-'). Last two
+  // hex digits are the low 8 bits; a one-nibble body is the value itself (code < 16).
+  const xBody = raw.length === 1 ? `(?:${HEX}|[0-9A-Fa-f]*${pad})` : `[0-9A-Fa-f]*${pad}`;
+  return `\\\\x${pad}|\\\\x\\{${xBody}\\}|${octRe}|${uShort}\\\\u0{${uN}}${HEX}|${UShort}\\\\U0{${UN}}${HEX}`;
 }
 function qhex(ch) {
   const lit = ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");

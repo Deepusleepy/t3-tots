@@ -1220,6 +1220,85 @@ test("riskOf: branch/switch -C with quote before C / \\x{2d}C is high", () => {
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
 });
 
+test("riskOf: full-width \\u/\\U after the hex cap is high; greed traps stay off high", () => {
+  // v1.4.19 ended every \\u/\\U arm with (?![0-9A-Fa-f]). bash 5.2 \\u takes at most 4
+  // hex digits and \\U at most 8, so $'\\u002df' is argv -f (f is the next character).
+  // The lookahead treated that letter as part of the escape, and fetch scored low.
+  // Full-width drops the lookahead; under-width keeps it so $'\\u2df' stays U+02DF.
+  for (const p of [
+    "git fetch $'\\u002df'",
+    "git fetch $'\\u002dff'",
+    "git fetch $'\\u002d\\u002dforce'",
+    "git fetch $'\\U0000002df'",
+    "git fetch $'\\U0000002d\\U0000002dforce'",
+    "rm $'\\u002df' file",
+    "git branch $'\\u002dC' dest",
+    "git switch $'\\u002dC' feature",
+    "git branch $'\\u002dD' feature",
+    "git clean $'\\u002d\\u002dforce'",
+    "git switch $'\\u002d\\u002ddiscard-changes'",
+    "git push $'\\u002df'",
+    "git push $'\\u002d\\u002dforce'",
+    "git fetch $'\\u002dp'",
+    "git fetch $'\\u002d\\u002dprune'",
+    "rm $'\\u002drf'",
+    "git reset $'\\u002d\\u002dhard'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  for (const p of [
+    "git fetch $'\\U2df'",
+    "git fetch $'\\u2df'",
+    "git fetch $'\\u2d\\u2dforce'",
+    "git branch $'\\u2dC' dest",
+  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\u002d\\u002dquiet'" }).level, "high");
+});
+
+test("riskOf: \\x{} low-8-bits dash (value mod 256) is high, not read-only", () => {
+  // v1.4.19 allowed only leading zeros in \\x{…} ($'\\x{0*2d}'). bash 5.2 takes the
+  // value mod 256, so $'\\x{12d}' / $'\\x{012d}' / $'\\x{102d}' are all '-'. Extra
+  // non-zero high digits slipped through and fetch $'\\x{12d}f' scored low.
+  for (const p of [
+    "git fetch $'\\x{12d}f'",
+    "git fetch $'\\x{12d}\\x{12d}force'",
+    "git fetch $'\\x{012d}f'",
+    "git fetch $'\\x{102d}f'",
+    "rm $'\\x{12d}rf'",
+    "rm $'\\x{12d}f'",
+    "git push $'\\x{12d}f'",
+    "git branch $'\\x{12d}C' dest",
+    "git switch $'\\x{12d}C' feature",
+    "git fetch $'\\x{2d}f'",
+    "git fetch $'\\x{002d}f'",
+    "git fetch $'\\x2df'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}no-force'" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch $'\\x2dc' dest" }).level, "high");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git branch $'\\x2dC' dest" }).level, "high");
+  const long = "git fetch $'\\x{" + "1".repeat(80) + "2d}f'";
+  const t0 = process.hrtime.bigint();
+  const r = t.riskOf({ requestKind: "command", prompt: long });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 50, `80 extra \\x{} hex digits took ${ms.toFixed(2)}ms`);
+  assert.equal(r.level, "high", long);
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
