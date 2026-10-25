@@ -66,6 +66,18 @@ test("reportEnd redacts the event before it is first saved to listen-state.json"
   assert.ok(body.includes("cleanEvent(e)"), "reportEnd cleans the event");
   assert.ok(body.indexOf("cleanEvent(e)") < body.indexOf("saveState()"), "cleanEvent runs before the first saveState");
 });
+test("restart catch-up: any non-busy thread in the window, not only END[t.status]; buildEnd still skips", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const start = src.indexOf("const since = S.lastAlive");
+  const end = src.indexOf("S.lastAlive = Date.now()", start);
+  const block = src.slice(start, end);
+  assert.ok(block.includes("reportEnd(ep, t, null, { since })"), block);
+  assert.ok(!block.includes("END[t.status]"), block);
+  assert.ok(block.includes("!isBusy(t)"), block);
+  assert.ok(src.includes('skip: "ended before the listener\'s last run"'));
+  assert.ok(src.includes("sub-task thread that didn't fail"));
+  assert.ok(src.includes("thread is going on with its next queued message"));
+});
 
 test("idLike: a full id or an 8+ character prefix, never a title with spaces", () => {
   for (const q of ["abcdefgh", "thread-0b6e2f1c-full-id"]) assert.equal(l.idLike(q), true, q);

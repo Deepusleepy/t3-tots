@@ -338,7 +338,8 @@ async function onItem(ep, v, full) {
       pruneFinished();
       for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); // not delivered before the restart
       const since = S.lastAlive ? S.lastAlive - 120000 : 0; // first run with this feature: nothing to catch up on
-      if (since) for (const t of v.snapshot.threads || []) if (!isBusy(t) && END[t.status] && Date.parse(t.updatedAt || 0) > since && Date.now() - Date.parse(t.updatedAt) < 36e5) await reportEnd(ep, t, null, { since });
+      // idle finished threads have status like "idle", not completed/failed; buildEnd decides whether to skip
+      if (since) for (const t of v.snapshot.threads || []) if (!isBusy(t) && Date.parse(t.updatedAt || 0) > since && Date.now() - Date.parse(t.updatedAt) < 36e5) await reportEnd(ep, t, null, { since });
       S.lastAlive = Date.now(); saveState();
     }
     log(`watching ${live.size} threads (${[...runSeen.values()].filter(isActive).length} running); ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped; run ends on`);

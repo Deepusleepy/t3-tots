@@ -260,6 +260,7 @@ class SkillOsascript(unittest.TestCase):
             self.assertNotRegex(text, r"quotes are (already )?safe", msg=rel)
             self.assertIn('\\"', text, f'{rel} must document \\" inside double quotes')
             self.assertIn(r"'\''", text, f"{rel} must document '\\'' inside single quotes")
+            self.assertIn("still expand inside double quotes", text, f"{rel} must note $ / backticks / \\ expand in double quotes")
             found = 0
             for m in re.finditer(r"osascript\b[^`]*", text):
                 snip, found = m.group(0), found + 1
