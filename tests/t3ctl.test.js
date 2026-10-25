@@ -584,12 +584,17 @@ test("riskOf: find -exec mksh/rbash/time/flock/setsid/gtimeout/perl/node/python3
   assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }).level, "low");
 });
 
-test("riskOf: push --branches/--branch/--br are high like --all", () => {
-  for (const p of ["git push --branches", "git push --branch", "git push --br", "git push --all", "git push --al"])
+test("riskOf: push --branches/--branch/--br/--b are high like --all; --a stays normal", () => {
+  // git 2.43: --b is unique for --branches (nothing else in git push -h starts with --b).
+  // --a stays ambiguous (--all vs --atomic), so that floor stays at --al.
+  for (const p of ["git push --branches", "git push --branch", "git push --br", "git push --b origin", "git push --all", "git push --al"])
     assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  const re = new RegExp(t.uopt("branches", 2) + "\\b");
-  assert.ok(re.test("--br")); assert.ok(re.test("--branch")); assert.ok(re.test("--branches"));
-  assert.ok(!re.test("--b")); assert.ok(!re.test("--atomic"));
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push --a origin" }).level, "high");
+  const re = new RegExp(t.uopt("branches", 1) + "\\b");
+  assert.ok(re.test("--b")); assert.ok(re.test("--br")); assert.ok(re.test("--branch")); assert.ok(re.test("--branches"));
+  assert.ok(!re.test("--atomic"));
+  const all = new RegExp(t.uopt("all", 2) + "\\b");
+  assert.ok(all.test("--al")); assert.ok(all.test("--all")); assert.ok(!all.test("--a")); assert.ok(!all.test("--atomic"));
 });
 
 test("riskOf: extensionless and magic pathspec checkouts are high; bare branch and -b stay normal", () => {
@@ -598,8 +603,17 @@ test("riskOf: extensionless and magic pathspec checkouts are high; bare branch a
     "git checkout README",
     'git checkout "README"',
     "git checkout ':(literal)README'",
+    "git checkout Dockerfile",
+    'git checkout "Dockerfile"',
+    "git checkout LICENSE",
+    "git checkout Gemfile",
+    "git checkout VERSION",
+    "git checkout COPYING",
+    "git checkout Jenkinsfile",
+    "git checkout Justfile",
   ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b brand-new" }).level, "high");
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
 });
@@ -612,6 +626,43 @@ test("riskOf: backslash-newline continuation on branch/checkout/clean/reset is h
     "git reset \\\n--hard",
     "git reset \\\n  --hard",
   ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+});
+
+test("riskOf: backslash-newline push to main and indented switch/branch -C/checkout -B are high", () => {
+  // one-line push to main/master and unindented switch -f / branch -C / checkout -B are already high;
+  // indent spaces after `\` + newline hid -C/-B, and [^\n]* hid push origin main and --discard-changes.
+  for (const p of [
+    "git push \\\norigin master",
+    "git push \\\norigin main",
+    "git switch \\\n--discard-changes feature",
+    "git switch \\\n  -f feature",
+    "git switch \\\n-f feature",
+    "git branch \\\n  -C feature copied-indent",
+    "git branch \\\n-C feature copied",
+    "git checkout \\\n  -B feature",
+    "git checkout \\\n-B feature",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+});
+
+test("riskOf: find -exec stdbuf/ionice/taskset/chrt/prlimit and python3 shutil.rmtree are high and not read-only", () => {
+  const high = [
+    "find . -exec stdbuf -oL rm {} \\;",
+    "find . -exec ionice -c3 rm {} \\;",
+    "find . -exec taskset -c 0 rm {} \\;",
+    "find . -exec chrt -i 0 rm {} \\;",
+    "find . -exec prlimit --nofile=256 rm {} \\;",
+    "find . -exec python3 -c '(__import__(\"shutil\").rmtree(\"sub\"))'",
+    "find . -exec python3 -c 'import shutil; shutil.rmtree(\"sub\")'",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec time echo {} \\;" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "timeout 5 echo" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "python3 -c 'print(123)'" }).level, "high");
 });
 
 test("riskOf: ANSI-C $':…' delete refspecs are high", () => {
