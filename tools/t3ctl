@@ -246,26 +246,44 @@ const PLUS_SPEC = String.raw`(?:\\?\+\S+|['"]\+\s*[^'"]+['"]|\$['"]\+\s*[^'"]+['
 const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 // quoted or ANSI-C $'...' flag: empty quotes / $'', a quote, or a backslash may wrap the
 // token, sit after the dashes, or sit between letters; a backslash-newline inside quotes
-// joins the next line; and $'...\xHH...' / \nnn / \uXXXX may spell a letter or a dash,
-// so --pru"ne" / --''prune / ''--prune / $'--pr\x75ne' / $'\x2d\x2dprune' / $'--pr\165ne'
-// / -n"p" / -S"W" / -v\rf equal argv.
+// joins the next line; and $'...\xHH...' / \x{HH} / \nnn / \u / \U may spell a letter or a
+// dash. bash 5.2 \u is 1–4 hex digits, \U is 1–8 (greedy, so $'\u2dC' is U+02DC not -C;
+// $'\u2d'C closes the quote first). \x{…} is brace-terminated, so $'\x{2d}C' is -C.
+// --pru"ne" / --''prune / ''--prune / $'--pr\x75ne' / $'\x2d\x2dprune' / $'--pr\165ne'
+// / $'\u2d\u2dprune' / $'\x{2d}p' / -n"p" / -S"W" / -v\rf equal argv.
 // (?![\\$'"]*[A-Za-z0-9]) after the token keeps unique prefixes from eating a longer word
 // (--word is not --worktree; --follow-tags is not --force).
 // QWRAP/QSEP take one quote per iteration (not {1,2}): n quotes is linear, not Fibonacci.
 const QWRAP = String.raw`(?:\$?['"])*`;
 const QSEP = String.raw`(?:\$?['"]|\\\n[ \t]*|\\)*`;
-const QHEX = "\\\\x[0-9A-Fa-f]{2}";
-const QOCT = "\\\\[0-7]{1,3}";
-const QUNI = "\\\\u[0-9A-Fa-f]{4}";
-function qhex(ch) {
-  const lit = ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
-  const code = ch.charCodeAt(0);
-  if (code > 255) return lit;
-  const hexd = (s) => [...s].map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d)).join("");
-  const hex = hexd(code.toString(16).padStart(2, "0"));
+const hexd = (s) => [...s].map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d)).join("");
+function qenc(code) { // ANSI-C spellings of one byte; \u/\U stop before extra hex (bash-greedy)
+  if (code > 255) return "";
+  const raw = code.toString(16), HEX = hexd(raw);
   const oct = code.toString(8), oct3 = oct.padStart(3, "0");
   const octRe = oct === oct3 ? `\\\\${oct3}` : `\\\\${oct3}|\\\\${oct}`;
-  return `(?:${lit}|\\\\x${hex}|${octRe}|\\\\u${hexd(code.toString(16).padStart(4, "0"))})`;
+  return `\\\\x${hexd(raw.padStart(2, "0"))}|\\\\x\\{0*${HEX}\\}|${octRe}|\\\\u0{0,${4 - raw.length}}${HEX}(?![0-9A-Fa-f])|\\\\U0{0,${8 - raw.length}}${HEX}(?![0-9A-Fa-f])`;
+}
+function qhex(ch) {
+  const lit = ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+  const enc = qenc(ch.charCodeAt(0));
+  return enc ? `(?:${lit}|${enc})` : lit;
+}
+const QCLS = new Map();
+function qcls(cls) { // encodings of chars in […], not any \xHH (so \x2d is not [pf])
+  let r = QCLS.get(cls); if (r) return r;
+  if (cls.length < 3 || cls[1] === "^") { QCLS.set(cls, cls); return cls; }
+  const inner = cls.slice(1, -1), chars = [];
+  for (let i = 0; i < inner.length; ) {
+    if (i + 2 < inner.length && inner[i + 1] === "-") {
+      const a = inner.charCodeAt(i), b = inner.charCodeAt(i + 2);
+      if (a <= b) { for (let c = a; c <= b; c++) chars.push(c); i += 3; continue; }
+    }
+    chars.push(inner.charCodeAt(i++));
+  }
+  const enc = [...new Set(chars)].map(qenc).filter(Boolean);
+  r = enc.length ? `(?:${cls}|${enc.join("|")})` : cls;
+  QCLS.set(cls, r); return r;
 }
 function qflex(s) {
   let out = "", i = 0;
@@ -284,7 +302,7 @@ function qflex(s) {
       if (j >= s.length) { out += s[i++]; continue; }
       const cls = s.slice(i, j + 1); i = j + 1;
       let q = ""; if (i < s.length && "*+?".includes(s[i])) q = s[i++];
-      const atom = `(?:${cls}|${QHEX}|${QOCT}|${QUNI})`;
+      const atom = qcls(cls);
       out += (q === "*" || q === "+") ? `(?:${atom}${QSEP})${q}` : atom + q + QSEP;
       continue;
     }
