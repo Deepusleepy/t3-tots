@@ -130,8 +130,8 @@ test("afterSnapshotListen: still-open same generation advances lastAlive; gen mi
 
 test("usageLimitFields: busy failed run still carries usageLimit / autoResumeSet / resumeAt", () => {
   const reset = "2026-01-01T05:00:00Z";
-  const busy = { id: "t", status: "running", activeRunId: "r2", lastErrorClass: "usage_limit", usageLimitResetAt: reset, latestRunId: "r2" };
-  const ended = { id: "r1", status: "failed" };
+  const ended = { id: "r1", status: "failed", lastErrorClass: "usage_limit", usageLimitResetAt: reset };
+  const busy = { id: "t", status: "running", activeRunId: "r2", latestRunId: "r2" };
   const a = l.usageLimitFields(busy, ended);
   assert.equal(a.usageLimit, true);
   assert.equal(a.autoResumeSet, false);
@@ -145,6 +145,35 @@ test("usageLimitFields: busy failed run still carries usageLimit / autoResumeSet
   assert.equal(fromRun.usageLimit, true);
   assert.equal(fromRun.resumeAt, reset);
   assert.equal(l.usageLimitFields({ id: "t", status: "failed", lastErrorClass: "other" }, { id: "r", status: "failed" }), null);
+});
+
+test("usageLimitFields: ended-run lastErrorClass / reset; leftover shell + server_error is not usage_limit", () => {
+  const reset = "2026-01-01T05:00:00Z";
+  const ended = { id: "r1", status: "failed", lastErrorClass: "usage_limit", usageLimitResetAt: reset };
+  const moved = { id: "t", status: "running", activeRunId: "r2", latestRunId: "r2", lastErrorClass: "server_error" };
+  const a = l.usageLimitFields(moved, ended);
+  assert.equal(a.usageLimit, true);
+  assert.equal(a.resumeAt, reset);
+  assert.equal(a.autoResumeSet, false);
+  const leftover = { id: "t", status: "failed", lastErrorClass: "server_error", usageLimitResetAt: reset, latestRunId: "r1" };
+  assert.equal(l.usageLimitFields(leftover, { id: "r1", status: "failed", lastErrorClass: "server_error" }), null);
+  assert.equal(l.usageLimitFields(leftover, { id: "r1", status: "failed" }), null);
+});
+
+test("usageLimitFields: autoResumeSet matches the ended run id, not a later latestRunId record", () => {
+  const reset = "2026-01-01T05:00:00Z";
+  const ended = { id: "r1", status: "failed", lastErrorClass: "usage_limit", usageLimitResetAt: reset };
+  const later = l.usageLimitFields({
+    id: "t", status: "running", activeRunId: "r2", latestRunId: "r2",
+    limitRecovery: { runId: "r2", resetAt: reset, autoResume: true },
+  }, ended);
+  assert.equal(later.usageLimit, true);
+  assert.equal(later.autoResumeSet, false);
+  const same = l.usageLimitFields({
+    id: "t", status: "failed", latestRunId: "r1",
+    limitRecovery: { runId: "r1", resetAt: reset, autoResume: true },
+  }, ended);
+  assert.equal(same.autoResumeSet, true);
 });
 
 test("catchUpThreads: includes a busy thread so a failed downtime end is still seen", () => {
@@ -235,4 +264,44 @@ test("preview-finish: archivedThreads are searched; colon ids are id-like; AMBIG
     r = await run("Live One"); assert.equal(r.code, 0, r.out);
     r = await run("abcdefgh"); assert.equal(r.code, 1); assert.match(r.out, /AMBIGUOUS/);
   } finally { srv.close(); }
+});
+
+test("preview-finish: usage-limit fields come from the ended run; armResume is not called", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
+  const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const start = src.indexOf("async function previewFinish");
+  const end = src.indexOf("\n}", start);
+  const body = src.slice(start, end);
+  assert.ok(body.includes("usageLimitFields("), body);
+  assert.ok(!body.includes("armResume("), body);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-limit-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const reset = "2026-01-01T05:00:00Z";
+  const thread = { id: "limit-thread-01", title: "Limited", status: "running", activeRunId: "r2", latestRunId: "r2" };
+  const ended = { id: "r1", status: "failed", startedAt: "2026-01-01T04:00:00Z", completedAt: "2026-01-01T04:05:00Z",
+    lastErrorClass: "usage_limit", usageLimitResetAt: reset };
+  const hits = [];
+  const srv = http.createServer((req, res) => {
+    hits.push(req.method + " " + decodeURIComponent(req.url));
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [thread] }));
+    if (u === "/api/orchestration/threads/" + thread.id) {
+      return res.end(JSON.stringify({ projection: { thread, turnItems: [], runs: [ended] } }));
+    }
+    res.statusCode = 404; res.end("{}");
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const r = await new Promise((done) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", thread.id],
+    { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => done({ code: err ? err.code : 0, out: out + errOut })));
+  srv.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /PREVIEW payload/);
+  const json = r.out.slice(r.out.indexOf("{"));
+  const payload = JSON.parse(json);
+  assert.equal(payload.usageLimit, true);
+  assert.equal(payload.resumeAt, reset);
+  assert.equal(payload.autoResumeSet, false);
+  assert.ok(!hits.some((h) => /dispatch|ws/i.test(h)), hits.join("\n"));
 });

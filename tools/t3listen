@@ -242,7 +242,7 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
     delegated, runId: run.id, status: run.status, threadStatus: t.status || null, startedAt: run.startedAt, completedAt: done, completedAtLocal: localTime(done),
     durationSec: run.startedAt ? Math.max(0, Math.round((Date.parse(done) - Date.parse(run.startedAt)) / 1000)) : null,
     lastReply: reply ? trim(txt(reply), 600) : null, ...(event === "thread.failed" && errText ? { error: trim(String(errText), 300) } : {}) };
-  return { e };
+  return { e, run };
 }
 // ---------- usage-limit auto-resume ----------
 // When a run fails on a usage limit in a watched project (autoresume.json "projects", none by default) or in a thread
@@ -268,28 +268,30 @@ function wsRpc(ep, tag, payload) {
     ws.onerror = (e) => { clearTimeout(to); reject(new Error(`ws error ${e.message || ""}`)); };
   });
 }
-// usageLimitFields: webhook fields for a usage-limit stop. The thread may already be busy with
-// its next run (catch-up); still return usageLimit / autoResumeSet / resumeAt from the ended run
-// or leftover shell fields so those don't disappear just because status is no longer "failed".
+// usageLimitFields: webhook fields for a usage-limit stop. lastErrorClass / usageLimitResetAt
+// come from the ended run (the thread shell may already be a later run). leftover
+// usageLimitResetAt + failed is not enough when lastErrorClass is something else (server_error).
+// autoResumeSet matches the ended run id, not a later latestRunId recovery record.
 function usageLimitFields(t, run) {
-  const err = [run && run.lastErrorClass, run && (run.error || (run.lastError && run.lastError.message)),
-    t && t.lastErrorClass, t && t.lastError && t.lastError.message].filter(Boolean).map(String).join(" ");
-  const limited = (t && t.lastErrorClass === "usage_limit") || (run && run.lastErrorClass === "usage_limit")
-    || !!(t && t.usageLimitResetAt && run && (run.status === "failed" || run.status === "error"))
-    || /usage[_\s-]?limit/i.test(err);
+  const runId = run && run.id;
+  const threadIsThisRun = !!(t && runId && (t.latestRunId === runId
+    || (t.status === "failed" && !t.activeRunId && (!t.latestRunId || t.latestRunId === runId))));
+  const errClass = (run && run.lastErrorClass) || (threadIsThisRun && t && t.lastErrorClass) || null;
+  const errText = [run && (run.error || (run.lastError && run.lastError.message)),
+    threadIsThisRun && t && t.lastError && t.lastError.message].filter(Boolean).map(String).join(" ");
+  const limited = errClass === "usage_limit" || /usage[_\s-]?limit/i.test(errText);
   if (!limited) return null;
-  const resetAt = (t && t.usageLimitResetAt) || (run && run.usageLimitResetAt) || null;
+  const resetAt = (run && run.usageLimitResetAt) || (threadIsThisRun && t && t.usageLimitResetAt) || null;
   const rec = t && t.limitRecovery;
-  const runId = (run && run.id) || (t && t.latestRunId);
-  const armed = !!(rec && rec.autoResume && (!resetAt || !rec.resetAt || rec.resetAt === resetAt)
-    && (!rec.runId || rec.runId === runId || rec.runId === (t && t.latestRunId)));
-  const busy = !!(t && t.status && t.status !== "failed");
+  const armed = !!(rec && rec.autoResume && runId && rec.runId === runId
+    && (!resetAt || !rec.resetAt || rec.resetAt === resetAt));
+  const busy = !!(t && (t.activeRunId || (t.status && t.status !== "failed")));
   return { usageLimit: true, autoResumeSet: armed, ...(resetAt ? { resumeAt: resetAt } : {}),
     ...(armed || !busy ? {} : { autoResumeNote: "thread is already busy" }) };
 }
 async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet, ... } or null
   let t = null;
-  for (let i = 0; i < 3 && !(t && t.lastErrorClass === "usage_limit" && t.usageLimitResetAt); i++) {
+  for (let i = 0; i < 3 && !t; i++) {
     if (i) await sleep(1500);
     try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); const sh = r.ok ? await r.json() : {}; for (const p of sh.projects || []) if (!meta.projects.has(p.id)) meta.projects.set(p.id, p.title); t = (sh.threads || []).find((x) => x.id === threadId) || null; } catch {}
   }
@@ -300,14 +302,16 @@ async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet,
     return { ...fields, autoResumeNote: note, ...(fields.resumeAt ? { resumeAtLocal: localTime(fields.resumeAt) } : {}) };
   }
   if (!autoResumeWanted(t)) return { ...fields, autoResumeSet: false, autoResumeNote: "project not in autoresume.json and thread not started by T3 Tots" };
-  if (!t.latestRunId || !t.usageLimitResetAt) return { ...fields, autoResumeSet: false, autoResumeNote: "T3 reported no reset time" };
+  const resetAt = (run && run.usageLimitResetAt) || t.usageLimitResetAt;
+  const runId = (run && run.id) || t.latestRunId;
+  if (!runId || !resetAt) return { ...fields, autoResumeSet: false, autoResumeNote: "T3 reported no reset time" };
   if (t.archivedAt || t.settledOverride === "settled" || t.pendingRuntimeRequest) return { ...fields, autoResumeSet: false, autoResumeNote: "thread is settled/archived or has an open question" };
-  const r = t.limitRecovery; if (r && r.runId === t.latestRunId && r.resetAt === t.usageLimitResetAt && r.autoResume) return { ...fields, autoResumeSet: true, resumeAt: t.usageLimitResetAt, autoResumeNote: "already armed" };
-  if (DRY) return { ...fields, autoResumeSet: false, resumeAt: t.usageLimitResetAt, autoResumeNote: "dry run" };
+  const r = t.limitRecovery; if (r && r.runId === runId && r.resetAt === resetAt && r.autoResume) return { ...fields, autoResumeSet: true, resumeAt: resetAt, autoResumeNote: "already armed" };
+  if (DRY) return { ...fields, autoResumeSet: false, resumeAt: resetAt, autoResumeNote: "dry run" };
   try { await wsRpc(ep, "orchestration.dispatchCommand", { type: "thread.metadata.update", commandId: crypto.randomUUID(), threadId: t.id,
-      limitRecovery: { runId: t.latestRunId, resetAt: t.usageLimitResetAt, autoResume: true } });
-    log(`usage limit in "${clean(t.title)}": resume-at-reset armed for ${t.usageLimitResetAt}`);
-    return { ...fields, autoResumeSet: true, resumeAt: t.usageLimitResetAt, resumeAtLocal: localTime(t.usageLimitResetAt) };
+      limitRecovery: { runId, resetAt, autoResume: true } });
+    log(`usage limit in "${clean(t.title)}": resume-at-reset armed for ${resetAt}`);
+    return { ...fields, autoResumeSet: true, resumeAt: resetAt, resumeAtLocal: localTime(resetAt) };
   } catch (err) { log(`usage limit in "${clean(t.title)}": couldn't arm resume-at-reset: ${err.message}`); return { ...fields, autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
 }
 async function reportEnd(ep, t, runId, opts = {}) {
@@ -320,10 +324,10 @@ async function reportEnd(ep, t, runId, opts = {}) {
     for (const run of ended) await reportEnd(ep, t, run.id, opts);
     return;
   }
-  const { e, skip } = await buildEnd(ep, t, runId, opts);
+  const { e, skip, run } = await buildEnd(ep, t, runId, opts);
   if (!e) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
-  if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, { id: e.runId, status: e.status, error: e.error, lastErrorClass: t.lastErrorClass, usageLimitResetAt: t.usageLimitResetAt }); if (a) Object.assign(e, { usageLimit: true }, a); }
+  if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, run); if (a) Object.assign(e, { usageLimit: true }, a); }
   cleanEvent(e); // before it is saved: listen-state.json never holds a raw title, project or reply
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
 }
@@ -526,8 +530,13 @@ async function previewFinish() { // print the run-end event the listener would s
   let id = q; try { id = pickThread([...(sh.threads || []), ...(sh.archivedThreads || [])], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); }
   const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
-  const { e, skip } = await buildEnd(ep, t, null, { preview: true });
+  const { e, skip, run } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
+  // usage-limit fields from the ended run; never arm (preview writes nothing)
+  if (e.event === "thread.failed" && !e.delegated) {
+    const a = usageLimitFields(t, run);
+    if (a) Object.assign(e, a, a.resumeAt ? { resumeAtLocal: localTime(a.resumeAt) } : {});
+  }
   cleanEvent(e); e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
 }
 

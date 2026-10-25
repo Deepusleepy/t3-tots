@@ -487,6 +487,77 @@ test("riskOf: quoted force refspecs on push and fetch are high like the unquoted
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
 });
 
+test("riskOf: find -exec ksh/ash/fish/csh/busybox/timeout deletes are high and not read-only", () => {
+  const high = [
+    "find . -exec ksh -c 'rm {}' \\;",
+    "find . -exec /bin/ash -c 'rm {}' \\;",
+    "find . -exec busybox sh -c 'rm {}' \\;",
+    "find . -exec busybox rm {} +",
+    "find . -exec timeout 5 rm {} \\;",
+    "find . -execdir ksh -c 'rm {}' \\;",
+    "find . -ok /bin/ash -c 'rm {}' \\;",
+    "find . -okdir busybox rm {} +",
+    "find . -execdir timeout 5 rm {} \\;",
+    "find . -exec fish -c 'rm {}' \\;",
+    "find . -exec csh -c 'rm {}' \\;",
+    "find . -exec tcsh -c 'rm {}' \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }).level, "low");
+});
+
+test("riskOf: unique prefixes git already accepts for reset --hard, branch --force, push --mirror", () => {
+  for (const p of ["git reset --h", "git reset --ha", "git reset --har", "git reset --hard HEAD"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of ["git branch -f existing HEAD", "git branch --forc existing HEAD", "git branch --force existing HEAD"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
+  for (const p of ["git branch", "git branch --list", "git branch --show-current", "git branch -v"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git push --m origin" }).level, "high");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git push --mi origin" }).level, "high");
+});
+
+test("riskOf: -b/--orphan exemption does not hide a discard on the same command or chained before -b", () => {
+  for (const p of [
+    "git checkout -f -b newbranch",
+    "git checkout -f --orphan newbranch",
+    "git checkout -f main && git checkout -b newbranch",
+    "git checkout -- . && git checkout -b newbranch",
+    "git checkout main file && git checkout -b newbranch",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b new origin/main" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --orphan newbranch" }).level, "high");
+});
+
+test("riskOf: quoted / Windows / glob checkout pathspecs are high; bare branch and -b stay normal", () => {
+  for (const p of [
+    "git checkout '.'", 'git checkout "."', "git checkout '..'", "git checkout '*.js'",
+    "git checkout .\\file", "git checkout '\\.\\src\\app.js'",
+    "git checkout src/app.js",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
+});
+
+test("riskOf: ANSI-C $'' force refspecs and indented continuation flags are high", () => {
+  for (const p of [
+    "git push origin $'+feature'",
+    "git fetch origin $'+feature:feature'",
+    "git push \\\n  --force origin feature",
+    "git push \\\n  --de origin feature",
+    "git fetch \\\n  --force origin feature",
+    "git push\n--force origin feature",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+});
+
 test("uopt: unique prefixes of --all start at --al, not the ambiguous --a", () => {
   const re = new RegExp(t.uopt("all", 2) + "\\b");
   assert.ok(re.test("--al")); assert.ok(re.test("--all")); assert.ok(!re.test("--a")); assert.ok(!re.test("--atomic"));

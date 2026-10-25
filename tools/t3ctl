@@ -224,22 +224,33 @@ function uopt(name, min) {
   for (let i = s.length - 1; i >= min; i--) rest = `(?:${s[i].replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}${rest})?`;
   return `--${s.slice(0, min).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}${rest}`;
 }
-// find -exec/-ok wrappers (env/command/nice/nohup/git, with flags) then rm; or sh -c 'rm'. Paths and quotes allowed.
-const FIND_WRAP = String.raw`['"]?(?:\S*\/)?(?:env|command|nice|nohup|git)(?:\.exe)?['"]?(?:\s+(?!['"]?(?:\S*\/)?(?:rm|unlink|rmdir)\b)\S+)*`;
-const FIND_RM = String.raw`['"]?(?:\S*\/)?(?:rm|unlink|rmdir)\b`;
-const FIND_SH = String.raw`['"]?(?:\S*\/)?(?:ba|z|da)?sh(?:\.exe)?['"]?`;
-const FIND_EXEC_DEL = String.raw`-(?:exec|execdir|ok|okdir)\s+(?:(?:${FIND_WRAP}\s+)*${FIND_RM}|${FIND_SH}[\s\S]*?\b(?:rm|unlink|rmdir)\b)`;
-// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone'
-const PLUS_SPEC = String.raw`(?:\+\S+|['"]\+\s*[^'"]+['"])`;
-// checkout discards: -f/-2/-3, --ours/--theirs prefixes, ` -- `, `.`/`..`/`./`/`../` (quoted too),
-// tree-ish+path (@, HEAD@{n}, quoted HEAD), or two non-option operands. -b/--orphan create stays out.
-const CHECKOUT_DISCARD = String.raw`checkout\b(?![^\n]*(?:\s-b\b|\s--orphan(?:\s|=)))[^\n]*(?:-[a-z]*[f23][a-z]*\b|--force\b|\s--\s|${uopt("ours", 2)}\b|${uopt("theirs", 2)}\b|\s(?:\.\.?(?:/\S*)?)(?:\s|$)|['"](?:\.\.?/|[^'"]+/)[^'"]+['"]|(?:HEAD(?:[@{~^]\S*)?|[0-9a-f]{7,40}|@(?:[~^{]\S*)?|['"]HEAD['"])\s+\S|(?<=\s)[^\s-][^\s]*\s+[^\s-])`;
+// find -exec/-ok wrappers (env/command/nice/nohup/git/timeout/busybox, with flags) then rm;
+// or a shell -c 'rm' (sh/bash/zsh/dash/ksh/ash/fish/csh/tcsh, and busybox sh). Paths and quotes allowed.
+const FIND_SH_NAME = String.raw`(?:(?:ba|z|da)?sh|ksh|ash|fish|csh|tcsh)`;
+const FIND_DEL_NAME = String.raw`(?:rm|unlink|rmdir)`;
+const FIND_WRAP_NAME = String.raw`(?:env|command|nice|nohup|git|timeout|busybox)`;
+const FIND_BIN = (name) => String.raw`['"]?(?:\S*\/)?${name}(?:\.exe)?['"]?`;
+const FIND_RM = FIND_BIN(FIND_DEL_NAME);
+const FIND_SH = FIND_BIN(FIND_SH_NAME);
+const FIND_WRAP = String.raw`${FIND_BIN(FIND_WRAP_NAME)}(?:\s+(?!${FIND_BIN(FIND_DEL_NAME)}|${FIND_BIN(FIND_SH_NAME)})\S+)*`;
+const FIND_EXEC_DEL = String.raw`-(?:exec|execdir|ok|okdir)\s+(?:${FIND_WRAP}\s+)*(?:${FIND_RM}|${FIND_SH}[\s\S]*?\b${FIND_DEL_NAME}\b)`;
+// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone' and bash $'+feature'
+const PLUS_SPEC = String.raw`(?:\+\S+|['"]\+\s*[^'"]+['"]|\$['"]\+\s*[^'"]+['"])`;
+// same git command, including a backslash-newline then indented continuation flags
+const MORE = String.raw`[^\n]*(?:\n[ \t]+[^\n]*)*`;
+// checkout discards: -f/-2/-3/--force/--ours/--theirs always (even with -b/--orphan on the same command).
+// Pathspecs (quoted . / .. / globs / windows \), ` -- `, tree-ish+path, or two operands — but a
+// create-branch-only checkout (-b/--orphan, no discard) stays out. A later `&& git checkout -b`
+// does not hide a discard on an earlier checkout (stop at && || ; newline).
+const CHK = String.raw`[^&\n|;]*`;
+const PATHY = String.raw`(?:['"](?:\.\.?|[^'"]*[./*?\\[][^'"]*)['"]|(?:\.\.?(?:[/\\]\S*)?)|[^\s-][^\s]*[/\\.?*\[][^\s]*)`;
+const CHECKOUT_DISCARD = String.raw`checkout\b(?:${CHK}(?:-[a-z]*[f23][a-z]*\b|--force\b|${uopt("ours", 2)}\b|${uopt("theirs", 2)}\b)|(?!${CHK}(?:\s-b\b|\s--orphan(?:\s|=)))${CHK}(?:\s--\s|\s${PATHY}(?:\s|$)|(?:HEAD(?:[@{~^]\S*)?|[0-9a-f]{7,40}|@(?:[~^{]\S*)?|['"]HEAD['"])\s+\S|(?<=\s)[^\s-][^\s]*\s+[^\s-]))`;
 const RISK_HIGH = [
   [new RegExp(String.raw`\brm\b[^\n]*(\s-[fidv]*[rfd][fidv]*\b|\s(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b)`, "i"), "deletes files (rm -r/-f)"],
   [new RegExp(String.raw`\bfind\b[\s\S]*?(\s-delete\b|\s+${FIND_EXEC_DEL})`, "i"), "deletes files (find -delete/-exec rm)"],
-  [git(String.raw`push\b[^\n]*(\s--force\b|\s--force-with-lease\b|\s-[A-Za-z]*f[A-Za-z]*\b|\s${PLUS_SPEC})`), "force push"],
+  [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:--force\b|--force-with-lease\b|-[A-Za-z]*f[A-Za-z]*\b|${PLUS_SPEC})`), "force push"],
   [git(String.raw`push\b[^\n]*\b(main|master)\b`), "pushes to main/master"],
-  [git(String.raw`(?:reset\b[^\n]*--hard|clean\b[^\n]*(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b[^\n]*(\s-[A-Za-z]*[dm][A-Za-z]*\b|\s(?:${uopt("delete", 1)}|${uopt("move", 2)}|--force)\b)|push\b[^\n]*(?:\s(?:${uopt("delete", 2)}|-[A-Za-z]*d[A-Za-z]*\b)|\s['"]?:\S)|${CHECKOUT_DISCARD}|switch\b[^\n]*(?:${uopt("discard-changes", 2)}|--force-create|--force\b|\s-[A-Za-z]*f[A-Za-z]*\b)|restore\b[^\n]*${uopt("worktree", 1)}|push\b[^\n]*(?:${uopt("mirror", 2)}|${uopt("all", 2)}|${uopt("prune", 3)})\b|fetch\b[^\n]*(\s${PLUS_SPEC}|:(?:refs/heads/)?(?:main|master)\b|\s${uopt("prune", 5)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b)|pull\b[^\n]*(\s${uopt("prune", 3)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b)|remote\s+prune\b)`), "discards or deletes git work"],
+  [git(String.raw`(?:reset\b${MORE}${uopt("hard", 1)}\b|clean\b[^\n]*(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b[^\n]*(\s-[A-Za-z]*[dmf][A-Za-z]*\b|\s(?:${uopt("delete", 1)}|${uopt("move", 2)}|${uopt("force", 4)})\b)|push\b${MORE}(?:\s(?:${uopt("delete", 2)}|-[A-Za-z]*d[A-Za-z]*\b)|\s['"]?:\S|\n[ \t]+(?:${uopt("delete", 2)}\b|-[A-Za-z]*d[A-Za-z]*\b|['"]?:\S))|${CHECKOUT_DISCARD}|switch\b[^\n]*(?:${uopt("discard-changes", 2)}|--force-create|--force\b|\s-[A-Za-z]*f[A-Za-z]*\b)|restore\b[^\n]*${uopt("worktree", 1)}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${uopt("mirror", 1)}|${uopt("all", 2)}|${uopt("prune", 3)})\b|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|:(?:refs/heads/)?(?:main|master)\b|\s${uopt("prune", 5)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b|\n[ \t]+(?:${uopt("force", 2)}\b|-[A-Za-z]*[pf][A-Za-z]*\b|${PLUS_SPEC}))|pull\b[^\n]*(\s${uopt("prune", 3)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b)|remote\s+prune\b)`), "discards or deletes git work"],
   [gitCs(String.raw`(?:branch\b[^\n]*\s-[A-Za-z]*C[A-Za-z]*\b|checkout\b[^\n]*\s-[A-Za-z]*B[A-Za-z]*\b|switch\b[^\n]*\s-[A-Za-z]*C[A-Za-z]*\b|restore\b(?:[^\n]*(?:${uopt("worktree", 1)}\b|\s-[A-Za-z]*W[A-Za-z]*\b)|(?![^\n]*(?:--staged\b|\s-[A-Za-z]*S[A-Za-z]*\b))))`), "discards or deletes git work"],
   [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
   [/\brm\b[^\n]*(\s-re(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b)/i, "deletes files (PowerShell rm -Recurse/-Force)"],
