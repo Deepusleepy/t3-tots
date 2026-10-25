@@ -1158,6 +1158,68 @@ test("riskOf: pathological quote piles on fetch stay fast", () => {
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
 });
 
+test("riskOf: bash short \\u / \\U / \\x{} fetch prune/force is high, not read-only", () => {
+  // v1.4.18 qhex spelled \\u as exactly four hex digits and had no \\U or \\x{}.
+  // bash 5.2 also expands \\u/\\U 1–8 hex digits (greedy) and \\x{HH}. Fetch's high
+  // path and READ_ONLY share FETCH_FLAG. $'\\U2d'f / $'\\u2d\\u2d'force close the
+  // quote before f (a hex digit); $'\\U2df' / $'\\u2d\\u2dforce' are U+02DF / -˟orce.
+  for (const p of [
+    "git fetch $'\\u2d\\u2dprune'",
+    "git fetch $'\\u02d\\u02dprune'",
+    "git fetch $'--pr\\u75ne'",
+    "git fetch $'--pr\\u075ne'",
+    "git fetch $'\\U2d\\U2dprune'",
+    "git fetch $'\\U0000002d\\U0000002dprune'",
+    "git fetch $'--pr\\U75ne'",
+    "git fetch $'--pr\\U00000075ne'",
+    "git fetch $'\\U2d'f",
+    "git fetch $'\\x{2d}\\x{2d}prune'",
+    "git fetch $'\\x{2d}p'",
+    "git fetch $'--pr\\x{75}ne'",
+    "git fetch $'\\u2d\\u2d'force",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x2d\\x2dquiet'" }).level, "high");
+});
+
+test("riskOf: rm short \\u / \\U / \\x{} -rf is high", () => {
+  // Same spellings as fetch: $'\\u2drf' / $'\\x{2d}rf' / $'\\U2drf' are argv -rf.
+  // $'-\\u72'f / $'-\\U72'f close the quote before f; $'-\\u72f' is - + U+072F.
+  for (const p of [
+    "rm $'\\u2drf'",
+    "rm $'\\x{2d}rf'",
+    "rm $'\\U0000002drf'",
+    "rm $'\\U2drf'",
+    "rm $'-\\x{72}f'",
+    "rm $'-\\u72'f",
+    "rm $'-\\U72'f",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "rm $'-v' file" }).level, "high");
+});
+
+test("riskOf: branch/switch -C with quote before C / \\x{2d}C is high", () => {
+  // B/C are hex digits, so $'\\u2dC' is U+02DC, not -C. Argv is -C when the quote
+  // closes before C, or when \\x{2d} braces terminate the hex. gitCs -C stays
+  // case-sensitive (not -c).
+  for (const p of [
+    "git branch $'\\u2d'C dest",
+    "git branch $'\\x{2d}C' dest",
+    "git switch $'\\u2d'C feature",
+    "git switch $'\\x{2d}C' feature",
+    "git switch $'\\U2d'C feature",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch $'\\u2dC' dest" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
