@@ -611,6 +611,14 @@ test("riskOf: extensionless and magic pathspec checkouts are high; bare branch a
     "git checkout COPYING",
     "git checkout Jenkinsfile",
     "git checkout Justfile",
+    "git checkout LICENCE",
+    'git checkout "LICENCE"',
+    "git checkout Containerfile",
+    "git checkout Rakefile",
+    "git checkout Procfile",
+    "git checkout Pipfile",
+    "git checkout CODEOWNERS",
+    "git checkout UNLICENSE",
   ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b brand-new" }).level, "high");
@@ -669,6 +677,55 @@ test("riskOf: ANSI-C $':…' delete refspecs are high", () => {
   for (const p of ["git push origin $':gone'", "git push origin $':feature'", "git push origin $'+feature'"])
     assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+});
+
+test("riskOf: find -exec choom/setarch/setpriv/unshare rm are high and not read-only", () => {
+  const high = [
+    "find . -exec choom -n 0 rm {} \\;",
+    "find . -exec setarch x86_64 rm {} \\;",
+    "find . -exec setpriv --no-new-privs rm {} \\;",
+    "find . -exec unshare --user rm {} \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec choom -n 0 echo {} \\;" }).level, "low");
+});
+
+test("riskOf: find -exec perl remove_tree and python3 removedirs are high and not read-only", () => {
+  const high = [
+    "find . -exec perl -MFile::Path=remove_tree -e 'remove_tree(\"sub\")'",
+    "find . -exec python3 -c '(__import__(\"os\").removedirs(\"empty/nested\"))'",
+    "find . -exec python3 -c 'import os; os.removedirs(\"empty/nested\")'",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "python3 -c 'print(123)'" }).level, "high");
+});
+
+test("riskOf: backslash-newline pull force/prune, remote prune, and rm -rf are high; --ff-only stays normal", () => {
+  for (const p of [
+    "git pull \\\n--force origin main:main",
+    "git pull \\\n--fo origin main:main",
+    "git pull \\\n-f origin main:main",
+    "git pull \\\n  --force origin feature",
+    "git pull \\\n--prune origin",
+    "git pull \\\n  --prune origin",
+    "git remote \\\nprune origin",
+    "git remote \\\n  prune origin",
+    "rm \\\n-rf build",
+    "rm \\\n  -rf build",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n--ff-only" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }).level, "high");
 });
 
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
