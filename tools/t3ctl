@@ -225,14 +225,14 @@ function uopt(name, min) {
   return `--${s.slice(0, min).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}${rest}`;
 }
 // find -exec/-ok wrappers (env/command/nice/nohup/git/timeout/gtimeout/busybox/time/flock/setsid/
-// stdbuf/ionice/taskset/chrt/prlimit, with flags) then rm; a shell -c 'rm' (sh/bash/zsh/dash/ksh/
-// ash/mksh/rbash/fish/csh/tcsh, and busybox sh); or perl/node/python deleting via unlink/os.remove/
-// rmtree. Paths and quotes allowed.
+// stdbuf/ionice/taskset/chrt/prlimit/choom/setarch/setpriv/unshare, with flags) then rm; a shell
+// -c 'rm' (sh/bash/zsh/dash/ksh/ash/mksh/rbash/fish/csh/tcsh, and busybox sh); or perl/node/python
+// deleting via unlink/os.remove/removedirs/rmtree/remove_tree. Paths and quotes allowed.
 const FIND_SH_NAME = String.raw`(?:(?:ba|z|da)?sh|ksh|ash|mksh|rbash|fish|csh|tcsh)`;
 const FIND_DEL_NAME = String.raw`(?:rm|unlink|rmdir)`;
-const FIND_WRAP_NAME = String.raw`(?:env|command|nice|nohup|git|timeout|gtimeout|busybox|time|flock|setsid|stdbuf|ionice|taskset|chrt|prlimit)`;
+const FIND_WRAP_NAME = String.raw`(?:env|command|nice|nohup|git|timeout|gtimeout|busybox|time|flock|setsid|stdbuf|ionice|taskset|chrt|prlimit|choom|setarch|setpriv|unshare)`;
 const FIND_INT_NAME = String.raw`(?:perl|node|python3?)`;
-const FIND_INT_DEL = String.raw`(?:${FIND_DEL_NAME}|unlinkSync|rmSync|rmdirSync|os\.remove|os\.unlink|rmtree)`;
+const FIND_INT_DEL = String.raw`(?:${FIND_DEL_NAME}|unlinkSync|rmSync|rmdirSync|os\.remove|os\.unlink|rmtree|remove_tree|removedirs)`;
 const FIND_BIN = (name) => String.raw`['"]?(?:\S*\/)?${name}(?:\.exe)?['"]?`;
 const FIND_RM = FIND_BIN(FIND_DEL_NAME);
 const FIND_SH = FIND_BIN(FIND_SH_NAME);
@@ -247,20 +247,21 @@ const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 const MORE = String.raw`[^\n]*(?:(?:\n[ \t]+|\\\n[ \t]*)[^\n]*)*`;
 // checkout discards: -f/-2/-3/--force/--ours/--theirs always (even with -b/--orphan on the same command).
 // Pathspecs (quoted . / .. / globs / windows \, magic :(…), extensionless Makefile/README/
-// Dockerfile/LICENSE/Gemfile/VERSION/COPYING/Jenkinsfile/Justfile), ` -- `, tree-ish+path, or two
+// Dockerfile/LICENSE/LICENCE/Gemfile/VERSION/COPYING/Jenkinsfile/Justfile/Containerfile/
+// Rakefile/Procfile/Pipfile/CODEOWNERS/UNLICENSE), ` -- `, tree-ish+path, or two
 // operands — but a create-branch-only checkout (-b/--orphan, no discard) stays out. A later
 // `&& git checkout -b` does not hide a discard on an earlier checkout (stop at && || ; unescaped
 // newline). A `\` + newline is the same command.
 const CHK = String.raw`(?:[^&\n|;]|\\\n[ \t]*)*`;
-const EXTLESS = String.raw`(?:GNUmakefile|Makefile|makefile|README|Dockerfile|LICENSE|Gemfile|VERSION|COPYING|Jenkinsfile|Justfile)`;
+const EXTLESS = String.raw`(?:GNUmakefile|Makefile|makefile|README|Dockerfile|LICENSE|LICENCE|Gemfile|VERSION|COPYING|Jenkinsfile|Justfile|Containerfile|Rakefile|Procfile|Pipfile|CODEOWNERS|UNLICENSE)`;
 const PATHY = String.raw`(?:['"](?:\.\.?|[^'"]*[./*?\\[][^'"]*|:\([^'"]*\)[^'"]*|${EXTLESS})['"]|(?:\.\.?(?:[/\\]\S*)?)|[^\s-][^\s]*[/\\.?*\[][^\s]*|:\([^)\s]*\)\S*|${EXTLESS})`;
 const CHECKOUT_DISCARD = String.raw`checkout\b(?:${CHK}(?:-[a-z]*[f23][a-z]*\b|--force\b|${uopt("ours", 2)}\b|${uopt("theirs", 2)}\b)|(?!${CHK}(?:\s-b\b|\s--orphan(?:\s|=)))${CHK}(?:\s--\s|\s${PATHY}(?:\s|$)|(?:HEAD(?:[@{~^]\S*)?|[0-9a-f]{7,40}|@(?:[~^{]\S*)?|['"]HEAD['"])\s+\S|(?<=\s)[^\s-][^\s]*\s+[^\s-]))`;
 const RISK_HIGH = [
-  [new RegExp(String.raw`\brm\b[^\n]*(\s-[fidv]*[rfd][fidv]*\b|\s(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b)`, "i"), "deletes files (rm -r/-f)"],
+  [new RegExp(String.raw`\brm\b${MORE}(?:\s|\\\n[ \t]*)(?:-[fidv]*[rfd][fidv]*\b|(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b)`, "i"), "deletes files (rm -r/-f)"],
   [new RegExp(String.raw`\bfind\b[\s\S]*?(\s-delete\b|\s+${FIND_EXEC_DEL})`, "i"), "deletes files (find -delete/-exec rm)"],
   [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:--force\b|--force-with-lease\b|-[A-Za-z]*f[A-Za-z]*\b|${PLUS_SPEC})`), "force push"],
   [git(String.raw`push\b${MORE}\b(main|master)\b`), "pushes to main/master"],
-  [git(String.raw`(?:reset\b${MORE}${uopt("hard", 1)}\b|clean\b${MORE}(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b${MORE}(\s-[A-Za-z]*[dmf][A-Za-z]*\b|\s(?:${uopt("delete", 1)}|${uopt("move", 2)}|${uopt("force", 4)})\b)|push\b${MORE}(?:\s(?:${uopt("delete", 2)}|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC})|\n[ \t]+(?:${uopt("delete", 2)}\b|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC}))|${CHECKOUT_DISCARD}|switch\b${MORE}(?:${uopt("discard-changes", 2)}|--force-create|--force\b|(?<=\s)-[A-Za-z]*f[A-Za-z]*\b)|restore\b[^\n]*${uopt("worktree", 1)}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${uopt("mirror", 1)}|${uopt("all", 2)}|${uopt("branches", 1)}|${uopt("prune", 3)})\b|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|:(?:refs/heads/)?(?:main|master)\b|\s${uopt("prune", 5)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b|\n[ \t]+(?:${uopt("force", 2)}\b|-[A-Za-z]*[pf][A-Za-z]*\b|${PLUS_SPEC}))|pull\b[^\n]*(\s${uopt("prune", 3)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b)|remote\s+prune\b)`), "discards or deletes git work"],
+  [git(String.raw`(?:reset\b${MORE}${uopt("hard", 1)}\b|clean\b${MORE}(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b${MORE}(\s-[A-Za-z]*[dmf][A-Za-z]*\b|\s(?:${uopt("delete", 1)}|${uopt("move", 2)}|${uopt("force", 4)})\b)|push\b${MORE}(?:\s(?:${uopt("delete", 2)}|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC})|\n[ \t]+(?:${uopt("delete", 2)}\b|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC}))|${CHECKOUT_DISCARD}|switch\b${MORE}(?:${uopt("discard-changes", 2)}|--force-create|--force\b|(?<=\s)-[A-Za-z]*f[A-Za-z]*\b)|restore\b[^\n]*${uopt("worktree", 1)}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${uopt("mirror", 1)}|${uopt("all", 2)}|${uopt("branches", 1)}|${uopt("prune", 3)})\b|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|:(?:refs/heads/)?(?:main|master)\b|\s${uopt("prune", 5)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b|\n[ \t]+(?:${uopt("force", 2)}\b|-[A-Za-z]*[pf][A-Za-z]*\b|${PLUS_SPEC}))|pull\b${MORE}(?:\s|\\\n[ \t]*)(?:${uopt("prune", 3)}\b|${uopt("force", 2)}\b|-[A-Za-z]*[pf][A-Za-z]*\b)|remote(?:\s|\\\n[ \t]*)+prune\b)`), "discards or deletes git work"],
   [gitCs(String.raw`(?:branch\b${MORE}(?<=\s)-[A-Za-z]*C[A-Za-z]*\b|checkout\b${MORE}(?<=\s)-[A-Za-z]*B[A-Za-z]*\b|switch\b${MORE}(?<=\s)-[A-Za-z]*C[A-Za-z]*\b|restore\b(?:[^\n]*(?:${uopt("worktree", 1)}\b|\s-[A-Za-z]*W[A-Za-z]*\b)|(?![^\n]*(?:--staged\b|\s-[A-Za-z]*S[A-Za-z]*\b))))`), "discards or deletes git work"],
   [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
   [/\brm\b[^\n]*(\s-re(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b)/i, "deletes files (PowerShell rm -Recurse/-Force)"],
