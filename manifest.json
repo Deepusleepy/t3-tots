@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.17",
+ "version": "v1.4.18",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.17/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.18/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -26,8 +26,8 @@
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 85560,
-   "sha256": "d7716bf59c95ea4ce67357ec8660d32f679e8a14e671fc51deafd33a66532fd1",
+   "bytes": 86184,
+   "sha256": "6612ea74e185c51fddcc05df41602fcc86389e6feabc238c59de0d2cd5201a9b",
    "targets": [
     "macos",
     "linux",
@@ -257,7 +257,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 17264,
-   "sha256": "08cf0297b46e9b7d818e88fb4ac0c8f8f59c37ca993d6c78b2597ff4d7845ef2"
+   "sha256": "867cf3548ba9c7094b94bdb7f0251eca667691c7210008958eed5482a605af59"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",

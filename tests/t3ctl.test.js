@@ -1094,6 +1094,70 @@ test("riskOf: quoted/ANSI-C flags on reset/clean/switch/checkout/branch/push/rem
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
 });
 
+test("riskOf: ANSI-C hex dash / octal / unicode prune is high, not read-only", () => {
+  // v1.4.17 qhex only rewrote letters as \\xHH. Hex dashes ($'\\x2d\\x2dprune' / $'\\x2dp'),
+  // octal u ($'--pr\\165ne'), and unicode u ($'--pr\\u0075ne') stayed low and still pruned.
+  for (const p of [
+    "git fetch $'\\x2d\\x2dprune'",
+    "git fetch $'\\x2dp'",
+    "git fetch $'--pr\\165ne'",
+    "git fetch $'--pr\\u0075ne'",
+    "git fetch $'--pr\\x75ne'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+});
+
+test("riskOf: rm ANSI-C hex dash and octal letter -rf is high", () => {
+  // Same spellings as fetch: $'\\x2drf' (hex dash) and $'-\\162f' (octal r) are argv -rf.
+  for (const p of ["rm $'\\x2drf'", "rm $'-\\162f'", "rm $'-\\x72f'"])
+    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "rm $'-v' file" }).level, "high");
+});
+
+test("riskOf: backslash-newline inside double quotes joins fetch --prune", () => {
+  // --pru"\\<newline>ne" is argv --prune; QSEP did not include newline so this stayed normal.
+  const p = 'git fetch --pru"\\\nne"';
+  const r = t.riskOf({ requestKind: "command", prompt: p });
+  assert.equal(r.level, "high", p);
+  assert.notEqual(r.level, "low", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+});
+
+test("riskOf: quoted / ANSI-C -C and -B go through qflag", () => {
+  // gitCs -C/-B never called qflag: unquoted -C stayed high, but "-C" / $'-C' /
+  // checkout -"B" / switch "-C" reset/overwrite at normal.
+  for (const p of [
+    'git branch "-C"',
+    "git branch $'-C'",
+    'git checkout -"B" feature',
+    'git switch "-C" feature',
+    "git branch -C dest",
+    "git checkout -B feature",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b release-2" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+});
+
+test("riskOf: pathological quote piles on fetch stay fast", () => {
+  // v1.4.17 QWRAP/QSEP used ['"]{1,2}, so n quotes was Fibonacci. 30 quotes took hundreds
+  // of ms; 36–38 did not finish in seconds. One quote per iteration stays linear.
+  const p = "git fetch --" + '"'.repeat(40) + "xyz";
+  const t0 = process.hrtime.bigint();
+  const r = t.riskOf({ requestKind: "command", prompt: p });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 50, `40 quotes took ${ms.toFixed(2)}ms`);
+  assert.equal(r.level, "low", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
