@@ -728,6 +728,134 @@ test("riskOf: backslash-newline pull force/prune, remote prune, and rm -rf are h
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }).level, "high");
 });
 
+test("riskOf: find -exec setarch personality aliases (linux32/linux64/i386/x86_64) rm are high and not read-only", () => {
+  const high = [
+    "find . -exec linux32 rm {} \\;",
+    "find . -exec linux64 rm {} \\;",
+    "find . -exec i386 rm {} \\;",
+    "find . -exec x86_64 rm {} \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  for (const p of [
+    "find . -exec linux32 echo {} \\;",
+    "find . -exec linux64 echo {} \\;",
+    "find . -exec i386 echo {} \\;",
+    "find . -exec x86_64 echo {} \\;",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+});
+
+test("riskOf: find -exec nsenter rm is high and not read-only; nsenter echo stays low", () => {
+  const high = ["find . -exec nsenter rm {} \\;", "find . -exec nsenter --user rm {} \\;", "nsenter rm -rf file"];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec nsenter echo {} \\;" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "nsenter echo" }).level, "high");
+});
+
+test("riskOf: find -exec script -c / capsh -- -c rm are high and not read-only", () => {
+  const high = [
+    "find . -exec script -q -c 'rm {}' /dev/null \\;",
+    "find . -exec capsh -- -c 'rm {}' \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec script -q -c 'echo {}' /dev/null \\;" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec capsh -- -c 'echo {}' \\;" }).level, "low");
+});
+
+test("riskOf: find -exec python3 -c os.remove spellings that are not literal os.remove are high", () => {
+  const high = [
+    "find . -exec python3 -c '(__import__(\"os\").remove(\"a\"))' \\;",
+    "find . -exec python3 -c '(__import__(\"posix\").remove(\"a\"))' \\;",
+    "find . -exec python3 -c 'from os import remove; remove(\"a\")' \\;",
+    "find . -exec python3 -c 'import os as o; o.remove(\"a\")' \\;",
+  ];
+  for (const p of high) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "python3 -c 'print(123)'" }).level, "high");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+});
+
+test("riskOf: git pull + dest refspecs are high like fetch; --ff-only stays normal", () => {
+  for (const p of [
+    "git pull ../origin +main:main",
+    "git pull origin +refs/heads/main:refs/heads/main",
+    "git pull origin \\\n+refs/heads/main:refs/heads/main",
+    "git pull origin \\\n  +refs/heads/main:refs/heads/main",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n--ff-only" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }).level, "high");
+});
+
+test("riskOf: quoted and $'...' rm -rf / git pull --force flags are high; harmless quoted args stay normal", () => {
+  for (const p of [
+    'rm "-rf" dir',
+    "rm $'-rf' dir",
+    'git pull "--force" origin main',
+    "git pull $'--force' origin main",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "rm $'-v' file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull $'origin'" }).level, "high");
+});
+
+test("riskOf: git remote -v/--verbose prune and update -p/--prune are high; bare -v stays low; && echo prune is not high", () => {
+  for (const p of [
+    "git remote -v prune origin",
+    "git remote --verbose prune origin",
+    "git remote -v update -p origin",
+    "git remote update -p",
+    "git remote update --prune",
+    "git remote update \\\n--prune",
+    "git remote update \\\n  --prune",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote -v && echo prune" }).level, "high");
+});
+
+test("riskOf: git restore --staged continued onto --worktree / -S onto -W is high; --staged alone stays normal", () => {
+  for (const p of [
+    "git restore --staged \\\n  --worktree f",
+    "git restore --staged \\\n--worktree f",
+    "git restore -S \\\n  -W file",
+    "git restore -S \\\n-W file",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
+});
+
+test("riskOf: more extensionless checkout names are high; -b / --orphan / branch names stay normal", () => {
+  for (const p of [
+    "git checkout Vagrantfile",
+    'git checkout "Vagrantfile"',
+    "git checkout Brewfile",
+    "git checkout Podfile",
+    "git checkout Fastfile",
+    "git checkout NOTICE",
+    "git checkout OWNERS",
+    "git checkout vagrantfile",
+    "git checkout owners",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b Vagrantfile" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --orphan Vagrantfile" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
