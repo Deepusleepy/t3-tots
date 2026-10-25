@@ -6,7 +6,7 @@ description: >-
   onto the box and the user's T3 computers. Use during setup, when a skill says the
   tools are missing or differ, or for "update T3 Tots tools".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.4` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.5` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder.
 
@@ -29,12 +29,12 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.4"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.5"
 PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN release; a changed repo can't change what gets installed
- "tools/t3q.py": ["t3q.py", "0a278acfd00dadb47fd250e9895c7a2c5490386943635e88af740b35046fa7a6"],
- "tools/t3ctl": ["t3ctl", "cbbdf68cef5c5c568148f691d066f7a9e8c28645967e7dffd38f789c1f84ef00"],
+ "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
+ "tools/t3ctl": ["t3ctl", "db1e64e2a37942d34efb9e374b2270035d7930583c150218e99ad872d3b15f5b"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "9667c229d898c5772ad5e4f6f0fb9ab1777e76bf0a4e90d26f9a5badd42c340f"],
+ "tools/t3listen": ["t3listen", "ba9d0c59e099a968ff9ceed4c5efeba0d5b56c787a299349097f95f2590ef071"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "c25e93bc3515d554de7086adec3b79b32f58f6b869b220b015899b4d6253a3eb"],
  "tools/survey.js": ["survey.js", "206fff36b57e111fd061417f2c21eb7ee09fa5dfe1537843a81242d47e5d6052"],
@@ -44,7 +44,7 @@ PINNED = {  # repo path: [installed path, sha256] for every tool in the PIN rele
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "98456ad7def23022753058bb0d0b0a69dbccc3403d6ecce00f8996d377fd9f2f"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "a6b6c6d1acdab17a5c504f360423d1dc5196497a2c1fe335da5ce35df0c4eeb9"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
  "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }

@@ -224,6 +224,13 @@ class ScanPrivate(unittest.TestCase):
             m = re.search(r'^SENSITIVE_NAME = r"([^"]*)"$', (ROOT / f).read_text(), re.M)
             self.assertTrue(m, f); self.assertEqual(m.group(1), js, f)
 
+    def test_sensitive_name_split_breaks_acronyms_before_camelcase(self):
+        acro, camel = r"([A-Z]+)([A-Z][a-z])", r"([a-z0-9])([A-Z])"
+        for f in ("tools/t3ctl", "tools/t3q.py", "tools/cleanup/scan.py"):
+            src = (ROOT / f).read_text()
+            self.assertIn(acro, src, f); self.assertIn(camel, src, f)
+            self.assertLess(src.index(acro), src.index(camel), f)
+
 
 class SmallTools(unittest.TestCase):
     def test_export_and_survey_use_the_same_settled_rule_as_t3ctl(self):
@@ -241,6 +248,27 @@ class SmallTools(unittest.TestCase):
         for extra in (["--tz"], ["--tz", "--other"], ["--tz="]):
             r = subprocess.run([sys.executable, str(ROOT / "tools/report/report.py"), "in.json", "out.html", *extra], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1); self.assertIn("usage:", r.stderr); self.assertNotIn("Traceback", r.stderr)
+
+
+class SkillOsascript(unittest.TestCase):
+    """Shell snippets that launch AppleScript helpers: paths stay in argv, escaping is documented, quotes are not claimed safe."""
+    FILES = ("skills/t3-phone-answers/SKILL.md", "skills/t3-cleanup/SKILL.md")
+
+    def test_osascript_snippets_document_escaping_and_keep_paths_out_of_script(self):
+        for rel in self.FILES:
+            text = (ROOT / rel).read_text()
+            self.assertNotRegex(text, r"quotes are (already )?safe", msg=rel)
+            self.assertIn('\\"', text, f'{rel} must document \\" inside double quotes')
+            self.assertIn(r"'\''", text, f"{rel} must document '\\'' inside single quotes")
+            found = 0
+            for m in re.finditer(r"osascript\b[^`]*", text):
+                snip, found = m.group(0), found + 1
+                self.assertIn("on run argv", snip, rel)
+                self.assertRegex(snip, r" -- ", rel)
+                inside = " ".join(re.findall(r"-e\s+'([^']*)'", snip))
+                for tok in ("<path>", "<tools folder>", "<label>"):
+                    self.assertNotIn(tok, inside, f"{rel}: {tok} must stay after --, not in AppleScript source")
+            self.assertGreaterEqual(found, 1, rel)
 
 
 class T3uiQuoting(unittest.TestCase):

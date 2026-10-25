@@ -124,11 +124,11 @@ async function uploadImages(list) {
   return out;
 }
 // SENSITIVE_NAME: word for word the same in tools/t3q.py and tools/cleanup/scan.py (tests/install_test.py checks). Matched against one
-// path part, case-insensitive, after camelCase is split ("googleAuth" -> "google_Auth"): token, secret, credential, password, keys,
-// .env, .ssh, .gnupg, and "auth" as its own word (auth.json, oauth, AuthSessions; not author.md)
+// path part, case-insensitive, after acronyms then camelCase are split ("HTTPAuth" -> "HTTP_Auth", "googleAuth" -> "google_Auth"):
+// token, secret, credential, password, keys, .env, .ssh, .gnupg, and "auth" as its own word (auth.json, oauth, AuthSessions; not author.md)
 const SENSITIVE_NAME = String.raw`token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))`;
 const SENSITIVE = new RegExp(SENSITIVE_NAME, "i");
-const sensitiveName = (part) => SENSITIVE.test(String(part).replace(/([a-z0-9])([A-Z])/g, "$1_$2"));
+const sensitiveName = (part) => SENSITIVE.test(String(part).replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"));
 // never copy secrets out of a project: dotfiles and dot folders, and any path part with a sensitive name
 function sensitivePath(f, root) {
   const rel = root && path.resolve(f).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep) ? path.relative(root, f) : f;
@@ -212,12 +212,13 @@ function printRequest(r) {
 }
 // --- pure helpers (unit-tested in tests/t3ctl.test.js; no network) ---
 // riskOf: a hint for approvals so a watcher can approve routine ones and hold risky ones. The agent still decides.
-// GIT: "git" plus any global options before the subcommand (git -C path push, git -c k=v push, git --git-dir=x push)
-const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--?[\w-]+(?:=\S+)?))*\s+`;
+// GIT: "git" or "git.exe", plus any global options before the subcommand (-C path, -c k=v,
+// --git-dir/--work-tree/--namespace =value or the next token, --no-pager)
+const GIT = String.raw`\bgit(?:\.exe)?(?:\s+(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+(?:"[^"]*"|'[^']*'|\S+))|--?[\w-]+(?:=\S+)?))*\s+`;
 const git = (rest) => new RegExp(GIT + rest, "i");
 const RISK_HIGH = [
-  [/\brm\s+-[a-z]*[rf]/i, "deletes files (rm -r/-f)"], [git(String.raw`push\b[^\n]*(\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S)`), "force push"],
-  [git(String.raw`push\b[^\n]*\b(main|master)\b`), "pushes to main/master"], [git(String.raw`(reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|push\s+\S+\s+--delete|push\s+\S+\s+:)`), "discards or deletes git work"],
+  [/\brm\s+-[a-z]*[rf]/i, "deletes files (rm -r/-f)"], [git(String.raw`push\b[^\n]*(\s--force\b|\s--force-with-lease\b|\s-[A-Za-z]*f\b|\s-fu\b|\s\+\S)`), "force push"],
+  [git(String.raw`push\b[^\n]*\b(main|master)\b`), "pushes to main/master"], [git(String.raw`(reset(?:\s+-\S+)*\s+--hard|clean\s+(?:-[a-z]*f|--force\b)|branch\s+-D|push\b[^\n]*\s--delete\b|push\s+\S+\s+:)`), "discards or deletes git work"],
   [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-recurse\b|\s-force\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
   [/\bsudo\b|\bdoas\b|\brunas\b|-verb\s+runas\b|\bset-executionpolicy\b/i, "runs as admin"], [/\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(ba|z)?sh\b|\biex\b/i, "runs a downloaded script"],
   [/\b(mkfs|diskutil\s+erase|format\s+[a-z]:|format-volume|clear-disk|dd\s+if=)/i, "touches disks"], [/\bchmod\s+-R\s+777\b|\bchown\s+-R\b/i, "changes permissions recursively"],

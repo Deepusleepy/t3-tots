@@ -179,11 +179,12 @@ def projects():  # T3 projects with folder, thread count and last activity; also
         if top[1] >= 2 or len(rows) == 1: print("projects folder guess:", tilde(top[0]))
 
 # SENSITIVE_NAME: word for word the same as tools/t3ctl (tests/install_test.py checks). One path part, case-insensitive, after
-# camelCase is split ("googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
+# acronyms then camelCase are split ("HTTPAuth" -> "HTTP_Auth", "googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
 SENSITIVE_NAME = r"token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))"
 _SENSITIVE = re.compile(SENSITIVE_NAME, re.I)
-def secret_name(n):  # Secrets, auth.json, MyToken, .env, id_rsa: never opened, not even sized (author.md is fine)
-    return bool(_SENSITIVE.search(re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", n)))
+def secret_name(n):  # Secrets, auth.json, HTTPAuth, MyToken, .env, id_rsa: never opened, not even sized (author.md is fine)
+    n = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", n); n = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", n)
+    return bool(_SENSITIVE.search(n))
 
 def health():
     import socket, subprocess, shutil, platform

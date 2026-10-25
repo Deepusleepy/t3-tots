@@ -123,7 +123,7 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
 
-`--project` takes a project id, its folder, or its title: an exact title wins, else the one title containing the words. Several matches print `AMBIGUOUS` with the candidates (never the first one); an empty value is a usage error.
+`--project` takes a project id, its folder, an exact title, then the one title containing the words. Several matches print `AMBIGUOUS` with the candidates (never the first one); an empty value is a usage error.
 
 `status --json` adds `queued` (messages waiting in the queue) and `queueHeld` (the queue was held on purpose); `threads` and `status` show a held queue as `queue held` and settled threads as `(settled)`. `threads --main` hides threads that agents spawned (reviewers, sub-tasks), the same split t3q.py uses. A PM's or a thread's sub-task threads are listed by `subtasks --thread t`. `models` lists the models already used in T3, with the name of each provider's effort setting; skip the `<synthetic>` entry. `limits` prints reset times in local time and marks a reset that already passed with `(passed)`.
 
