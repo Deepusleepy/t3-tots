@@ -240,16 +240,23 @@ const FIND_SH = FIND_BIN(FIND_SH_NAME);
 const FIND_INT = FIND_BIN(FIND_INT_NAME);
 const FIND_WRAP = String.raw`${FIND_BIN(FIND_WRAP_NAME)}(?:\s+(?!${FIND_BIN(FIND_DEL_NAME)}|${FIND_BIN(FIND_SH_NAME)}|${FIND_BIN(FIND_INT_NAME)})\S+)*`;
 const FIND_EXEC_DEL = String.raw`-(?:exec|execdir|ok|okdir)\s+(?:${FIND_WRAP}\s+)*(?:${FIND_RM}|${FIND_SH}[\s\S]*?\b${FIND_DEL_NAME}\b|${FIND_INT}[\s\S]*?\b${FIND_INT_DEL}\b)`;
-// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone' and bash $'+feature'
-const PLUS_SPEC = String.raw`(?:\+\S+|['"]\+\s*[^'"]+['"]|\$['"]\+\s*[^'"]+['"])`;
+// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone', bash $'+feature', and \+feature
+const PLUS_SPEC = String.raw`(?:\\?\+\S+|['"]\+\s*[^'"]+['"]|\$['"]\+\s*[^'"]+['"])`;
 // delete refspec :gone, including quoted ':feature' and bash $':gone'
 const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
-// quoted or ANSI-C $'...' flag; the shell strips quotes so "-rf" / $'--force' equal unquoted
-const qflag = (inner) => String.raw`(?:['"]|\$['"])?${inner}['"]?`;
+// quoted or ANSI-C $'...' flag; quotes/backslash may wrap the token or sit after the dashes
+// so "-rf" / $'--force' / -"rf" / --"force" / -\rf equal the unquoted form
+const qflag = (inner) => {
+  let s = String(inner);
+  if (s.startsWith("--")) s = String.raw`--(?:['"]|\\)?` + s.slice(2);
+  else if (s.startsWith("-")) s = String.raw`-(?:['"]|\\)?` + s.slice(1);
+  else s = s.replace(/--/g, String.raw`--(?:['"]|\\)?`);
+  return String.raw`(?:['"]|\$['"])?${s}['"]?`;
+};
 // same git command: indented continuation, or a backslash-newline with optional indent
 const MORE = String.raw`[^\n]*(?:(?:\n[ \t]+|\\\n[ \t]*)[^\n]*)*`;
 // checkout discards: -f/-2/-3/--force/--ours/--theirs always (even with -b/--orphan on the same command).
-// Pathspecs (quoted . / .. / globs / windows \, magic :(…), extensionless Makefile/README/
+// Pathspecs (quoted . / .. / globs / windows \, magic :(…), unquoted leading-dot (.gitignore), extensionless Makefile/README/
 // Dockerfile/LICENSE/LICENCE/Gemfile/VERSION/COPYING/Jenkinsfile/Justfile/Containerfile/
 // Rakefile/Procfile/Pipfile/CODEOWNERS/UNLICENSE/Vagrantfile/Brewfile/Podfile/Fastfile/
 // NOTICE/OWNERS), ` -- `, tree-ish+path, or two
@@ -258,15 +265,16 @@ const MORE = String.raw`[^\n]*(?:(?:\n[ \t]+|\\\n[ \t]*)[^\n]*)*`;
 // newline). A `\` + newline is the same command.
 const CHK = String.raw`(?:[^&\n|;]|\\\n[ \t]*)*`;
 const EXTLESS = String.raw`(?:GNUmakefile|Makefile|makefile|README|Dockerfile|LICENSE|LICENCE|Gemfile|VERSION|COPYING|Jenkinsfile|Justfile|Containerfile|Rakefile|Procfile|Pipfile|CODEOWNERS|UNLICENSE|Vagrantfile|Brewfile|Podfile|Fastfile|NOTICE|OWNERS)`;
-const PATHY = String.raw`(?:['"](?:\.\.?|[^'"]*[./*?\\[][^'"]*|:\([^'"]*\)[^'"]*|${EXTLESS})['"]|(?:\.\.?(?:[/\\]\S*)?)|[^\s-][^\s]*[/\\.?*\[][^\s]*|:\([^)\s]*\)\S*|${EXTLESS})`;
+const PATHY = String.raw`(?:['"](?:\.\.?|[^'"]*[./*?\\[][^'"]*|:\([^'"]*\)[^'"]*|${EXTLESS})['"]|(?:\.\.?(?:[/\\]\S*)?|\.[^./\\\s]\S*)|[^\s-][^\s]*[/\\.?*\[][^\s]*|:\([^)\s]*\)\S*|${EXTLESS})`;
 const CHECKOUT_DISCARD = String.raw`checkout\b(?:${CHK}(?:-[a-z]*[f23][a-z]*\b|--force\b|${uopt("ours", 2)}\b|${uopt("theirs", 2)}\b)|(?!${CHK}(?:\s-b\b|\s--orphan(?:\s|=)))${CHK}(?:\s--\s|\s${PATHY}(?:\s|$)|(?:HEAD(?:[@{~^]\S*)?|[0-9a-f]{7,40}|@(?:[~^{]\S*)?|['"]HEAD['"])\s+\S|(?<=\s)[^\s-][^\s]*\s+[^\s-]))`;
+const FETCH_FLAG = String.raw`${qflag(uopt("prune", 5) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}`;
 const RISK_HIGH = [
   [new RegExp(String.raw`\brm\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(String.raw`-[fidv]*[rfd][fidv]*\b`)}|${qflag(String.raw`(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b`)})`, "i"), "deletes files (rm -r/-f)"],
   [new RegExp(String.raw`\bfind\b[\s\S]*?(\s-delete\b|\s+${FIND_EXEC_DEL})`, "i"), "deletes files (find -delete/-exec rm)"],
-  [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:--force\b|--force-with-lease\b|-[A-Za-z]*f[A-Za-z]*\b|${PLUS_SPEC})`), "force push"],
+  [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:${qflag("--force\\b")}|${qflag("--force-with-lease\\b")}|${qflag(String.raw`-[A-Za-z]*f[A-Za-z]*\b`)}|${PLUS_SPEC})`), "force push"],
   [git(String.raw`push\b${MORE}\b(main|master)\b`), "pushes to main/master"],
-  [git(String.raw`(?:reset\b${MORE}${uopt("hard", 1)}\b|clean\b${MORE}(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b${MORE}(\s-[A-Za-z]*[dmf][A-Za-z]*\b|\s(?:${uopt("delete", 1)}|${uopt("move", 2)}|${uopt("force", 4)})\b)|push\b${MORE}(?:\s(?:${uopt("delete", 2)}|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC})|\n[ \t]+(?:${uopt("delete", 2)}\b|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC}))|${CHECKOUT_DISCARD}|switch\b${MORE}(?:${uopt("discard-changes", 2)}|--force-create|--force\b|(?<=\s)-[A-Za-z]*f[A-Za-z]*\b)|restore\b${MORE}${uopt("worktree", 1)}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${uopt("mirror", 1)}|${uopt("all", 2)}|${uopt("branches", 1)}|${uopt("prune", 3)})\b|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|:(?:refs/heads/)?(?:main|master)\b|\s${uopt("prune", 5)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b|\n[ \t]+(?:${uopt("force", 2)}\b|-[A-Za-z]*[pf][A-Za-z]*\b|${PLUS_SPEC}))|pull\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(uopt("prune", 3) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}|${PLUS_SPEC})|remote(?:(?:\s|\\\n[ \t]*)(?:-v\b|--verbose\b))*(?:\s|\\\n[ \t]*)+(?:prune\b|update\b(?:[^&\n|;]|\\\n[ \t]*|\n[ \t]+)*(?:-p\b|${uopt("prune", 3)}\b)))`), "discards or deletes git work"],
-  [gitCs(String.raw`(?:branch\b${MORE}(?<=\s)-[A-Za-z]*C[A-Za-z]*\b|checkout\b${MORE}(?<=\s)-[A-Za-z]*B[A-Za-z]*\b|switch\b${MORE}(?<=\s)-[A-Za-z]*C[A-Za-z]*\b|restore\b(?:${MORE}(?:${uopt("worktree", 1)}\b|-[A-Za-z]*W[A-Za-z]*\b)|(?!${MORE}(?:--staged\b|-[A-Za-z]*S[A-Za-z]*\b))))`), "discards or deletes git work"],
+  [git(String.raw`(?:reset\b${MORE}${uopt("hard", 1)}\b|clean\b${MORE}(?:-[a-z]*f[a-z]*\b|--force\b)|branch\b${MORE}(\s-[A-Za-z]*[dmf][A-Za-z]*\b|\s(?:${uopt("delete", 1)}|${uopt("move", 2)}|${uopt("force", 4)})\b)|push\b${MORE}(?:\s(?:${uopt("delete", 2)}|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC})|\n[ \t]+(?:${uopt("delete", 2)}\b|-[A-Za-z]*d[A-Za-z]*\b|${DEL_SPEC}))|${CHECKOUT_DISCARD}|switch\b${MORE}(?:${uopt("discard-changes", 2)}|--force-create|--force\b|(?<=\s)-[A-Za-z]*f[A-Za-z]*\b)|restore\b${MORE}${qflag(uopt("worktree", 1))}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${uopt("mirror", 1)}|${uopt("all", 2)}|${uopt("branches", 1)}|${uopt("prune", 3)})\b|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|:(?:refs/heads/)?(?:main|master)\b|\s(?:${FETCH_FLAG})|\n[ \t]+(?:${FETCH_FLAG}|${PLUS_SPEC}))|pull\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(uopt("prune", 3) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}|${PLUS_SPEC})|remote(?:(?:\s|\\\n[ \t]*)(?:${qflag("-v\\b")}|${qflag("--verbose\\b")}))*(?:\s|\\\n[ \t]*)+(?:prune\b|update\b(?:[^&\n|;]|\\\n[ \t]*|\n[ \t]+)*(?:(?<=\s)-p\b|${uopt("prune", 2)}\b)))`), "discards or deletes git work"],
+  [gitCs(String.raw`(?:branch\b${MORE}(?<=\s)-[A-Za-z]*C[A-Za-z]*\b|checkout\b${MORE}(?<=\s)-[A-Za-z]*B[A-Za-z]*\b|switch\b${MORE}(?<=\s)-[A-Za-z]*C[A-Za-z]*\b|restore\b(?:${MORE}(?:${qflag(uopt("worktree", 1) + "\\b")}|(?<=\s)-[A-Za-z]*W[A-Za-z]*\b)|(?!${MORE}(?:${qflag("--staged\\b")}|(?<=\s)-[A-Za-z]*S[A-Za-z]*\b))))`), "discards or deletes git work"],
   [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
   [/\brm\b[^\n]*(\s-re(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b)/i, "deletes files (PowerShell rm -Recurse/-Force)"],
   [/\bsudo\b|\bdoas\b|\brunas\b|-verb\s+runas\b|\bset-executionpolicy\b/i, "runs as admin"], [/\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(ba|z)?sh\b|\biex\b/i, "runs a downloaded script"],
@@ -276,7 +284,7 @@ const RISK_HIGH = [
   [/\b(vercel|netlify|fly|wrangler)\b[^\n]*\b(--prod|deploy)\b|\bkubectl\s+(apply|delete)\b|\bterraform\s+(apply|destroy)\b/i, "deploys"],
   [/\bdrop\s+(table|database)\b|\btruncate\s+table\b/i, "drops data"], [/\b(shutdown|reboot|killall|pkill|taskkill|stop-process|restart-computer|stop-computer)\b|\bkill\s+-9\b/i, "kills processes or the machine"],
 ];
-const READ_ONLY = new RegExp(String.raw`^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![\s\S]*(-delete|${FIND_EXEC_DEL}))|tree|du|df|git\s+(status|log|diff|show|branch(?:(?:\s+(?:--list|--show-current|-v{1,2}|--verbose))+(?:\s+\S+)*|\s*)?$|remote\s+-v\s*$|rev-parse|ls-files|blame|fetch(?![^\n]*(\s${PLUS_SPEC}|\s(?![\w.+-]+:\/\/)[^\s:@]+:[^\s]+|\s${uopt("prune", 5)}\b|\s${uopt("force", 2)}\b|\s-[A-Za-z]*[pf][A-Za-z]*\b)))|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b`, "i");
+const READ_ONLY = new RegExp(String.raw`^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![\s\S]*(-delete|${FIND_EXEC_DEL}))|tree|du|df|git\s+(status|log|diff|show|branch(?:(?:\s+(?:--list|--show-current|-v{1,2}|--verbose))+(?:\s+\S+)*|\s*)?$|remote\s+-v\s*$|rev-parse|ls-files|blame|fetch(?![^\n]*(\s${PLUS_SPEC}|\s(?![\w.+-]+:\/\/)[^\s:@]+:[^\s]+|\s(?:${FETCH_FLAG}))))|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b`, "i");
 // unwrapShell: Codex shows commands as `bash -lc '...'` or `pwsh -Command "..."`; judge the inner command.
 function unwrapShell(c) { const m = String(c).trim().match(/^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?"?\s+-l?c\s+([\s\S]+)$|^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:pwsh|powershell)(?:\.exe)?"?\s+(?:-\w+\s+)*?-c(?:ommand)?\s+([\s\S]+)$/i);
   if (!m) return String(c); const x = (m[1] || m[2]).trim(); return /^(['"]).*\1$/s.test(x) ? x.slice(1, -1) : x; }

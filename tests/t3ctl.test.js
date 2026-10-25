@@ -839,6 +839,89 @@ test("riskOf: git restore --staged continued onto --worktree / -S onto -W is hig
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
 });
 
+test("riskOf: restore -S/-W only match as flags, not inside paths; continuations stay high", () => {
+  // v1.4.14 dropped (?<=\s) on -W/-S so my-Script / file-W looked like flags.
+  for (const p of [
+    "git restore my-Script",
+    "git restore src/app-Setup.ts",
+    "git restore foo-S",
+    "git restore README",
+    "git restore --staged \\\n  --worktree f",
+    "git restore --staged \\\n--worktree f",
+    "git restore -S \\\n  -W file",
+    "git restore -S \\\n-W file",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file-W" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged README-W" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+});
+
+test("riskOf: joined quotes and backslash-escaped flags are high like whole-token quotes", () => {
+  for (const p of [
+    'rm -"rf" dir',
+    'rm "-"rf dir',
+    "rm -\\rf dir",
+    'rm --"force" dir',
+    'git pull --"force" origin main',
+    'git restore --staged --"worktree" file',
+    'git push --"force" origin feature',
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+});
+
+test("riskOf: git pull backslash-escaped + refspec is high like push; --ff-only stays normal", () => {
+  for (const p of [
+    "git pull origin \\+main:main",
+    "git pull origin '+main:main'",
+    "git pull origin $'+main:main'",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n--ff-only" }).level, "high");
+});
+
+test("riskOf: git remote quoted -v prune and update --pr are high; --pro / bare -v / && echo prune are not", () => {
+  for (const p of [
+    'git remote "-v" prune origin',
+    "git remote $'-v' prune origin",
+    "git remote update --pr origin",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update --pro origin" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote -v && echo prune" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update origin-p" }).level, "high");
+});
+
+test("riskOf: quoted git fetch prune/force are high, not read-only; non-force refspec stays normal", () => {
+  for (const p of [
+    'git fetch "--prune" origin',
+    'git fetch "-p" origin',
+    'git fetch "--force" origin main:other',
+    'git fetch "--force" origin',
+    "git fetch $'--force' origin",
+    "git fetch --prune",
+    "git fetch -p",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pr" }).level, "high");
+});
+
+test("riskOf: unquoted leading-dot checkout pathspecs are high; bare branches stay normal", () => {
+  for (const p of [
+    "git checkout .gitignore",
+    "git checkout .github",
+    "git checkout .gitmodules",
+    "git checkout .editorconfig",
+    'git checkout ".gitignore"',
+    "git checkout ./.gitignore",
+    "git checkout -- .gitignore",
+    "git checkout HEAD .gitignore",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+});
+
 test("riskOf: more extensionless checkout names are high; -b / --orphan / branch names stay normal", () => {
   for (const p of [
     "git checkout Vagrantfile",
