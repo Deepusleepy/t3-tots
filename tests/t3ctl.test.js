@@ -1003,6 +1003,97 @@ test("riskOf: ANSI-C $ after the dashes is high; fetch is not read-only; harmles
   assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
 });
 
+test("riskOf: fetch mid-word quotes, empty quotes, -np, and ANSI-C hex prune/force are high, not read-only", () => {
+  // v1.4.16 qflag only allowed a quote/$'/backslash immediately after -/--. Mid-word
+  // quotes, empty '' / $'', combined -n"p" (argv -np), and $'--pr\x75ne' stayed low
+  // because READ_ONLY shares FETCH_FLAG. --fo"rce" was already high (--fo unique prefix).
+  // Fetch --prune is the whole word (min 5): --pru is ambiguous with --prune-tags.
+  for (const p of [
+    'git fetch --pru"ne"',
+    'git fetch --pr"une"',
+    'git fetch --prun"e"',
+    'git fetch --f"orce"',
+    "git fetch --''prune",
+    "git fetch --$''prune",
+    "git fetch ''--prune",
+    "git fetch -''p",
+    'git fetch -n"p"',
+    "git fetch $'--pr\\x75ne'",
+    'git fetch --fo"rce"',
+    "git fetch --prune",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pru" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+});
+
+test("riskOf: restore/remote/push/pull/rm empty quotes, mid-token joins, and ANSI-C hex are high", () => {
+  // Same joins as fetch, on verbs already using qflag: -S"W" is argv -SW (worktree), not
+  // staged-only -S (quote used to be a word boundary). ''-W / -''W / $''-W / --''worktree
+  // glue to -W / --worktree. -v\\rf and $'-v\\x72f' are argv -vrf.
+  for (const p of [
+    'git restore --staged -S"W" tracked',
+    "git restore --staged ''-W",
+    "git restore --staged -S'W'",
+    "git restore --staged -S$'W'",
+    "git restore --staged -S\\W",
+    'git restore --staged ""-W',
+    "git restore --staged -''W",
+    "git restore --staged $''-W",
+    "git restore --staged --''worktree",
+    "git restore --staged --$''worktree",
+    "git restore --staged $'-\\x57'",
+    "git restore --staged $'-S\\x57'",
+    "git remote update -''p",
+    "git remote update --''prune",
+    "git remote update ''-p",
+    'git push -u"f"',
+    "git push --''force",
+    "git push --''force-with-lease",
+    'git pull --pr"une"',
+    'git pull --f"orce"',
+    "git pull -''p",
+    "rm -v\\rf dir",
+    "rm $'-v\\x72f'",
+    "rm $'-\\x76rf'",
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file-W" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged --word file" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update --pro origin" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+});
+
+test("riskOf: quoted/ANSI-C flags on reset/clean/switch/checkout/branch/push/remote verbs are high", () => {
+  // These verbs never called qflag, so --$'hard' / --"hard" / -"fd" / -$'f' / "-D" /
+  // --"delete" / 'prune' / "update" --prune ran at normal. Same helper as fetch.
+  for (const p of [
+    "git reset --$'hard'",
+    'git reset --"hard"',
+    'git clean -"fd"',
+    'git clean --"force"',
+    "git switch -$'f'",
+    'git switch --"discard-changes"',
+    'git checkout -"f" tracked',
+    'git branch "-D"',
+    'git branch --"delete"',
+    'git push --"delete"',
+    'git push --"prune"',
+    "git remote 'prune' origin",
+    'git remote "update" --prune',
+  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
