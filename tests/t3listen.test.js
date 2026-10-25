@@ -59,3 +59,49 @@ test("log lines never print a raw thread title (titles go through clean)", () =>
   const raw = src.split("\n").filter((l) => /\blog\(/.test(l) && /\$\{t\.title\}/.test(l));
   assert.deepEqual(raw, []);
 });
+
+test("reportEnd redacts the event before it is first saved to listen-state.json", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const body = src.slice(src.indexOf("async function reportEnd"), src.indexOf("\n}\n", src.indexOf("async function reportEnd")));
+  assert.ok(body.includes("cleanEvent(e)"), "reportEnd cleans the event");
+  assert.ok(body.indexOf("cleanEvent(e)") < body.indexOf("saveState()"), "cleanEvent runs before the first saveState");
+});
+
+test("idLike: a full id or an 8+ character prefix, never a title with spaces", () => {
+  for (const q of ["abcdefgh", "thread-0b6e2f1c-full-id"]) assert.equal(l.idLike(q), true, q);
+  for (const q of ["abcdefg", "fix the login bug", "a/b/c/d/e/f"]) assert.equal(l.idLike(q), false, q);
+});
+
+test("systemdUnit: quotes and escapes paths and env values so spaces, quotes, % and $ survive", () => {
+  const u = l.systemdUnit("/opt/my node/node", ["/srv/a b/100%/t3listen", "run"], "/srv/a b/100%", { T3_HOME: '/x "y" $HOME\\z' });
+  assert.match(u, /^ExecStart="\/opt\/my node\/node" "\/srv\/a b\/100%%\/t3listen" "run"$/m);
+  assert.match(u, /^WorkingDirectory=\/srv\/a b\/100%%$/m);
+  assert.ok(u.split("\n").includes('Environment="T3_HOME=/x \\"y\\" $HOME\\\\z"'), u);
+  assert.ok(l.systemdUnit("/n", ["/a$b"], "/d").includes('ExecStart="/n" "/a$$b"'));
+});
+
+test("preview-finish: NOT_FOUND in the shell list still reads an id-like query from T3; AMBIGUOUS and titles still stop", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const threads = [{ id: "abcdefgh-1", title: "One" }, { id: "abcdefgh-2", title: "Two" }];
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads }));
+    if (u === "/api/orchestration/threads/hidden-thread-42") return res.end(JSON.stringify({ projection: { thread: { id: "hidden-thread-42", title: "Hidden" }, runs: [] } }));
+    res.statusCode = 404; res.end("{}");
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = (q) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", q],
+    { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
+  try {
+    let r = await run("hidden-thread-42"); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/);
+    r = await new Promise((res) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread=hidden-thread-42"], { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } },
+      (err, out, errOut) => res({ code: err ? err.code : 0, out: out + errOut }))); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/); // --key=value works too
+    r = await run("abcdefgh"); assert.equal(r.code, 1); assert.match(r.out, /AMBIGUOUS/);
+    r = await run("some missing title"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
+    r = await run("missing-id-999"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
+  } finally { srv.close(); }
+});

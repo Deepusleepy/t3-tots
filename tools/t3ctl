@@ -123,11 +123,16 @@ async function uploadImages(list) {
   }
   return out;
 }
-// never copy secrets out of a project: dotfiles and dot folders, and any path part naming a token, auth, secret, credential or .env file
-const SENSITIVE = /token|auth|secret|credential|\.env|passw|private[-_.]?key|id_rsa|id_ed25519|\.pem$|\.p12$|\.key$|keychain/i;
+// SENSITIVE_NAME: word for word the same in tools/t3q.py and tools/cleanup/scan.py (tests/install_test.py checks). Matched against one
+// path part, case-insensitive, after camelCase is split ("googleAuth" -> "google_Auth"): token, secret, credential, password, keys,
+// .env, .ssh, .gnupg, and "auth" as its own word (auth.json, oauth, AuthSessions; not author.md)
+const SENSITIVE_NAME = String.raw`token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))`;
+const SENSITIVE = new RegExp(SENSITIVE_NAME, "i");
+const sensitiveName = (part) => SENSITIVE.test(String(part).replace(/([a-z0-9])([A-Z])/g, "$1_$2"));
+// never copy secrets out of a project: dotfiles and dot folders, and any path part with a sensitive name
 function sensitivePath(f, root) {
   const rel = root && path.resolve(f).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep) ? path.relative(root, f) : f;
-  return rel.split(/[\\/]+/).filter(Boolean).some((part) => part.startsWith(".") || SENSITIVE.test(part)); }
+  return rel.split(/[\\/]+/).filter(Boolean).some((part) => part.startsWith(".") || sensitiveName(part)); }
 // keep the project-relative path under out/ so two files with the same name never overwrite each other
 function outPath(outDir, root, f) {
   const rel = root ? path.relative(root, f) : "";
@@ -207,9 +212,12 @@ function printRequest(r) {
 }
 // --- pure helpers (unit-tested in tests/t3ctl.test.js; no network) ---
 // riskOf: a hint for approvals so a watcher can approve routine ones and hold risky ones. The agent still decides.
+// GIT: "git" plus any global options before the subcommand (git -C path push, git -c k=v push, git --git-dir=x push)
+const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--?[\w-]+(?:=\S+)?))*\s+`;
+const git = (rest) => new RegExp(GIT + rest, "i");
 const RISK_HIGH = [
-  [/\brm\s+-[a-z]*[rf]/i, "deletes files (rm -r/-f)"], [/\bgit\s+push\b[^\n]*(\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S)/i, "force push"],
-  [/\bgit\s+push\b[^\n]*\b(main|master)\b/i, "pushes to main/master"], [/\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|push\s+\S+\s+--delete|push\s+\S+\s+:)/i, "discards or deletes git work"],
+  [/\brm\s+-[a-z]*[rf]/i, "deletes files (rm -r/-f)"], [git(String.raw`push\b[^\n]*(\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S)`), "force push"],
+  [git(String.raw`push\b[^\n]*\b(main|master)\b`), "pushes to main/master"], [git(String.raw`(reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|push\s+\S+\s+--delete|push\s+\S+\s+:)`), "discards or deletes git work"],
   [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-recurse\b|\s-force\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
   [/\bsudo\b|\bdoas\b|\brunas\b|-verb\s+runas\b|\bset-executionpolicy\b/i, "runs as admin"], [/\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(ba|z)?sh\b|\biex\b/i, "runs a downloaded script"],
   [/\b(mkfs|diskutil\s+erase|format\s+[a-z]:|format-volume|clear-disk|dd\s+if=)/i, "touches disks"], [/\bchmod\s+-R\s+777\b|\bchown\s+-R\b/i, "changes permissions recursively"],
@@ -641,5 +649,5 @@ const main = async () => {
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
   else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

@@ -10,8 +10,12 @@ let T="";try{T=fs.readFileSync(path.join(__dirname,"token"),"utf8").trim()}catch
 const H={Authorization:"Bearer "+T,"x-t3-orchestration-protocol":"2"};const B=`http://${!rt.host||rt.host==="0.0.0.0"||rt.host==="::"?"127.0.0.1":rt.host.includes(":")?`[${rt.host}]`:rt.host}:${rt.port}`;
 const get=async p=>{let r;try{r=await fetch(B+p,{headers:H})}catch(e){throw new Error(`T3_NOT_REACHABLE: can't reach T3 at ${B} (${(e.cause&&e.cause.code)||e.message}). Is T3 Code open?`)}
  if(r.status===401||r.status===403)throw new Error(`TOKEN_REJECTED (HTTP ${r.status}): the T3 Tots token expired or was revoked. Reissue it (see Token in t3-tots-rules).`);if(!r.ok)throw new Error(p+" "+r.status);return r.json()};
-(async()=>{const j=await get("/api/orchestration/shell");
-const P=Object.fromEntries(j.projects.map(p=>[p.id,p.title]));const now=Date.now(),d=s=>(now-Date.parse(s))/864e5;
+// SECRET_KEYS: word for word the same as scripts/scan-private.py and tools/export.js (tests/install_test.py checks)
+const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
+const RED=new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S{8,})`, "gi");
+const red=s=>String(s??"").replace(RED,"[redacted]").replaceAll(os.homedir(),"~"); // titles and project names are redacted like export.js
+(async()=>{const j=await get("/api/orchestration/shell");for(const t of j.threads)t.title=red(t.title);
+const P=Object.fromEntries(j.projects.map(p=>[p.id,red(p.title)]));const now=Date.now(),d=s=>(now-Date.parse(s))/864e5;
 const user=j.threads.filter(t=>!/^(mcp|provider)$/.test(t.creationSource));
 console.log("threads",j.threads.length,"user-made",user.length,"projects",j.projects.length);
 const by={};for(const t of user){const k=P[t.projectId]||"?";by[k]=by[k]||{n:0,n7:0,n30:0,last:""};by[k].n++;if(d(t.updatedAt)<7)by[k].n7++;if(d(t.updatedAt)<30)by[k].n30++;if(t.updatedAt>by[k].last)by[k].last=t.updatedAt}

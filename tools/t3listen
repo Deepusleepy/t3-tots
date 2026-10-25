@@ -8,7 +8,9 @@ const fs = require("fs"), path = require("path"), os = require("os"), crypto = r
 const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), HERE = path.join(DIR, "answered-here.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
 const LABEL = process.env.T3LISTEN_LABEL || "com.t3tots.listen", TASK = process.env.T3LISTEN_LABEL || "T3 Tots listener";
 const argv = process.argv.slice(2), cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "run", flag = (f) => argv.includes(f);
-const optv = (f) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : undefined; };
+const optv = (f) => { // --key value or --key=value, like t3ctl
+  const eq = argv.find((a) => a.startsWith(f + "=")); if (eq !== undefined) return eq.slice(f.length + 1) || undefined;
+  const i = argv.indexOf(f); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : undefined; };
 const DRY = flag("--dry-run"), ONCE = flag("--once"), TOLOG = flag("--log"), VERBOSE = flag("--verbose");
 function log(...a) {
   const line = `${new Date().toISOString()} ${a.join(" ")}`;
@@ -74,7 +76,7 @@ async function threadSnap(ep, id) {
 const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
 // short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
 // SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
-const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
+const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
 const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S{8,})`, "gi");
 const clean = (t) => { t = String(t).replace(RED, "[redacted]"); return HOME && HOME.length > 1 ? t.split(HOME).join("~") : t; };
 // every text field of an event (questions, option labels, approval prompt, title, answers, errors) is redacted before it is sent, logged or previewed; ids are kept
@@ -290,6 +292,7 @@ async function reportEnd(ep, t, runId, opts = {}) {
   if (!e) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
   if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id); if (a) Object.assign(e, { usageLimit: true }, a); }
+  cleanEvent(e); // before it is saved: listen-state.json never holds a raw title, project or reply
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
 }
 async function checkFinish(ep, t, prev) {
@@ -313,7 +316,7 @@ function connect(ep) {
       last = Date.now(); let msgs; try { msgs = JSON.parse(ev.data); } catch { return; } if (!Array.isArray(msgs)) msgs = [msgs];
       for (const m of msgs) {
         if (m._tag === "Ping") { ws.send(JSON.stringify({ _tag: "Pong" })); continue; }
-        if (m._tag === "Exit" || m._tag === "Defect") { log("T3 ended the stream:", JSON.stringify(m.exit || m).slice(0, 300)); ws.close(); continue; }
+        if (m._tag === "Exit" || m._tag === "Defect") { log("T3 ended the stream:", clean(JSON.stringify(m.exit || m)).slice(0, 300)); ws.close(); continue; }
         if (m._tag !== "Chunk") continue;
         ws.send(JSON.stringify({ _tag: "Ack", requestId: m.requestId }));
         for (const v of m.values || []) work(() => onItem(ep, v, first && v.kind === "snapshot" && (first = false, true)));
@@ -391,6 +394,14 @@ const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
 function winProcs() { // node processes running THIS t3listen (never touches other node processes)
   try { return ps(`Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like ${psq("*" + SELF + "*")} -and $_.CommandLine -like '* run*' } | ForEach-Object { $_.ProcessId }`).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
 }
+// systemd unit values: ExecStart and Environment are double-quoted with \\ and \" escaped; % is doubled (specifiers) everywhere and $ in
+// ExecStart (variable expansion). WorkingDirectory takes no quotes, so only % is escaped there. A newline can't be written safely: refuse.
+function systemdUnit(node, args, dir, env = {}) {
+  for (const v of [node, ...args, dir, ...Object.values(env)]) if (/[\r\n]/.test(v)) die("INSTALL_FAILED", "a path or T3_HOME value contains a newline");
+  if (/^\s|\s$/.test(dir)) die("INSTALL_FAILED", `systemd can't keep spaces at the start or end of WorkingDirectory: "${dir}"`);
+  const pct = (s) => String(s).replace(/%/g, "%%"), q = (s) => `"${pct(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return `[Unit]\nDescription=T3 Tots listener (T3 Code questions to webhook)\n\n[Service]\nExecStart=${[node, ...args].map((a) => q(a).replace(/\$/g, "$$$$")).join(" ")}\nWorkingDirectory=${pct(dir)}\nRestart=on-failure\nRestartSec=30\n${Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}\n`).join("")}\n[Install]\nWantedBy=default.target\n`;
+}
 function install() {
   if (!fs.existsSync(CONF) && !extra.includes("--dry-run")) die("NO_LISTEN_CONFIG", `run setup first: node "${SELF}" setup`);
   const node = process.execPath, args = [SELF, "run", "--log", ...extra];
@@ -412,7 +423,7 @@ function install() {
     ps(`$w=New-Object -ComObject WScript.Shell; $l=$w.CreateShortcut(${psq(startupLnk())}); $l.TargetPath=${psq(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "conhost.exe"))}; $l.Arguments=${psq(["--headless", node, ...args].map((a) => `"${a}"`).join(" "))}; $l.WorkingDirectory=${psq(DIR)}; $l.WindowStyle=7; $l.Save(); Start-Process -WindowStyle Hidden -FilePath $l.TargetPath -ArgumentList $l.Arguments -WorkingDirectory ${psq(DIR)}`);
     console.log(`installed: Startup shortcut "${startupLnk()}" (Task Scheduler said: ${r.out.trim().split("\n")[0].slice(0, 160)}); log ${LOG}`);
   } else {
-    const unit = `[Unit]\nDescription=T3 Tots listener (T3 Code questions to webhook)\n\n[Service]\nExecStart=${[node, ...args].map((a) => `"${a}"`).join(" ")}\nWorkingDirectory=${DIR}\nRestart=on-failure\nRestartSec=30\n${["T3_HOME", "T3CODE_HOME"].filter((k) => process.env[k]).map((k) => `Environment=${k}=${process.env[k]}\n`).join("")}\n[Install]\nWantedBy=default.target\n`;
+    const unit = systemdUnit(node, args, DIR, Object.fromEntries(["T3_HOME", "T3CODE_HOME"].filter((k) => process.env[k]).map((k) => [k, process.env[k]])));
     fs.mkdirSync(path.dirname(unitPath()), { recursive: true }); fs.writeFileSync(unitPath(), unit);
     sh("systemctl", ["--user", "daemon-reload"]); sh("systemctl", ["--user", "enable", "--now", unitName()]); tryRun("systemctl", ["--user", "restart", unitName()]);
     console.log(`installed: systemd user unit ${unitPath()} (log ${LOG})`);
@@ -459,7 +470,8 @@ async function previewFinish() { // print the run-end event the listener would s
   const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
   let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
-  let id = q; if ((sh.threads || []).length) { try { id = pickThread(sh.threads, q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); die(w, rest.join(": ")); } }
+  // a thread missing from the shell list (archived, or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
+  let id = q; if ((sh.threads || []).length) { try { id = pickThread(sh.threads, q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); } }
   const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip } = await buildEnd(ep, t, null, { preview: true });
@@ -470,6 +482,7 @@ async function previewFinish() { // print the run-end event the listener would s
 // pickThread: the same rules as t3ctl (tests/t3listen.test.js checks they agree): exact id, else an id prefix of 8+ characters,
 // else one exact title, else one title containing the text. Several matches: AMBIGUOUS, never a guess
 const normT = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
+const idLike = (q) => /^[A-Za-z0-9_-]{8,}$/.test(String(q)); // a full id or 8+ character prefix: no spaces
 function pickThread(all, q) {
   q = String(q); const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
   const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };
@@ -487,5 +500,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo };
+if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

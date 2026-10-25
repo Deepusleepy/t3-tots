@@ -3,7 +3,7 @@
 Usage: scan.py ROOT [--min-gb 1] [--share 0.05] [--max-depth 8] [--stale-days 90]
        [--dupes] [--dupe-min-mb 50] [--big-mb 1000] [--old-days 365] [--jobs N] [--out f.json]
 """
-import os, sys, json, time, stat, hashlib, argparse, shutil, platform
+import os, re, sys, json, time, stat, hashlib, argparse, shutil, platform
 if sys.version_info < (3, 8): sys.exit("scan.py needs Python 3.8 or newer")
 from concurrent.futures import ThreadPoolExecutor
 
@@ -31,6 +31,12 @@ CATEGORIES = [  # substring (lowercased, '/'-normalized) -> category
  ("/.cursor/","Cursor data"),("/.codex/","Codex data"),("/.claude/","Claude data"),("worktrees","agent worktrees"),
 ]
 SYSTEM_SKIP = {"/proc","/sys","/dev","/run","/System/Volumes/VM"}
+# SENSITIVE_NAME: word for word the same as tools/t3ctl (tests/install_test.py checks). One path part, case-insensitive, after
+# camelCase is split ("googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
+SENSITIVE_NAME = r"token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))"
+_SENSITIVE = re.compile(SENSITIVE_NAME, re.I)
+def sensitive_path(rel):  # --dupes never opens or hashes a file whose path (below the scan root) has a sensitive part
+    return any(_SENSITIVE.search(re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", part)) for part in re.split(r"[\\/]+", rel) if part)
 
 def onsize(st):
     # allocated bytes (handles sparse/compressed); Windows lacks st_blocks
@@ -38,8 +44,8 @@ def onsize(st):
     return b*512 if b is not None else st.st_size
 
 class Scanner:
-    def __init__(s, a):
-        s.a=a; s.seen=set(); s.errors=0; s.symlinks=0; s.hardlink_dupes=0; s.sparse={}
+    def __init__(s, a, root=""):
+        s.a=a; s.root=root; s.seen=set(); s.errors=0; s.symlinks=0; s.hardlink_dupes=0; s.sparse={}
         s.big={}; s.stale=[]; s.files_for_dupes={}; s.now=time.time()  # re-walks of subtrees revisit files: keep these keyed by path
     def walk(s, path, dev):
         """Return (alloc_bytes, apparent_bytes, newest_mtime, child_sizes dict)."""
@@ -67,7 +73,7 @@ class Scanner:
                     if st.st_size>4*al+(1<<20): s.sparse[e.path]=(st.st_size,al)
                     if st.st_size>=s.a.big_mb*1e6 and s.now-st.st_mtime>s.a.old_days*86400:
                         s.big[e.path]={"path":e.path,"gb":round(st.st_size/1e9,2),"age_days":int((s.now-st.st_mtime)/86400)}
-                    if s.a.dupes and st.st_size>=s.a.dupe_min_mb*1e6:
+                    if s.a.dupes and st.st_size>=s.a.dupe_min_mb*1e6 and not sensitive_path(os.path.relpath(e.path, s.root or path)):
                         s.files_for_dupes.setdefault(st.st_size,set()).add(e.path)
         if not newest:
             try: newest=os.stat(path).st_mtime
@@ -131,11 +137,11 @@ def dupes(sc):
 def scan_one(root,a):
     root=os.path.abspath(os.path.expanduser(root))
     if not os.path.isdir(root): return {"root":root,"error":"not a folder or not reachable"}
-    sc=Scanner(a); dev=os.stat(root).st_dev
+    sc=Scanner(a, root); dev=os.stat(root).st_dev
     du=shutil.disk_usage(root)
     t0=time.time()
     # quick breadth pass for total, then adaptive depth (re-walks only big subtrees)
-    br=Scanner(a); total,_,_,_=br.walk(root,dev)
+    br=Scanner(a, root); total,_,_,_=br.walk(root,dev)
     tree=depth(sc,root,dev,0,total,None,a)
     res={"root":root,"disk_total_gb":round(du.total/1e9,1),"disk_used_gb":round(du.used/1e9,1),
          "disk_free_gb":round(du.free/1e9,1),"scanned_gb":round(total/1e9,1),
