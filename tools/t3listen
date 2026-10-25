@@ -271,7 +271,17 @@ function wsRpc(ep, tag, payload) {
 // usageLimitFields: webhook fields for a usage-limit stop. lastErrorClass / usageLimitResetAt
 // come from the ended run (the thread shell may already be a later run). leftover
 // usageLimitResetAt + failed is not enough when lastErrorClass is something else (server_error).
-// autoResumeSet matches the ended run id, not a later latestRunId recovery record.
+// Text that only mentions "usage limit" is not a limit when lastErrorClass is already a
+// non-usage class (server_error and the like). autoResumeSet matches the ended run id, not a
+// later latestRunId recovery record.
+// shellReadyToArm / canArmResume: poll while the shell row is missing or still running; only
+// write limitRecovery for the failed run that is the current latestRunId.
+function shellReadyToArm(t) { return !!(t && !t.activeRunId && t.status === "failed"); }
+function canArmResume(t, run) {
+  if (!shellReadyToArm(t)) return false;
+  const runId = run && run.id;
+  return !(runId && t.latestRunId && t.latestRunId !== runId);
+}
 function usageLimitFields(t, run) {
   const runId = run && run.id;
   const threadIsThisRun = !!(t && runId && (t.latestRunId === runId
@@ -279,7 +289,7 @@ function usageLimitFields(t, run) {
   const errClass = (run && run.lastErrorClass) || (threadIsThisRun && t && t.lastErrorClass) || null;
   const errText = [run && (run.error || (run.lastError && run.lastError.message)),
     threadIsThisRun && t && t.lastError && t.lastError.message].filter(Boolean).map(String).join(" ");
-  const limited = errClass === "usage_limit" || /usage[_\s-]?limit/i.test(errText);
+  const limited = errClass === "usage_limit" || (!errClass && /usage[_\s-]?limit/i.test(errText));
   if (!limited) return null;
   const resetAt = (run && run.usageLimitResetAt) || (threadIsThisRun && t && t.usageLimitResetAt) || null;
   const rec = t && t.limitRecovery;
@@ -291,13 +301,13 @@ function usageLimitFields(t, run) {
 }
 async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet, ... } or null
   let t = null;
-  for (let i = 0; i < 3 && !t; i++) {
+  for (let i = 0; i < 3 && !shellReadyToArm(t); i++) {
     if (i) await sleep(1500);
     try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); const sh = r.ok ? await r.json() : {}; for (const p of sh.projects || []) if (!meta.projects.has(p.id)) meta.projects.set(p.id, p.title); t = (sh.threads || []).find((x) => x.id === threadId) || null; } catch {}
   }
   const fields = usageLimitFields(t, run);
   if (!fields) return null; // not a usage-limit stop
-  if (!t || t.status !== "failed") { // busy or gone: cannot arm, but the webhook still gets the fields
+  if (!canArmResume(t, run)) { // busy, gone, or a newer run already owns the shell
     const note = fields.autoResumeSet ? "already armed" : (t && autoResumeWanted(t) ? (fields.autoResumeNote || "thread is already busy") : "project not in autoresume.json and thread not started by T3 Tots");
     return { ...fields, autoResumeNote: note, ...(fields.resumeAt ? { resumeAtLocal: localTime(fields.resumeAt) } : {}) };
   }
@@ -561,5 +571,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields };
+if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
