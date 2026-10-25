@@ -1299,6 +1299,96 @@ test("riskOf: \\x{} low-8-bits dash (value mod 256) is high, not read-only", () 
   assert.equal(r.level, "high", long);
 });
 
+test("riskOf: unclosed \\x{…} stops at the first non-hex, like bash", () => {
+  // v1.4.20 required a closing brace (\\x\\{body\\}). bash 5.2 reads hex after
+  // \\x{ until } or a non-hex byte; } is optional. Value is that integer mod 256.
+  // $'\\x{12dp' / $'\\x{2Dp' / $'\\x{0002dp' are argv -p; a following hex digit is
+  // part of the value ($'\\x{2df}' is byte 0xdf, not -f).
+  for (const p of [
+    "git fetch $'\\x{12dp'",
+    "git fetch $'\\x{2Dp'",
+    "git fetch $'\\x{0002dp'",
+    "git fetch $'\\x{2d\\x{2dprune'",
+    "git fetch $'\\x{12d\\x{12dprune'",
+    "git fetch $'\\x{12d'f",
+    "git fetch $'\\x{12d\\x{12d'force",
+    "rm $'\\x{12drf'",
+    "git push $'\\x{12d'f",
+    "git branch $'\\x{12d'C dest",
+    "git switch $'\\x{12d'C feature",
+    "git clean $'\\x{12d\\x{12d'force",
+    "git reset $'\\x{12d\\x{12dhard'",
+    "git fetch $'\\x{2d}f'",
+    "git fetch $'\\x{12d}f'",
+    "git fetch $'\\x{102d}f'",
+    "git fetch $'\\x{12d}\\x{12d}prune'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  for (const p of [
+    "git fetch $'\\x{2df}'",
+    "git fetch $'\\x{12d\\x{12dforce'",
+  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  const unclosed = "git fetch $'\\x{" + "1".repeat(80) + "2dp'";
+  const empty = "git fetch $'" + "\\x{}".repeat(40) + "origin'";
+  const t0 = process.hrtime.bigint();
+  const r = t.riskOf({ requestKind: "command", prompt: unclosed });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  const t1 = process.hrtime.bigint();
+  t.riskOf({ requestKind: "command", prompt: empty });
+  const msEmpty = Number(process.hrtime.bigint() - t1) / 1e6;
+  assert.ok(ms < 50, `80 extra unclosed \\x{} hex digits took ${ms.toFixed(2)}ms`);
+  assert.ok(msEmpty < 50, `40 empty \\x{} probes took ${msEmpty.toFixed(2)}ms`);
+  assert.equal(r.level, "high", unclosed);
+});
+
+test("riskOf: under-width \\U002d is not -f; full-width \\u/\\U stay high", () => {
+  // v1.4.20 compiled git()/rm/READ_ONLY with i. Node 22 rejects (?-i:), so the
+  // 4-digit \\u arm (no lookahead) also matched 4-digit \\U. bash \\U still has
+  // an 8-digit cap, so $'\\U002df' is U+02DF, not -f. Quote-end and a following
+  // non-hex still stop the \\U run ($'\\U002d'f / $'\\U002dp' are -f / -p).
+  for (const p of [
+    "git fetch $'\\U002df'",
+    "git fetch $'\\U002dforce'",
+    "git fetch $'\\U002d\\U002dforce'",
+    "git push $'\\U002df'",
+    "rm $'\\U002df'",
+    "git clean $'\\U002d\\U002dforce'",
+    "git fetch $'\\U2df'",
+    "git fetch $'\\u2df'",
+    "git fetch $'\\u2dC'",
+    "git fetch $'\\U2dC'",
+    "git branch $'\\U002dC' dest",
+  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  for (const p of [
+    "git fetch $'\\u002df'",
+    "git fetch $'\\U0000002df'",
+    "git fetch $'\\U002dp'",
+    "git fetch $'\\U002d\\U002dprune'",
+    "git fetch $'\\U002d'f",
+    "git fetch $'\\x{12d}f'",
+    "git fetch $'\\x{2d}f'",
+    "git fetch $'\\x{102d}f'",
+    "git fetch $'\\x{12d}\\x{12d}prune'",
+  ]) {
+    const r = t.riskOf({ requestKind: "command", prompt: p });
+    assert.equal(r.level, "high", p);
+    assert.notEqual(r.level, "low", p);
+  }
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\U002df'" }).level, "low");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }).level, "high");
+});
+
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");

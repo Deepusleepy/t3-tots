@@ -249,8 +249,10 @@ const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 // joins the next line; and $'...\xHH...' / \x{HH} / \nnn / \u / \U may spell a letter or a
 // dash. bash 5.2 \u is 1–4 hex digits, \U is 1–8 (greedy, so $'\u2dC' is U+02DC not -C;
 // $'\u2d'C closes the quote first). At the width cap a further hex letter is the next
-// character ($'\u002df' / $'\U0000002df' are -f). \x{…} is brace-terminated and the value
-// mod 256 ($'\x{2d}C' / $'\x{12d}C' / $'\x{102d}C' are -C).
+// character ($'\u002df' / $'\U0000002df' are -f). Under-width \U keeps reading hex
+// ($'\U002df' is U+02DF, not -f); protectU rewrites \U so /i cannot fold it onto \u.
+// \x{…} reads hex until } or a non-hex byte; } is optional. Value mod 256
+// ($'\x{2d}C' / $'\x{12d}C' / $'\x{12dp' / $'\x{102d}C' are -C / -p).
 // --pru"ne" / --''prune / ''--prune / $'--pr\x75ne' / $'\x2d\x2dprune' / $'--pr\165ne'
 // / $'\u2d\u2dprune' / $'\x{2d}p' / -n"p" / -S"W" / -v\rf equal argv.
 // (?![\\$'"]*[A-Za-z0-9]) after the token keeps unique prefixes from eating a longer word
@@ -258,6 +260,8 @@ const DEL_SPEC = String.raw`(?:['"]?:\S|\$['"]:\s*[^'"]+['"])`;
 // QWRAP/QSEP take one quote per iteration (not {1,2}): n quotes is linear, not Fibonacci.
 const QWRAP = String.raw`(?:\$?['"])*`;
 const QSEP = String.raw`(?:\$?['"]|\\\n[ \t]*|\\)*`;
+const U_ESC = "\uE000"; // stands in for bash \U so /i cannot fold it onto \u (Node 22 rejects (?-i:))
+const protectU = (s) => String(s).replace(/\\U/g, "\\" + U_ESC);
 const hexd = (s) => [...s].map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d)).join("");
 function qenc(code) { // ANSI-C spellings of one byte; bash \u/\U width cap and \x{} mod 256
   if (code > 255) return "";
@@ -267,13 +271,17 @@ function qenc(code) { // ANSI-C spellings of one byte; bash \u/\U width cap and 
   const uN = 4 - raw.length, UN = 8 - raw.length;
   // Full-width \u/\U (4 / 8 hex digits): bash stops there, so a following hex letter is
   // the next character ($'\u002df' → -f). Under-width keeps (?![0-9A-Fa-f]) so greed
-  // traps stay off ($'\u2df' / $'\U2df' are U+02DF, not dash + f).
+  // traps stay off ($'\u2df' / $'\U2df' are U+02DF, not dash + f). \U is matched as
+  // U_ESC (protectU rewrites the subject): Node 22 rejects (?-i:), and /i would
+  // let the 4-digit \u arm match under-width \U ($'\U002df' is U+02DF).
   const uShort = uN ? `\\\\u0{0,${uN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
-  const UShort = UN ? `\\\\U0{0,${UN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
-  // \x{…}: bash takes the value mod 256 ($'\x{12d}' / $'\x{102d}' are '-'). Last two
-  // hex digits are the low 8 bits; a one-nibble body is the value itself (code < 16).
+  const UShort = UN ? `\\\\${U_ESC}0{0,${UN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
+  // \x{…}: bash reads hex after \x{ until } or a non-hex byte; } is optional. Value
+  // mod 256 ($'\x{12d}' / $'\x{102d}' / $'\x{12dp' are '-'/'-p'). Last two hex digits
+  // are the low 8 bits; a one-nibble body is the value itself (code < 16). Stop the
+  // hex run at the first non-hex so $'\x{2df}' stays byte 0xdf, not dash + f.
   const xBody = raw.length === 1 ? `(?:${HEX}|[0-9A-Fa-f]*${pad})` : `[0-9A-Fa-f]*${pad}`;
-  return `\\\\x${pad}|\\\\x\\{${xBody}\\}|${octRe}|${uShort}\\\\u0{${uN}}${HEX}|${UShort}\\\\U0{${UN}}${HEX}`;
+  return `\\\\x${pad}|\\\\x\\{${xBody}(?:\\}|(?![0-9A-Fa-f]))|${octRe}|${uShort}\\\\u0{${uN}}${HEX}|${UShort}\\\\${U_ESC}0{${UN}}${HEX}`;
 }
 function qhex(ch) {
   const lit = ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
@@ -368,11 +376,11 @@ const WRITES = /(^|[^0-9&>])>{1,2}(?!&)\s*(?!\/dev\/null\b|\$null\b|nul\b)\S|\bt
 function riskOf(approval) {
   const a = approval || {}; const inner = unwrapShell(a.prompt || "");
   const parts = [a.prompt, inner, a.requestKind, a.appName].filter(Boolean).map(String); // raw prompt and unwrap separately (joining made -execdir look like rm -r)
-  const reasons = RISK_HIGH.filter(([re]) => parts.some((s) => re.test(s))).map(([, why]) => why);
+  const reasons = RISK_HIGH.filter(([re]) => parts.some((s) => re.test(protectU(s)))).map(([, why]) => why);
   if (reasons.length) return { level: "high", reasons };
   if (/file_change|apply_patch|write|edit/i.test(String(a.requestKind || "")) && !a.prompt) return { level: "normal", reasons: ["edits files in the workspace"] };
   const cmds = inner.split(/&&|\|\|?|;|\n/).map((s) => s.trim()).filter(Boolean); // every piped stage must be read-only too
-  if (cmds.length && !WRITES.test(inner) && cmds.every((c) => READ_ONLY.test(c.replace(/^(cd\s+\S+\s*)$/i, "pwd")))) return { level: "low", reasons: ["read-only command or test run"] };
+  if (cmds.length && !WRITES.test(inner) && cmds.every((c) => READ_ONLY.test(protectU(c.replace(/^(cd\s+\S+\s*)$/i, "pwd"))))) return { level: "low", reasons: ["read-only command or test run"] };
   return { level: "normal", reasons: [] };
 }
 // deliveryOf: where a just-sent message ended up. "started" | "steered" | "queued" (behind a running run) | "held" | "stuck" | "unknown"
