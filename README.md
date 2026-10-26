@@ -39,7 +39,7 @@ node tools/t3ctl skills install --to ~/.claude/skills
 
 Windows: download `--archive zip`, expand, then `--to "$env:USERPROFILE\.claude\skills"`.
 
-Skill folders: Claude Code `~/.claude/skills`, Codex `~/.agents/skills`, Cursor `~/.cursor/skills`, Hermes `~/.hermes/skills` (same paths under `%USERPROFILE%` on Windows). Install into one folder only — Cursor also loads the other three, so a second copy is listed twice.
+Skill folders: Claude Code `~/.claude/skills`, Codex `~/.agents/skills`, Cursor `~/.cursor/skills`, Hermes `~/.hermes/skills` (same paths under `%USERPROFILE%` on Windows). Install into one folder only. Cursor also loads the other three, so a second copy is listed twice.
 
 Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-check against `manifest.json`; Grok Bot-only steps: `t3-tots-rules` "Grok Bot only"). Updates use the same commands. Edited skills are kept unless you pass `--force` (old copy goes to `out/skills-backup/<timestamp>/`).
 
@@ -58,7 +58,7 @@ Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-ans
 ## Security
 
 - `t3q.py` opens `statev2.sqlite` read-only. From `server-runtime.json` it reads only `host`, `port` and `pid`.
-- Scripts never open T3's `secrets/` or other credentials. The only token they read sits next to them — after your yes, 90-day TTL, never printed. Issue and revoke: [t3-tots-rules "Token"](skills/t3-tots-rules/SKILL.md).
+- Scripts never open T3's `secrets/` or other credentials. The only token they read sits next to them, after your yes, 90-day TTL, never printed. Issue and revoke: [t3-tots-rules "Token"](skills/t3-tots-rules/SKILL.md).
 - Traffic stays on `127.0.0.1` except optional `t3listen` POSTs to your webhook. Exports redact API-key patterns and your home path.
 - No token: read-only. With one, `t3ctl answer` sends only the answer you chose. `t3ctl skills` writes only into `--to` and its own `out/`.
 
@@ -66,7 +66,7 @@ Report issues in [SECURITY.md](SECURITY.md).
 
 ## Developing
 
-- `scripts/check.sh` — syntax, tests, manifest freshness, CRLF on the Windows wrappers, private-word scan. Never-ship words go one per line in `~/.config/t3-tots/private-words.txt` (do not commit it). No list fails the check; `T3TOTS_NO_PRIVATE_WORDS=1` skips it on purpose.
+- `scripts/check.sh`. Syntax, tests, manifest freshness, CRLF on the Windows wrappers, private-word scan. Never-ship words go one per line in `~/.config/t3-tots/private-words.txt` (do not commit it). No list fails the check; `T3TOTS_NO_PRIVATE_WORDS=1` skips it on purpose.
 - After changing a tool, add it to `TOOLS` in `scripts/make-manifest.py` and run that script. It rewrites `manifest.json` from `VERSION`.
 - `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, updates the manifest. Copies nothing if the scan fails.
 - Release only from a tag. Installers download by tag and check every hash.

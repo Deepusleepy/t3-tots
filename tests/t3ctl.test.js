@@ -1147,7 +1147,7 @@ test("riskOf: quoted / ANSI-C -C and -B go through qflag", () => {
 
 test("riskOf: pathological quote piles on fetch stay fast", () => {
   // v1.4.17 QWRAP/QSEP used ['"]{1,2}, so n quotes was Fibonacci. 30 quotes took hundreds
-  // of ms; 36–38 did not finish in seconds. One quote per iteration stays linear.
+  // of ms; 36 to 38 did not finish in seconds. One quote per iteration stays linear.
   const p = "git fetch --" + '"'.repeat(40) + "xyz";
   const t0 = process.hrtime.bigint();
   const r = t.riskOf({ requestKind: "command", prompt: p });
@@ -1160,7 +1160,7 @@ test("riskOf: pathological quote piles on fetch stay fast", () => {
 
 test("riskOf: bash short \\u / \\U / \\x{} fetch prune/force is high, not read-only", () => {
   // v1.4.18 qhex spelled \\u as exactly four hex digits and had no \\U or \\x{}.
-  // bash 5.2 also expands \\u/\\U 1–8 hex digits (greedy) and \\x{HH}. Fetch's high
+  // bash 5.2 also expands \\u/\\U 1 to 8 hex digits (greedy) and \\x{HH}. Fetch's high
   // path and READ_ONLY share FETCH_FLAG. $'\\U2d'f / $'\\u2d\\u2d'force close the
   // quote before f (a hex digit); $'\\U2df' / $'\\u2d\\u2dforce' are U+02DF / -˟orce.
   for (const p of [
