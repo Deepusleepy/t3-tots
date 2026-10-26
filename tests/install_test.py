@@ -32,7 +32,7 @@ class Fetcher(unittest.TestCase):
     def test_pins_match_this_release(self):
         pin = re.search(r'PIN = "([^"]*)"', FETCHER).group(1)
         self.assertEqual(pin, MANIFEST["version"], "t3-install-tools PIN differs from VERSION: re-pin the fetcher, then run scripts/sync-skills")
-        prose = re.findall(r"pins release `([^`]+)`", SKILL)
+        prose = re.findall(r"This skill pins release `([^`]+)`", SKILL)
         self.assertEqual(prose, [pin], "the t3-install-tools text names a different release than its PIN")
         pinned = dict(re.findall(r'^ "([^"]+)": (\[[^\]]+\])', FETCHER, re.M))
         self.assertEqual({k: json.loads(v) for k, v in pinned.items()}, {f["path"]: [f["dest"], f["sha256"]] for f in TOOLS},

@@ -3,7 +3,7 @@ name: t3-update
 description: >-
   Update tools on the user's computers, by level or by name, with a project-safety
   check first. Use for "update T3/AI/dev/everything", "update gh", "update claude and
-  codex", "update just T3 on <computer>", "what's out of date", "change my update levels".
+  codex", "update just T3 on <computer>", "what's out of date", "change my update levels". Not T3 Tots itself ("update T3 Tots" is t3-install-tools).
 ---
 Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". Updating is approved only for the items resolved this turn, or a saved level as its "Writes" section allows. Never touch a project's own lockfile or dependencies unless asked.
 
