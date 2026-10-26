@@ -1,14 +1,16 @@
 # T3 Tots
 
-Skills and helper scripts for [T3 Code](https://github.com/pingdotgg/t3code): thread status, waiting items, new threads, answers, reports, watches, and updates.
+Grok Bot / chat companion for [T3 Code](https://github.com/pingdotgg/t3code), with skills and helper tools. Thread status, waiting items, new threads, answers, reports, watches, and updates.
 
-Private for now. [MIT](LICENSE). No accounts or telemetry; the only outbound send is optional `t3listen` to a webhook you set up.
+[MIT](LICENSE). No accounts or telemetry. The only outbound send is optional `t3listen` to a webhook you set up.
+
+Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and verify by following [AGENTS.md](AGENTS.md). Shared rules: [t3-tots-rules](skills/t3-tots-rules/SKILL.md).
 
 ## What's here
 
 | Path | What it is |
 |---|---|
-| `skills/` | One folder per skill. Start with `t3-getting-started`. Shared rules: `t3-tots-rules`. |
+| `skills/` | One folder per skill. |
 | `tools/` | Scripts, installed flat into one folder per computer. |
 | `manifest.json` | Version, dest path, size, SHA-256, and which OS gets each file. |
 | `scripts/`, `tests/` | Checks, manifest builder, skill sync. |
@@ -22,13 +24,15 @@ Private for now. [MIT](LICENSE). No accounts or telemetry; the only outbound sen
 | `t3ui` + `ui-*.applescript` | macOS | UI fallback if the local API is down (needs Accessibility). |
 | `cleanup/scan.py` | all | Read-only disk-usage scan. |
 | `cleanup/make_report.py`, `report/report.py` | Grok Bot box | HTML cleanup report and briefing. |
-| `t3ctl.cmd`, `t3listen.cmd` | Windows | `cmd` wrappers; from PowerShell use `node t3ctl`. |
+| `t3ctl.cmd`, `t3listen.cmd` | Windows | `cmd` wrappers. From PowerShell use `node t3ctl`. |
 
 ## Install
 
-**Grok Bot.** Skills are built in. Say "set up T3 Tots"; after your yes it installs the tools on each computer.
+Install from a release tag, not from `main`. Every file is checked against that tag's `manifest.json` before it is used.
 
-**Other agents** (Claude Code, Codex, Cursor, Hermes, …) need a signed-in `gh` while the repo is private. From an unpacked release:
+**Grok Bot.** Skills are built in. Say "set up T3 Tots". After your yes it installs the tools on each computer.
+
+**Other agents** (Claude Code, Codex, Cursor, Hermes). Download a release or clone the tag, then install the skills:
 
 ```sh
 gh release download -R Deepusleepy/t3-tots --archive tar.gz
@@ -37,11 +41,20 @@ node tools/t3ctl skills install --to ~/.claude/skills --dry-run
 node tools/t3ctl skills install --to ~/.claude/skills
 ```
 
-Windows: download `--archive zip`, expand, then `--to "$env:USERPROFILE\.claude\skills"`.
+Clone the same tag:
+
+```sh
+git clone --branch <tag> --depth 1 https://github.com/Deepusleepy/t3-tots.git
+cd t3-tots
+node tools/t3ctl skills install --to ~/.claude/skills --dry-run
+node tools/t3ctl skills install --to ~/.claude/skills
+```
+
+Windows: `gh release download -R Deepusleepy/t3-tots --archive zip`, expand, then `--to "$env:USERPROFILE\.claude\skills"`.
 
 Skill folders: Claude Code `~/.claude/skills`, Codex `~/.agents/skills`, Cursor `~/.cursor/skills`, Hermes `~/.hermes/skills` (same paths under `%USERPROFILE%` on Windows). Install into one folder only. Cursor also loads the other three, so a second copy is listed twice.
 
-Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-check against `manifest.json`; Grok Bot-only steps: `t3-tots-rules` "Grok Bot only"). Updates use the same commands. Edited skills are kept unless you pass `--force` (old copy goes to `out/skills-backup/<timestamp>/`).
+Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-check against `manifest.json`. Grok Bot-only steps: `t3-tots-rules` "Grok Bot only"). Updates use the same commands. Edited skills are kept unless you pass `--force` (the old copy goes to `out/skills-backup/<timestamp>/`).
 
 ## Phone answers (optional)
 
@@ -58,7 +71,7 @@ Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-ans
 ## Security
 
 - `t3q.py` opens `statev2.sqlite` read-only. From `server-runtime.json` it reads only `host`, `port` and `pid`.
-- Scripts never open T3's `secrets/` or other credentials. The only token they read sits next to them, after your yes, 90-day TTL, never printed. Issue and revoke: [t3-tots-rules "Token"](skills/t3-tots-rules/SKILL.md).
+- Scripts never open T3's `secrets/` or other credentials. The only token they read sits next to them, after your yes, with a 90-day TTL, and is never printed. Issue and revoke: [t3-tots-rules "Token"](skills/t3-tots-rules/SKILL.md).
 - Traffic stays on `127.0.0.1` except optional `t3listen` POSTs to your webhook. Exports redact API-key patterns and your home path.
 - No token: read-only. With one, `t3ctl answer` sends only the answer you chose. `t3ctl skills` writes only into `--to` and its own `out/`.
 
@@ -66,7 +79,7 @@ Report issues in [SECURITY.md](SECURITY.md).
 
 ## Developing
 
-- `scripts/check.sh`. Syntax, tests, manifest freshness, CRLF on the Windows wrappers, private-word scan. Never-ship words go one per line in `~/.config/t3-tots/private-words.txt` (do not commit it). No list fails the check; `T3TOTS_NO_PRIVATE_WORDS=1` skips it on purpose.
+- `scripts/check.sh`. Syntax, tests, manifest freshness, CRLF on the Windows wrappers, private-word scan. Never-ship words go one per line in `~/.config/t3-tots/private-words.txt` (do not commit it). No list fails the check. `T3TOTS_NO_PRIVATE_WORDS=1` skips it on purpose.
 - After changing a tool, add it to `TOOLS` in `scripts/make-manifest.py` and run that script. It rewrites `manifest.json` from `VERSION`.
-- `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, updates the manifest. Copies nothing if the scan fails.
+- `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, and updates the manifest. It copies nothing if the scan fails.
 - Release only from a tag. Installers download by tag and check every hash.

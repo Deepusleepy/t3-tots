@@ -5,7 +5,7 @@ Non-Grok agents follow this file to install and verify. For Grok Bot only steps,
 ## Rules
 - Install only after the user's yes. Never print, copy or overwrite the `token` file or `listen.json` (it holds the user's webhook URL and key), and never open T3 Code's `secrets/` or any auth, token or credential file.
 - Who may answer a thread's question or approval (`t3ctl answer`), and when delegated mode applies: `skills/t3-tots-rules/SKILL.md`, "Decisions".
-- Install from a **tag**, never from `main`: a release, a checkout of the tag, or `https://raw.githubusercontent.com/Deepusleepy/t3-tots/<tag>/<path>`. While the repo is private, raw URLs return 404 without a login; download with a signed-in GitHub CLI instead (`gh release download <tag> -R Deepusleepy/t3-tots --archive tar.gz`, or per file `gh api "repos/Deepusleepy/t3-tots/contents/<path>?ref=<tag>" -H "Accept: application/vnd.github.raw"`).
+- Install from a **tag**, never from `main`: a release, a checkout of the tag, or `https://raw.githubusercontent.com/Deepusleepy/t3-tots/<tag>/<path>`. Download the release with `gh release download <tag> -R Deepusleepy/t3-tots --archive tar.gz`, or one file with `gh api "repos/Deepusleepy/t3-tots/contents/<path>?ref=<tag>" -H "Accept: application/vnd.github.raw"`.
 - Check every file's SHA-256 against `manifest.json` from the same tag **before** moving it into place. On any mismatch install nothing and report `HASH_MISMATCH <path>`.
 - Files are stored byte-exact (`.gitattributes`: `* -text`). The `.cmd` wrappers have CRLF line endings on purpose.
 

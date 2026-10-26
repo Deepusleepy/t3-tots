@@ -23,4 +23,4 @@ For each project, cover what happened, where it stands, what's next (from tracke
 - Weekly: the same, plus an HTML page at `/workspace/t3-out/digest-<date>.html` in the t3-project-report style, sent with SendToUser.
 
 ## 3. Routines
-The Daily digest and Weekly wrap-up routines run this skill (t3-getting-started section 5). In a routine run, skip quiet projects, and send nothing if nothing happened and nothing is waiting.
+The Daily digest and Weekly wrap-up routines run this skill (t3-getting-started section 6). In a routine run, skip quiet projects, and send nothing if nothing happened and nothing is waiting.

@@ -1,6 +1,6 @@
 # Security
 
-While the repo is private, report security problems to the repo owner directly. Once it is public, use the **Security** tab of this repository and choose **Report a vulnerability**. Do not open a public issue.
+Report security problems through the **Security** tab of this repository. Choose **Report a vulnerability**. Do not open a public issue.
 
 Include what you found, how to reproduce it, and which version (`VERSION`) you used. I will reply as soon as I can.
 

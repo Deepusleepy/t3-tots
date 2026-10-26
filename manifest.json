@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.25",
+ "version": "v1.4.26",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.25/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.26/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -215,21 +215,21 @@
    "dest": "t3-checkup/SKILL.md",
    "kind": "skill",
    "bytes": 1538,
-   "sha256": "f6cbbb34376f3f1524dab0326c665a77c0ac82bc780c2d49b973b8f9174cd70a"
+   "sha256": "202b58438b119c540fd44c83b244f108598a7dc0a26760e5be44cd256221a75a"
   },
   {
    "path": "skills/t3-cleanup/SKILL.md",
    "dest": "t3-cleanup/SKILL.md",
    "kind": "skill",
-   "bytes": 19962,
-   "sha256": "ed250780a341160724c21bea881155ff58ac7f7ebfde6bb9535d26c37bb4e9df"
+   "bytes": 19970,
+   "sha256": "8ea8b27880aac981330a40b8976a1a9db963ed37ab828bbb69382e9cb87afa39"
   },
   {
    "path": "skills/t3-digest/SKILL.md",
    "dest": "t3-digest/SKILL.md",
    "kind": "skill",
    "bytes": 2107,
-   "sha256": "36385aa6960b663a9bbb226e97faa32bd163eff944c3d7da3f01c8e8e8872d4c"
+   "sha256": "35e8ceda79261c5c5a01f5637c0ad54790d5998405e67065d5f2ed89da105dfc"
   },
   {
    "path": "skills/t3-get-output/SKILL.md",
@@ -242,8 +242,8 @@
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 9381,
-   "sha256": "562f1196b8e0a76fb54c98b9cd14440c0466fdc75c22ffda7f5c09914d1354bf"
+   "bytes": 11081,
+   "sha256": "5ec1cdebac80e56ada50957d62741c15cfcb3081c41c9cf07a762c1ff42e20a8"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -256,8 +256,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 17264,
-   "sha256": "5ec4710921b83a2d985903c1b28729237340e7f4b6cad235666f5dc2ec37373f"
+   "bytes": 17265,
+   "sha256": "9e9a42aabac83c3029f92061b52dd88b794d5b6a5207ec66c1b2e0f216dfb6ba"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -270,8 +270,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 11321,
-   "sha256": "a1b49f56726385ec67a09701b0d11f85cab25afbb445b33691b4187b98fcb916"
+   "bytes": 11331,
+   "sha256": "ecd6f50067879109c4617095639da104a0c2c6e45ce3e89ac673a43e31153688"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
@@ -334,7 +334,7 @@
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
    "bytes": 23585,
-   "sha256": "82cda477602cb5c78326a22c8835f135eb1cafa6afd223ac8db51530aa5de833"
+   "sha256": "3b7fc4fa1628dbed2ef8f3df1227fd9c85940f24b76b91c91393b49e10b15cf4"
   },
   {
    "path": "skills/t3-update/SKILL.md",
