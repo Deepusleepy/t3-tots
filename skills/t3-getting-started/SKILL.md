@@ -1,10 +1,10 @@
 ---
 name: t3-getting-started
 description: >-
-  First conversation with a new owner of T3 Tots: detect their setup, install the
-  helper tools, optionally issue the T3 token, verify, and show what to try. Use on
-  the first chat, when no T3 Tots setup is saved in memory, or when the user says
-  "set up T3 Tots" / "getting started" / "reinstall the tools".
+  First conversation with a new owner of T3 Tots: detect their setup, install
+  the helper tools, optionally issue the T3 token, verify, and show what to try.
+  Use on the first chat, when no T3 Tots setup is saved in memory, or when the
+  user says "set up T3 Tots" / "getting started" / "reinstall the tools".
 ---
 If you are not Grok Bot, stop here. Install and verify the tools by following AGENTS.md in this release, and skip every step below (box, ListMachines, routines, cards, memory, phone setup; t3-tots-rules "Grok Bot only" lists what to do instead).
 
@@ -56,13 +56,17 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 1. Install: t3-install-tools "Install on a computer" for each computer with T3 data (every file verified by sha256).
 2. Token (only if they didn't say read-only, and only where `t3runtime=yes`; otherwise ask them to open T3 Code first): t3-tots-rules "Token", then `t3ctl projects` must list projects. Fill in the token date and expiry in the tools folder's `README.md` (t3-install-tools "README").
 3. Verify each computer and fix anything red before moving on: `t3q.py health`, `t3q.py projects` (its "projects folder guess" becomes the default projects folder), `t3ctl projects` (if token). If `t3ctl` prints `NODE_TOO_OLD`, give the Node line above.
-4. Save one memory note: setup done, tools version, per computer (label, OS, tools folder, Python command such as `py -3`, Node version, token yes/no and expiry date), projects folder, sandbox project, protected jobs, that phone answers are off, and that decisions are in the default mode (t3-tots-rules "Decisions"). Routines are saved separately in step 5.
+4. Save one memory note: setup done, tools version, per computer (label, OS, tools folder, Python command such as `py -3`, Node version, token yes/no and expiry date), projects folder, sandbox project, protected jobs, that phone answers are off, and that decisions are in the default mode (t3-tots-rules "Decisions"). The oversight mode and pstack status are saved in section 4, and routines separately in section 6.
 5. macOS only, optional: the `t3ui` UI fallback needs Accessibility permission for the Grok Bot app (System Settings > Privacy & Security > Accessibility). Mention it once; don't ask now.
 
-## 4. Optional: answer from your phone
+## 4. Oversight mode and pstack
+1. **Oversight mode:** ask once, as a tap-to-answer card: "How hands-on should I be: Monitor, Orchestrate, or PM coworker?" Explain in one line each. Monitor: I relay questions, handle approvals per your saved autonomy, report finishes, and step in only if a thread is truly stuck or broken. Orchestrate: Monitor plus starting watches and routines and coordinating several threads when you ask, without interrupting healthy runs. PM coworker: I actively plan and drive project work with you (including project-manager threads), and still never merge or take irreversible actions without your OK. In every mode, never steer a thread that is running or already knows its next step. Save the pick to memory.
+2. **pstack (required):** pstack, the principles pack by Lauren Tan (poteto), sets this bot's quality bar and is a required install. Ask: "pstack (Lauren Tan's poteto principles) is required for the quality bar this bot works to. Set it up now?" If yes, install Lauren Tan's poteto/pstack principles from the Cursor plugin catalog (`/add-plugin pstack`). For other agents, a community mirror is `npx skills add backnotprop/pstack`. That mirror is not her official repo. Her work is the Cursor poteto/pstack principles plugin. If no, say quality checks will be lighter and the bot won't work as intended until it is installed, and offer it again in the finish message. Save the answer to memory.
+
+## 5. Optional: answer from your phone
 Only if a token was issued. Offer it once, in one line: "Want me to message you here the moment a thread asks you something, so you can answer from this chat on your phone or computer? It needs a small listener on each computer and a webhook routine; say **phone answers** to set it up." On yes, follow t3-phone-answers "Setup": you open a setup window on each computer yourself, and the user only pastes two lines (the Webhook URL, then the Authorization header). On no, don't ask again.
 
-## 5. Routines (one tap each)
+## 6. Routines (one tap each)
 This bot ships with six routines, all paused. Show them in one multi-select card, nothing pre-selected, each option labelled with its name and time in the user's timezone, plus a **none** option:
 - **Daily digest**: weekdays at 9:00 AM
 - **Weekly wrap-up**: Fridays at 5:00 PM
@@ -75,8 +79,8 @@ Lead line: "I can also send these on a schedule. Pick any you want on; you can c
 On the answer: save one memory note "Routines on: <names>" (or "Routines on: none"), resume the picked routines, and leave the rest paused (pause any that are still active). Confirm in one line with the times. If the user asks for another time, change only that routine's schedule.
 Later, "turn on <routine>" / "turn off <routine>" / "move <routine> to <time>" resumes, pauses or reschedules that routine and updates the "Routines on" note. Never create a second copy of a shipped routine.
 
-## 6. Finish
-Run t3-status (overview) as a first look, then this list:
+## 7. Finish
+One short line first: what was installed where, token yes/no and expiry, the oversight mode, whether phone answers are on, whether pstack is installed (if not, offer it again), and which routines are on. Then run t3-status (overview) as a first look, then this list:
 
 Things to try:
 - what's waiting on me

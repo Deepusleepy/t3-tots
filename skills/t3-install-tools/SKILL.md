@@ -6,7 +6,8 @@ description: >-
   onto the box and the user's T3 computers. Use during setup, when a skill says the
   tools are missing or differ, or for "update T3 Tots tools".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.25` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
+
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.26` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`).
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder.
 
@@ -29,7 +30,7 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only; skills install with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import hashlib, json, os, pathlib, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.25"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.26"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
  "tools/t3ctl": ["t3ctl", "7cfe372d2bb3b250f622b04d239dc0b3af7d43ce51bf24ddcb0b471df3ad2925"],
