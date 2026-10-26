@@ -37,6 +37,17 @@ class Fetcher(unittest.TestCase):
         pinned = dict(re.findall(r'^ "([^"]+)": (\[[^\]]+\])', FETCHER, re.M))
         self.assertEqual({k: json.loads(v) for k, v in pinned.items()}, {f["path"]: [f["dest"], f["sha256"]] for f in TOOLS},
                          "t3-install-tools pins differ from manifest.json: re-pin the fetcher, then run scripts/sync-skills")
+        started = (ROOT / "skills" / "t3-getting-started" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(started.isascii(), "t3-getting-started must stay ASCII (no em dashes)")
+        url = f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{pin}/assets/avatar.png"
+        self.assertIn(url, started, "t3-getting-started must download the pinned-release avatar")
+        self.assertIn("UpdateAvatar", started)
+        self.assertIn("action `set`", started)
+        avatar = (ROOT / "assets" / "avatar.png").read_bytes()
+        self.assertLess(len(avatar), 5 * 1024 * 1024)
+        self.assertTrue(avatar.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(avatar[16:24], (1024).to_bytes(4, "big") + (1024).to_bytes(4, "big"))
+        self.assertIn(hashlib.sha256(avatar).hexdigest(), started)
 
     def test_box_install_is_flat_and_verified(self):
         r = run(self.f, "box", "--from", str(ROOT), dst=self.dst)
