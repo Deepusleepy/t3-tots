@@ -92,3 +92,4 @@ Things to try:
 - health check
 - what's out of date
 - daily digest
+- update T3 Tots
