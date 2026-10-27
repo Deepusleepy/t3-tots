@@ -456,27 +456,6 @@ function standingCmd(o) {
   else if (o.remove !== undefined) { const c = String(o.remove).trim(); if (list.includes(c)) write(list.filter((x) => x !== c)); console.log(`standing approval removed: ${c}`); }
   else if (!list.length) console.log("no standing approvals"); else for (const c of list) console.log(c);
 }
-const RUNTIMES = ["approval-required", "auto-accept-edits", "auto", "full-access"];
-const CONFIG = path.join(__dirname, "config.json");
-function readConfig() {
-  let raw; try { raw = fs.readFileSync(CONFIG, "utf8"); } catch (e) { if (e.code === "ENOENT") return {}; throw e; }
-  let c; try { c = JSON.parse(raw); } catch { c = null; }
-  if (!c || typeof c !== "object" || Array.isArray(c)) throw new Error(`BAD_CONFIG: ${CONFIG} must be a JSON object`);
-  return c;
-}
-function runtimeOf(flag, config) {
-  const from = flag !== undefined ? "--runtime" : config.runtime !== undefined ? "config.json runtime" : null;
-  if (!from) return { mode: "approval-required", configured: false };
-  const mode = String(flag !== undefined ? flag : config.runtime);
-  if (!RUNTIMES.includes(mode)) throw new Error(`BAD_RUNTIME: ${from} is "${mode}"; use one of ${RUNTIMES.join(", ")}`);
-  return { mode, configured: true };
-}
-const runtimeNote = (rt) => (rt.configured ? "" : "\nRUNTIME_DEFAULT: no runtime is set, so it runs approval-required and asks before commands and edits. Set one with: t3ctl config --runtime <mode>");
-function configCmd(o) {
-  const c = readConfig();
-  if (o.runtime !== undefined) { const { mode } = runtimeOf(o.runtime, {}); fs.writeFileSync(CONFIG, JSON.stringify({ ...c, runtime: mode }, null, 2) + "\n"); console.log(`runtime: ${mode}`); }
-  else console.log(`runtime: ${c.runtime !== undefined ? c.runtime : "not set (new threads and scheduled tasks run approval-required)"}`);
-}
 // deliveryOf: where a just-sent message ended up. "started" | "steered" | "queued" (behind a running run) | "held" | "stuck" | "unknown"
 function deliveryOf(p, messageId, activeRunId) {
   const runs = (p && p.runs) || []; const mine = runs.find((r) => r.userMessageId === messageId);
@@ -721,7 +700,6 @@ const main = async () => {
   const bare = missingValue(cmd === "skills" ? args(process.argv.slice(3)) : o, cmd);
   if (bare) die("USAGE", `--${bare} needs a value (use --${bare}=<value> for a value that starts with --). Run t3ctl with no arguments for usage.`);
   if (cmd === "standing") return standingCmd(o);
-  if (cmd === "config") return configCmd(o);
   if (cmd === "skills") return skillsCmd(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "list", args(process.argv.slice(3)));
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
@@ -729,15 +707,15 @@ const main = async () => {
   else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project !== undefined) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } if (o.main) ts = ts.filter(isMainThread); const top = ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15);
     const ps = await Promise.all(top.map((t) => thread(t.id).then((r) => r.projection, () => null))); top.forEach((t, i) => console.log(threadLine(t, ps[i]))); }
   else if (cmd === "new") {
-    const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--runtime mode] [--wait [--timeout seconds]]");
-    const rt = runtimeOf(o.runtime, readConfig()); const p = await findProject(o.project); const s0 = await shell(); const sel = modelSel(o, p.defaultModelSelection || recentSel(s0, p.id) || recentSel(s0), s0);
+    const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--wait [--timeout seconds]]");
+    const p = await findProject(o.project); const s0 = await shell(); const sel = modelSel(o, p.defaultModelSelection || recentSel(s0, p.id) || recentSel(s0), s0);
     const title = o.title || prompt.slice(0, 60);
     const res = await rpc("orchestration.launchThread", { commandId: uuid(), creationSource: "web", projectId: p.id, title, generateTitle: !o.title,
-      modelSelection: sel, runtimeMode: rt.mode, interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: { type: "root" },
+      modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: { type: "root" },
       initialMessage: { messageId: uuid(), text: prompt, attachments: await uploadImages(o.attach) } });
     try { const sf = path.join(__dirname, "started-here.json"); let m = {}; try { m = JSON.parse(fs.readFileSync(sf, "utf8")) || {}; } catch {} // t3listen auto-resumes threads started here
       const cut = Date.now() - 60 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k]; m[res.threadId] = new Date().toISOString(); fs.writeFileSync(sf, JSON.stringify(m)); } catch {}
-    console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}  runtime=${rt.mode}${runtimeNote(rt)}`);
+    console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}`);
     if (o.wait) { const t = await wait(res.threadId, +o.timeout || 300); console.log(`title: ${t.title}  status: ${t.status}`); await printLast(res.threadId, 2); }
   }
   else if (cmd === "send") {
@@ -835,16 +813,16 @@ const main = async () => {
     if (o.run) { const r = await rpc("scheduledTasks.runNow", { id: String(o.run) }); console.log(`started task ${o.run}: ${JSON.stringify(r).slice(0, 300)}`); return; }
     if (o.delete) { if (!o.yes) throw new Error("deleting a scheduled task can't be undone; add --yes"); await rpc("scheduledTasks.delete", { id: String(o.delete) }); console.log(`deleted task ${o.delete}`); return; }
     if (o.upsert) {
-      const tprompt = promptOf(o); if (!o.title || !tprompt || !o.project) throw new Error("usage: tasks --upsert --project p --title t (--prompt x | --prompt-file f) (--every 30m | --at HH:MM [--days 1,2,3]) [--thread t] [--model m --effort e] [--runtime mode] [--disabled] [--id existing]");
-      const rt = runtimeOf(o.runtime, readConfig()); const p = await findProject(o.project); const s = await shell(); let schedule;
+      const tprompt = promptOf(o); if (!o.title || !tprompt || !o.project) throw new Error("usage: tasks --upsert --project p --title t (--prompt x | --prompt-file f) (--every 30m | --at HH:MM [--days 1,2,3]) [--thread t] [--model m --effort e] [--disabled] [--id existing]");
+      const p = await findProject(o.project); const s = await shell(); let schedule;
       if (o.every) schedule = { type: "interval", everyMs: parseEvery(o.every) };
       else if (o.at) { if (!/^([01]?\d|2[0-3]):([0-5]\d)$/.test(String(o.at))) throw new Error("--at must be HH:MM (24h)"); schedule = { type: "fixed_time", timeOfDay: String(o.at) };
         if (o.days) { const d = String(o.days).split(",").map(Number); if (d.some((x) => !Number.isInteger(x) || x < 0 || x > 6)) throw new Error("--days are 0-6 (0 = Sunday), comma separated"); schedule.weekdays = d; } }
       else throw new Error("give --every 30m or --at HH:MM");
       const th = o.thread ? await findThread(o.thread) : null; if (th && th.projectId !== p.id) throw new Error("--thread is in a different project");
       const r = await rpc("scheduledTasks.upsert", { ...(o.id ? { id: String(o.id), requireExisting: true } : {}), commandId: uuid(), title: String(o.title), prompt: tprompt, enabled: !o.disabled, schedule, projectId: p.id, threadId: th ? th.id : null,
-        workspaceStrategy: { type: "root" }, modelSelection: modelSel(o, p.defaultModelSelection || recentSel(s, p.id) || recentSel(s), s), runtimeMode: rt.mode, interactionMode: o.mode === "plan" ? "plan" : "default", createdBy: "user", creationSource: "web" });
-      const task = r.task || r; console.log(`saved task ${task.id || "?"}  "${o.title}"  enabled=${!o.disabled}  runtime=${rt.mode}  ${JSON.stringify(schedule)}${runtimeNote(rt)}`); return; }
+        workspaceStrategy: { type: "root" }, modelSelection: modelSel(o, p.defaultModelSelection || recentSel(s, p.id) || recentSel(s), s), runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", createdBy: "user", creationSource: "web" });
+      const task = r.task || r; console.log(`saved task ${task.id || "?"}  "${o.title}"  enabled=${!o.disabled}  ${JSON.stringify(schedule)}`); return; }
     const r = await rpc("scheduledTasks.list", {}); const s = await shell(); if (!r.tasks.length) console.log("no scheduled tasks");
     for (const k of r.tasks) { const p = s.projects.find((x) => x.id === k.projectId); const sc = k.schedule || {};
       const when = sc.type === "interval" ? `every ${Math.round(sc.everyMs / 6e4)}m` : sc.type === "fixed_time" ? `at ${sc.timeOfDay}${sc.weekdays ? " on " + sc.weekdays.map((d) => "Sun Mon Tue Wed Thu Fri Sat".split(" ")[d]).join(",") : " daily"}` : sc.type || "?";
@@ -890,7 +868,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--runtime mode] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force] | standing [--add cmd | --remove cmd] | config [--runtime approval-required|auto-accept-edits|auto|full-access]");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force] | standing [--add cmd | --remove cmd]");
 };
-if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, uopt, warningsOf, standingMatch, approvalAuthority, runtimeOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, uopt, warningsOf, standingMatch, approvalAuthority, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

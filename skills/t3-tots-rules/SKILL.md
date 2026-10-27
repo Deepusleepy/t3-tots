@@ -117,12 +117,11 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Find | `projects`, `models`, `threads [--project p] [--main] [--limit n]`, `search --query q [--limit n]` |
 | Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p` (required) `[--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
 | Watch | `watch --thread a[,b] [--state file] [--stall-min 20] [--json]` |
-| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --runtime mode --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise) |
+| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise) |
 | Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved])`, `standing [--add command \| --remove command]` (no token needed) |
 | Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
 | Thread actions | `settle`, `unsettle`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
-| Config | `config [--runtime approval-required\|auto-accept-edits\|auto\|full-access]` (no token needed). `new` and `tasks --upsert` use `--runtime`, else this saved mode, else approval-required. They never fall back to full-access |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
 
 `--project` takes a project id, its folder, an exact title, then the one title containing the words. Several matches print `AMBIGUOUS` with the candidates (never the first one); an empty value is a usage error.
@@ -154,7 +153,7 @@ Optional. It needs the token and `listen.json`. It follows T3's live events and 
 ### Other scripts and data files
 - `export.js` writes a redacted JSON export for reports. Options work like t3ctl (`--project Foo` or `--project=Foo`; an unknown option is `USAGE`). `--project` is a filter: an exact id, else a folder, else an exact title (case ignored) picks that project, and two exact matches stop with `AMBIGUOUS` listing them; otherwise every project whose title contains the words is exported, and it prints a note naming them. No `--project` means all. `survey.js` lists activity and stale threads.
 - `t3ui` and `ui-*.applescript` are a macOS-only UI fallback. They use the running T3 Code app, or `T3_APP`.
-- Data files the skills create in the tools folder: `templates.md`, `trackers/`, `update-prefs.json`, `sync-prefs.json`, `sync-backups/`, `out/`, `README.md`, `watch-state.json`, `watch-<name>.json`, `autoresume.json`. `t3ctl new` writes `started-here.json`. `t3ctl standing` writes `standing-approvals.json` and `t3ctl config` writes `config.json`. Tools updates never overwrite these data files. t3listen writes `listen.json` (private), `listen-state.json`, `answered-here.json` and `listen.log`.
+- Data files the skills create in the tools folder: `templates.md`, `trackers/`, `update-prefs.json`, `sync-prefs.json`, `sync-backups/`, `out/`, `README.md`, `watch-state.json`, `watch-<name>.json`, `autoresume.json`. `t3ctl new` writes `started-here.json`. `t3ctl standing` writes `standing-approvals.json`. t3listen writes `listen.json` (private), `listen-state.json`, `answered-here.json` and `listen.log`.
 - Don't leave scratch files (CSVs, `.bak` copies, screenshots) in the tools folder. Put scratch files in `out/`. On Grok Bot, pages are built on the box (`/workspace`).
 
 ### Master copy
@@ -178,8 +177,6 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NOT_FOUND` | No thread matches. List the closest ones and ask |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
-| `RUNTIME_DEFAULT` | No runtime mode is saved, so the thread or task runs approval-required. Offer to save one with `t3ctl config --runtime <mode>` |
-| `BAD_RUNTIME`, `BAD_CONFIG` | `--runtime` or `config.json` holds an unknown mode, or `config.json` isn't a JSON object. Nothing was sent. Use one of the listed modes, or run `t3ctl config --runtime <mode>` |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
 | `BAD_STANDING` | `standing-approvals.json` isn't a JSON list of commands. Nothing was accepted. Tell the user, and fix the file only after their yes |
 | `NOT_LIMITED` | The thread isn't stopped on a usage limit, so there is nothing to resume |

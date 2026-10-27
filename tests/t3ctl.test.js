@@ -1769,15 +1769,19 @@ test("standing: add is idempotent, remove converges, a broken list is BAD_STANDI
     fs.writeFileSync(file, bad); const r = run(); assert.equal(r.status, 1, bad); assert.match(r.stderr, /^BAD_STANDING/, bad);
   }
 });
-async function fakeT3({ shell, projection = () => ({}), onRpc = () => ({}) }) {
+test("answer: an approval goes through only with --user-approved or an exact standing command, end to end", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-fake-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-answer-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const thread = { id: "thread-approve-01", title: "Approve me", status: "idle" };
+  const options = [{ decision: "accept", label: "Allow" }, { decision: "acceptForSession", label: "Always allow" }, { decision: "decline", label: "Deny" }];
+  let requests = [], sent = [];
   const srv = http.createServer((req, res) => {
     const u = decodeURIComponent(req.url);
-    if (u === "/api/orchestration/shell") return res.end(JSON.stringify(shell()));
-    if (u.startsWith("/api/orchestration/threads/")) return res.end(JSON.stringify({ projection: projection(u.slice("/api/orchestration/threads/".length)) }));
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [thread] }));
+    if (u === "/api/orchestration/threads/" + thread.id) return res.end(JSON.stringify({ projection: { thread, runs: [], runtimeRequests: requests.map(({ prompt, ...r }) => r),
+      turnItems: requests.map((r) => ({ type: "approval_request", requestId: r.id, requestKind: "command", prompt: r.prompt, options })) } }));
     res.statusCode = 404; res.end("{}");
   });
   srv.on("upgrade", (req, sock) => {
@@ -1793,8 +1797,8 @@ async function fakeT3({ shell, projection = () => ({}), onRpc = () => ({}) }) {
         buf = buf.subarray(off + 4 + len);
         if (op === 8) return sock.end();
         if (op !== 1) continue;
-        const m = JSON.parse(body.toString("utf8"));
-        const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit: { _tag: "Success", value: onRpc(m.tag, m.payload) } }));
+        const m = JSON.parse(body.toString("utf8")); sent.push(m.payload); requests = requests.map((r) => (r.id === m.payload.requestId ? { ...r, status: "resolved" } : r));
+        const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit: { _tag: "Success", value: {} } }));
         sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
       }
     });
@@ -1804,19 +1808,6 @@ async function fakeT3({ shell, projection = () => ({}), onRpc = () => ({}) }) {
   fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
   const run = (...a) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3ctl"), ...a], { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } },
     (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
-  return { tmp, run, close: () => srv.close() };
-}
-test("answer: an approval goes through only with --user-approved or an exact standing command, end to end", async () => {
-  const thread = { id: "thread-approve-01", title: "Approve me", status: "idle" };
-  const options = [{ decision: "accept", label: "Allow" }, { decision: "acceptForSession", label: "Always allow" }, { decision: "decline", label: "Deny" }];
-  let requests = [], sent = [];
-  const t3 = await fakeT3({
-    shell: () => ({ projects: [], threads: [thread] }),
-    projection: () => ({ thread, runs: [], runtimeRequests: requests.map(({ prompt, ...r }) => r),
-      turnItems: requests.map((r) => ({ type: "approval_request", requestId: r.id, requestKind: "command", prompt: r.prompt, options })) }),
-    onRpc: (tag, payload) => { sent.push(payload); requests = requests.map((r) => (r.id === payload.requestId ? { ...r, status: "resolved" } : r)); return {}; },
-  });
-  const { run } = t3;
   const pendingReq = (id, prompt) => ({ id, kind: "command", status: "pending", createdAt: "x", prompt });
   const reset = (p) => { requests = [pendingReq("req-1", p)]; sent = []; };
   const ask = (p, ...a) => { reset(p); return run("answer", "--thread", thread.id, ...a); };
@@ -1849,65 +1840,13 @@ test("answer: an approval goes through only with --user-approved or an exact sta
     assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/); assert.deepEqual(sent, []);
     r = await run("answer", "--thread", thread.id, "--request", "B-42", "--decision", "accept", "--user-approved");
     assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].requestId, "B-42");
-  } finally { t3.close(); }
-});
-test("runtimeOf: --runtime beats config.json; nothing set is approval-required, never full-access; bad values stop", () => {
-  assert.deepEqual(t.runtimeOf(undefined, {}), { mode: "approval-required", configured: false });
-  assert.deepEqual(t.runtimeOf(undefined, { runtime: "full-access" }), { mode: "full-access", configured: true });
-  assert.deepEqual(t.runtimeOf("auto-accept-edits", { runtime: "full-access" }), { mode: "auto-accept-edits", configured: true });
-  assert.throws(() => t.runtimeOf("full", {}), /^Error: BAD_RUNTIME: --runtime is "full"/);
-  assert.throws(() => t.runtimeOf(true, {}), /^Error: BAD_RUNTIME/);
-  assert.throws(() => t.runtimeOf(undefined, { runtime: "yolo" }), /^Error: BAD_RUNTIME: config.json runtime is "yolo"/);
-});
-test("new and tasks --upsert: the runtime sent to T3 comes from --runtime, then config.json, else approval-required", async () => {
-  const fs = require("fs");
-  const project = { id: "proj-runtime-1", title: "Runtime", workspaceRoot: "/work/runtime", defaultModelSelection: { instanceId: "codex", model: "gpt-6.1-sol" } };
-  const sent = [];
-  const t3 = await fakeT3({
-    shell: () => ({ projects: [project], threads: [] }),
-    onRpc: (tag, payload) => { sent.push({ tag, payload }); return tag === "orchestration.launchThread" ? { threadId: "thread-new-1" } : { task: { id: "task-1" } }; },
-  });
-  const launched = () => sent.filter((x) => x.tag === "orchestration.launchThread").map((x) => x.payload.runtimeMode);
-  const upserted = () => sent.filter((x) => x.tag === "scheduledTasks.upsert").map((x) => x.payload.runtimeMode);
-  const config = (body) => fs.writeFileSync(path.join(t3.tmp, "config.json"), body);
-  const newThread = (...a) => t3.run("new", "--project", project.id, "--prompt", "hi", ...a);
-  const task = (...a) => t3.run("tasks", "--upsert", "--project", project.id, "--title", "Nightly", "--prompt", "hi", "--every", "1h", ...a);
-  try {
-    let r = await newThread(); assert.equal(r.code, 0, r.out); assert.match(r.out, /runtime=approval-required/); assert.match(r.out, /RUNTIME_DEFAULT/);
-    r = await task(); assert.equal(r.code, 0, r.out); assert.match(r.out, /RUNTIME_DEFAULT/);
-    assert.equal((await t3.run("config", "--runtime", "full-access")).code, 0);
-    r = await newThread(); assert.equal(r.code, 0, r.out); assert.doesNotMatch(r.out, /RUNTIME_DEFAULT/);
-    r = await task(); assert.equal(r.code, 0, r.out);
-    r = await newThread("--runtime", "approval-required"); assert.equal(r.code, 0, r.out);
-    r = await task("--runtime", "auto-accept-edits"); assert.equal(r.code, 0, r.out);
-    assert.deepEqual(launched(), ["approval-required", "full-access", "approval-required"]);
-    assert.deepEqual(upserted(), ["approval-required", "full-access", "auto-accept-edits"]);
-    const before = sent.length;
-    r = await newThread("--runtime", "fullaccess"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^BAD_RUNTIME/);
-    config('{"runtime": "yolo"}'); r = await task(); assert.equal(r.code, 1, r.out); assert.match(r.out, /^BAD_RUNTIME/);
-    config("[]"); r = await newThread(); assert.equal(r.code, 1, r.out); assert.match(r.out, /^BAD_CONFIG/);
-    assert.equal(sent.length, before, "a bad runtime or config sends nothing to T3");
-  } finally { t3.close(); }
-});
-test("config: --runtime saves one of T3's modes, keeps other keys, and refuses anything else", () => {
-  const fs = require("fs"), os = require("os"), { spawnSync } = require("child_process");
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-config-"));
-  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
-  const run = (...a) => spawnSync(process.execPath, [path.join(tmp, "t3ctl"), "config", ...a], { encoding: "utf8" });
-  const file = path.join(tmp, "config.json");
-  assert.match(run().stdout, /runtime: not set/);
-  fs.writeFileSync(file, '{"other": 1}');
-  assert.equal(run("--runtime", "full-access").status, 0);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { other: 1, runtime: "full-access" });
-  assert.match(run().stdout, /runtime: full-access/);
-  const bad = run("--runtime", "everything"); assert.equal(bad.status, 1); assert.match(bad.stderr, /^BAD_RUNTIME/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { other: 1, runtime: "full-access" });
+  } finally { srv.close(); }
 });
 test("tools updates never overwrite the data files t3ctl keeps next to itself", () => {
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
   const dests = new Set(m.files.filter((f) => f.kind === "tool").map((f) => f.dest));
-  for (const data of ["config.json", "standing-approvals.json", "token", "answered-here.json", "started-here.json"]) assert.ok(!dests.has(data), data);
+  for (const data of ["standing-approvals.json", "token", "answered-here.json", "started-here.json"]) assert.ok(!dests.has(data), data);
   const fetcher = fs.readFileSync(path.join(__dirname, "..", "skills", "t3-install-tools", "SKILL.md"), "utf8");
   for (const del of fetcher.match(/rm -rf "[^"]+"|Remove-Item -Recurse -Force \$\w+/g)) assert.match(del, /\$T\b/, `installer deletes only its staging folder: ${del}`);
 });

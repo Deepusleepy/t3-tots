@@ -20,7 +20,6 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md), including "Sendi
 - New thread: `t3ctl new --project <P> --model <m> --effort <e> --prompt-file <file> [--title '<t>'] [--mode plan] [--attach a.png,b.jpg] [--wait --timeout 300]`
 - Follow-up: `t3ctl send --thread '<id|title>' --prompt-file <file> [--attach ...] [--queue] [--wait [--timeout 300]]`
 - Add `--queue` only when the user wants the follow-up to wait for the run to end.
-- The thread runs in the mode saved with `t3ctl config --runtime`. Add `--runtime <mode>` only when the user asks for a different one for this thread. `RUNTIME_DEFAULT` in the output means no mode is saved: say it runs approval-required and offer to save one (t3-getting-started "On yes").
 - Leave out `--wait` for long coding tasks, say it's running, and offer t3-watch.
 - `t3ctl new` records the thread in `started-here.json`, so t3listen arms Resume at reset if the thread later stops on a usage limit.
 
