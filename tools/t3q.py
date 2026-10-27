@@ -253,6 +253,27 @@ def health():
         mi = dict(l.split(":", 1) for l in open("/proc/meminfo")); kb = lambda k: int(mi[k].split()[0]) * 1024
         print(f"memory: {kb('MemAvailable')/1e9:.1f} GB available of {kb('MemTotal')/1e9:.0f} GB"); print("load avg:", os.getloadavg(), "cores", os.cpu_count())
 
+def token_rates(entry, suffix="", std=None):
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    inp, out = entry.get(f"input_cost_per_token{suffix}"), entry.get(f"output_cost_per_token{suffix}")
+    if not num(inp) or not num(out): return None
+    def cache(name, field):
+        v = entry.get(f"{name}{suffix}")
+        if num(v): return v
+        return std[field] / std["in"] * inp if std and std["in"] > 0 else inp
+    return {"in": inp, "out": out, "cr": cache("cache_read_input_token_cost", "cr"), "cw": cache("cache_creation_input_token_cost", "cw")}
+
+def speed_rates(entry, speed):
+    if not entry: return None
+    std = token_rates(entry)
+    if std is None: return None
+    if speed == 1:
+        mult = (entry.get("provider_specific_entry") or {}).get("fast")
+        if isinstance(mult, (int, float)) and mult > 0: return {k: v * mult for k, v in std.items()}
+        return token_rates(entry, "_priority", std) or std
+    if speed == 2: return token_rates(entry, "_ultrafast", std) or std
+    return std
+
 def usage():
     import glob, collections
     DAYS = env_int("T3_DAYS", 7)
@@ -280,11 +301,11 @@ def usage():
             m = models[mi] if isinstance(mi, int) and mi < len(models) else str(mi)
             if m == "<synthetic>": continue
             rep = r[9] if len(r) > 9 else None; spd = r[10] if len(r) > 10 else 0
-            rt = rate(m, prov); cost = 0.0
+            pmi = r[11] if len(r) > 11 else None
+            priced_as = models[pmi] if isinstance(pmi, int) and 0 <= pmi < len(models) else m
+            rt = speed_rates(rate(priced_as, prov), spd); cost = 0.0
             if isinstance(rep, (int, float)): cost = rep
-            elif rt:
-                cost = inp * rt.get("input_cost_per_token", 0) + cr * rt.get("cache_read_input_token_cost", rt.get("input_cost_per_token", 0)) + cw * rt.get("cache_creation_input_token_cost", rt.get("input_cost_per_token", 0)) + out * rt.get("output_cost_per_token", 0)
-                if spd == 1: cost *= (rt.get("provider_specific_entry") or {}).get("fast", 1)
+            elif rt: cost = inp * rt["in"] + cr * rt["cr"] + cw * rt["cw"] + out * rt["out"]
             else: unpriced[m] += inp + cr + cw + out
             day = dt.datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %a")
             for k, v in (("model", m), ("provider", prov), ("day", day)):
@@ -296,7 +317,7 @@ def usage():
         items = sorted(agg[k].items(), key=(lambda x: x[0]) if k == "day" else (lambda x: -x[1][4]))
         print(f"\nby {k}:"); [print(f"  {n}: {T(sum(a[:4]))} tok ≈ ${a[4]:,.2f}") for n, a in items[:15]]
     if unpriced: print("\nunpriced models (tokens, no rate found):", ", ".join(f"{m} {T(n)}" for m, n in unpriced.most_common(8)))
-    print("\nnote: API-list-price estimate; subscriptions (Max/Pro/Plus) do not bill per token.")
+    print("\nnote: API-list-price estimate; subscriptions (Max/Pro/Plus) do not bill per token. T3's Usage view has the exact figures, including custom prices.")
 
 CMDS = {"overview": overview, "waiting": waiting, "thread": thread, "projects": projects, "health": health, "usage": usage}
 try: legacy_approvals(); CMDS[CMD]()

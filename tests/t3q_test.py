@@ -156,4 +156,23 @@ class T3qTest(unittest.TestCase):
             self.assertIn("T3_DB_BUSY", out); self.assertEqual(code, 1)
         finally: lock.execute("rollback"); lock.close()
 
+    def test_usage_prices_fast_and_ultrafast_tiers_and_the_pricing_model_like_t3(self):
+        make_db(self.dir)
+        rates = {"m1": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0, "input_cost_per_token_priority": 2e-6, "output_cost_per_token_priority": 0,
+                        "input_cost_per_token_ultrafast": 6e-6, "output_cost_per_token_ultrafast": 0},
+                 "m2": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0, "provider_specific_entry": {"fast": 3}}}
+        with open(os.path.join(self.dir, "usage-model-rates.json"), "w", encoding="utf-8") as f: json.dump({"document": rates}, f)
+        now = int(dt.datetime.now().timestamp() * 1000); M = 1_000_000
+        rec = lambda key, model, speed, rate_model=None: [now, model, 0, M, 0, 0, 0, 0, key, None, speed] + ([rate_model] if rate_model is not None else [])
+        cache = {"models": ["m1", "display-only", "m2"], "files": {"a.jsonl": {"p": "codex", "r": [
+            rec("k1", 0, 0), rec("k2", 0, 1), rec("k3", 0, 2), rec("k4", 1, 0, rate_model=0), rec("k5", 2, 1)], "t": []}}}
+        with open(os.path.join(self.dir, "usage-scan-cache-v9.json"), "w", encoding="utf-8") as f: json.dump(cache, f)
+        out = run(self.dir, "usage")
+        self.assertRegex(out, r"ESTIMATES: 5\.0M tokens .* \$13\.00")
+        self.assertRegex(out, r"m1: 3\.0M tok \S+ \$9\.00")
+        self.assertRegex(out, r"display-only: 1\.0M tok \S+ \$1\.00")
+        self.assertRegex(out, r"m2: 1\.0M tok \S+ \$3\.00")
+        self.assertNotIn("unpriced", out)
+        self.assertIn("T3's Usage view has the exact figures", out)
+
 if __name__ == "__main__": unittest.main(verbosity=1)
