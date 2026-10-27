@@ -49,11 +49,11 @@ This section is the one source for who decides; other skills and AGENTS.md point
    - Never accept an approval yourself. Send each one to the user as a card (or numbered options) with its command, options and warnings, and accept it only after their yes for that request. A standing approval (item 3) is the one exception.
    - Run the delegated-mode actions in the Writes table, and log each one.
    - Escalate questions about product direction, money, publishing, or anything the user said to keep for themselves.
-3. Standing approvals: exact commands the user typed, saved with `t3ctl standing --add '<command>'` after their yes. Never save a kind of command ("read-only commands", "test runs") or a command the user didn't type word for word. `t3ctl answer` accepts a standing approval only when the approval's command is exactly one on the list, bare or inside a `bash -lc` / `pwsh -Command` wrapper, and only with `--decision accept`. `t3ctl standing` lists them and `--remove '<command>'` drops one.
+3. Standing approvals: exact commands the user typed, saved with `t3ctl standing --add '<command>'` after their yes. Never save a kind of command ("read-only commands", "test runs") or a command the user didn't type word for word. `t3ctl answer` accepts a standing approval only when the approval's command is exactly one on the list, either bare or as the whole single-quoted body of `bash -lc '...'` or `pwsh -Command '...'`, and only with `--decision accept`. `t3ctl standing` lists them and `--remove '<command>'` drops one.
 
 `t3ctl pending` prints warnings under an approval, such as "deletes files" or "force push", and `pending --json` adds `warnings` and `standing` (true when a standing approval covers it). Show the warnings to the user. They are labels only. A command with no warnings can still delete files, run downloaded code or read secrets, so no warnings is never a reason to accept.
 
-`t3ctl answer --decision` accepts an approval only with `--user-approved` (pass it only after the user's yes for that request) or for a standing approval. Otherwise it refuses with `NEEDS_USER_APPROVAL` and sends nothing. `decline` and `cancel` need neither.
+`t3ctl answer --decision` accepts an approval only with `--user-approved` (pass it only after the user's yes for that request) or for a standing approval. Otherwise it refuses with `NEEDS_USER_APPROVAL` and sends nothing. `decline` and `cancel` need neither. Always pass `--request <id>` with the id the user saw. When several approvals are open, or the id matches more than one, t3ctl stops with `AMBIGUOUS` instead of picking one.
 
 Never invent the user's preferences. The thread decides how to do the work. The user decides what to build. Your prompts carry the user's context, not your design choices.
 
@@ -173,7 +173,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `BAD_SETTING` | A number setting such as `T3_DAYS` or `T3_LAST` isn't a whole number of 1 or more. Fix it and rerun |
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
 | `NO_USAGE_CACHE` | Ask the user to open T3's Usage view once |
-| `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread". From `t3ctl` or `t3listen preview-finish`, several threads or projects match: it lists them; ask which, or pass the id (or the project folder) |
+| `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread". From `t3ctl` or `t3listen preview-finish`, several threads, projects or open approvals match: it lists them; ask which, or pass the id (or the project folder, or `--request <full id>`) |
 | `NOT_FOUND` | No thread matches. List the closest ones and ask |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |

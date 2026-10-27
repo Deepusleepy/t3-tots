@@ -440,9 +440,10 @@ function readStanding() {
   return list;
 }
 const REFUSALS = new Set(["decline", "cancel"]);
+const SINGLE_QUOTED_SHELL = /^(?:\S*[\\/])?(?:(?:ba|z)?sh(?:\.exe)?\s+-l?c|(?:pwsh|powershell)(?:\.exe)?(?:\s+-NoProfile)?\s+-(?:c|Command))\s+'([^']*)'$/;
 function standingMatch(approval, standing) {
-  const p = String((approval && approval.prompt) || "").trim();
-  return p !== "" && (standing.includes(p) || standing.includes(unwrapShell(p)));
+  const p = String((approval && approval.prompt) || "").trim(), body = (p.match(SINGLE_QUOTED_SHELL) || [])[1];
+  return p !== "" && (standing.includes(p) || (body !== undefined && standing.includes(body)));
 }
 function approvalAuthority(approval, decision, userApproved, readStandingList) {
   if (REFUSALS.has(decision)) return "refusal";
@@ -517,8 +518,10 @@ function buildAnswer(q, v, allowText) { // v: string | string[]; returns the wir
   throw new Error(`"${list[0]}" is not an option for [${q.id}] (options: ${q.options.map((o) => o.label).join(" | ")})${q.allowCustomAnswer ? "; use --text for a free-text answer" : ""}`);
 }
 async function pickRequest(t, o, wantApproval) {
-  const snap = await thread(t.id), p = snap.projection; let pend = pendingOf(p).filter((r) => (r.kind === "user_input") !== wantApproval);
-  if (o.request) pend = pend.filter((r) => r.requestId === String(o.request) || r.requestId.endsWith(String(o.request)));
+  const snap = await thread(t.id), p = snap.projection, open = pendingOf(p).filter((r) => (r.kind === "user_input") !== wantApproval); let pend = open;
+  const ambiguous = (why) => new Error(`AMBIGUOUS: ${why} (${pend.map((r) => r.requestId).join(", ")}); pass the full id with --request`);
+  if (o.request) { const q = String(o.request), exact = open.filter((r) => r.requestId === q); pend = exact.length ? exact : open.filter((r) => r.requestId.endsWith(q)); if (pend.length > 1) throw ambiguous(`--request ${q} matches several requests`); }
+  else if (wantApproval && pend.length > 1) throw ambiguous("several approvals are open");
   else if (pend.length > 1 && t.pendingRuntimeRequest) pend = pend.filter((r) => r.requestId === t.pendingRuntimeRequest.id).concat(pend).slice(0, 1);
   if (!pend.length) throw new Error(`NOT_PENDING: no open ${wantApproval ? "approval" : "question"}${o.request ? " with that --request id" : ""} in "${t.title}" (it may have been answered already)`);
   if (!pend[0].answerable) throw new Error(`NOT_ANSWERABLE: that request can't be answered any more (the run ended). Send a follow-up instead.`);

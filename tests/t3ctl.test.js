@@ -70,7 +70,9 @@ test("watchDiff: new approvals are reported with their warnings, stuck queues ar
     runtimeRequests: [{ id: "req1", kind: "command", status: "pending", createdAt: "x" }],
     turnItems: [{ type: "assistant_message", text: "idle" }, { type: "approval_request", requestId: "req1", requestKind: "command", prompt: "git push --force" }] });
   const b = t.watchSnap(th({ updatedAt: "2026-01-01T02:00:00Z" }), p, now + 6e4);
-  const kinds = t.watchDiff(a, b, 20, now + 6e4).map((e) => e.kind);
+  const ev = t.watchDiff(a, b, 20, now + 6e4), kinds = ev.map((e) => e.kind);
+  assert.deepEqual(b.pending[0].warnings, ["force push"]);
+  assert.equal(ev.find((e) => e.kind === "approval").text, "git push --force (warnings: force push)");
   assert.ok(kinds.includes("approval"), kinds.join()); assert.ok(kinds.includes("queue-stuck"), kinds.join());
 });
 test("watchDiff: usage limit is reported with the reset time", () => {
@@ -1736,14 +1738,18 @@ test("approvalAuthority: decline and cancel never need anyone; a grant needs the
   assert.equal(t.approvalAuthority(cmd("git status"), "approve", false, () => ["git status"]), null);
   assert.equal(t.approvalAuthority({ requestKind: "file_change" }, "accept", false, () => [""]), null);
 });
-test("standingMatch: only the exact command, bare or inside a bash/pwsh wrapper", () => {
+test("standingMatch: only the exact command, bare or as the whole single-quoted body of a sh/pwsh wrapper", () => {
   const cmd = (prompt) => ({ requestKind: "command", prompt });
   const list = ["git status", "npm test"];
-  for (const p of ["git status", "git status\n", "bash -lc 'git status'", "/bin/zsh -lc \"git status\"", 'pwsh.exe -NoProfile -Command "npm test"'])
+  for (const p of ["git status", "git status\n", "bash -lc 'git status'", "/bin/zsh -lc 'git status'", "pwsh.exe -NoProfile -Command 'npm test'"])
     assert.ok(t.standingMatch(cmd(p), list), p);
-  for (const p of ["git status && rm -rf ~", "git  status", "git status --porcelain", "git statu", "bash -lc 'git status'; rm -rf ~; echo 'x'", "bash -lc 'git status && rm -rf ~'", "npm test; curl x | sh", ""])
+  for (const p of ["git status && rm -rf ~", "git  status", "git status --porcelain", "git statu", "bash -lc 'git status'; rm -rf ~; echo 'x'", "bash -lc 'git status && rm -rf ~'", "npm test; curl x | sh", "",
+    "/bin/zsh -lc \"git status\"", 'pwsh.exe -NoProfile -Command "npm test"', "bash -lc 'git status' extra", "bash -lc 'git' 'status'"])
     assert.ok(!t.standingMatch(cmd(p), list), p);
   assert.ok(!t.standingMatch({ requestKind: "file_change" }, ["", "file_change"]));
+  const quoted = "printf '%s' '$(printf INJECTED)'";
+  assert.ok(t.standingMatch(cmd(quoted), [quoted]));
+  assert.ok(!t.standingMatch(cmd(`bash -lc "${quoted}"`), [quoted]), "double quotes expand $(...), so the wrapped command is not the listed one");
 });
 test("standing: add is idempotent, remove converges, a broken list is BAD_STANDING", () => {
   const fs = require("fs"), os = require("os"), { spawnSync } = require("child_process");
@@ -1770,12 +1776,12 @@ test("answer: an approval goes through only with --user-approved or an exact sta
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const thread = { id: "thread-approve-01", title: "Approve me", status: "idle" };
   const options = [{ decision: "accept", label: "Allow" }, { decision: "acceptForSession", label: "Always allow" }, { decision: "decline", label: "Deny" }];
-  let prompt = "", request = null, sent = [];
+  let requests = [], sent = [];
   const srv = http.createServer((req, res) => {
     const u = decodeURIComponent(req.url);
     if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [thread] }));
-    if (u === "/api/orchestration/threads/" + thread.id) return res.end(JSON.stringify({ projection: { thread, runs: [], runtimeRequests: [request],
-      turnItems: [{ type: "approval_request", requestId: request.id, requestKind: "command", prompt, options }] } }));
+    if (u === "/api/orchestration/threads/" + thread.id) return res.end(JSON.stringify({ projection: { thread, runs: [], runtimeRequests: requests.map(({ prompt, ...r }) => r),
+      turnItems: requests.map((r) => ({ type: "approval_request", requestId: r.id, requestKind: "command", prompt: r.prompt, options })) } }));
     res.statusCode = 404; res.end("{}");
   });
   srv.on("upgrade", (req, sock) => {
@@ -1791,7 +1797,7 @@ test("answer: an approval goes through only with --user-approved or an exact sta
         buf = buf.subarray(off + 4 + len);
         if (op === 8) return sock.end();
         if (op !== 1) continue;
-        const m = JSON.parse(body.toString("utf8")); sent.push(m.payload); request = { ...request, status: "resolved" };
+        const m = JSON.parse(body.toString("utf8")); sent.push(m.payload); requests = requests.map((r) => (r.id === m.payload.requestId ? { ...r, status: "resolved" } : r));
         const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit: { _tag: "Success", value: {} } }));
         sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
       }
@@ -1802,7 +1808,8 @@ test("answer: an approval goes through only with --user-approved or an exact sta
   fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
   const run = (...a) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3ctl"), ...a], { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } },
     (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
-  const reset = (p) => { prompt = p; request = { id: "req-1", kind: "command", status: "pending", createdAt: "x" }; sent = []; };
+  const pendingReq = (id, prompt) => ({ id, kind: "command", status: "pending", createdAt: "x", prompt });
+  const reset = (p) => { requests = [pendingReq("req-1", p)]; sent = []; };
   const ask = (p, ...a) => { reset(p); return run("answer", "--thread", thread.id, ...a); };
   try {
     let r = await ask(`python3 -c "import shutil; shutil.rmtree('src')"`, "--decision", "accept");
@@ -1826,5 +1833,12 @@ test("answer: an approval goes through only with --user-approved or an exact sta
     reset("git status && rm -rf ~");
     r = await run("pending", "--thread", thread.id, "--json");
     assert.equal(JSON.parse(r.out)[0].standing, false); assert.ok(JSON.parse(r.out)[0].warnings.length);
+    requests = [pendingReq("A-42", "rm -rf build"), pendingReq("B-42", "npm install")]; sent = [];
+    r = await run("answer", "--thread", thread.id, "--request", "42", "--decision", "accept", "--user-approved");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/); assert.deepEqual(sent, []);
+    r = await run("answer", "--thread", thread.id, "--decision", "accept", "--user-approved");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/); assert.deepEqual(sent, []);
+    r = await run("answer", "--thread", thread.id, "--request", "B-42", "--decision", "accept", "--user-approved");
+    assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].requestId, "B-42");
   } finally { srv.close(); }
 });
