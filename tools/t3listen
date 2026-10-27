@@ -77,7 +77,7 @@ const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
 // short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
 // SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
 const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
-const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|passwd|password)\\s*[:=]\\s*(?:"(?:[^"\\\\\\n]|\\\\.){4,}"|'(?:[^'\\\\\\n]|\\\\.){4,}'|\\S{8,})|\\bauthorization\\s*[:=]\\s*(?:(?:bearer|basic|token)\\s+)?[A-Za-z0-9._~+/=-]{12,}|\\bbearer\\s+[A-Za-z0-9._~+/=-]{20,})`, "gi");
+const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?keys?|tokens?|secrets?|passwds?|passwords?)\\s*[:=]\\s*(?:"(?:[^"\\\\\\n]|\\\\.){4,}"|'(?:[^'\\\\\\n]|\\\\.){4,}'|\\S{8,})|\\bauthorization\\s*[:=]\\s*(?:(?:bearer|basic|token)\\s+)?[A-Za-z0-9._~+/=-]{12,}|\\bbearer\\s+[A-Za-z0-9._~+/=-]{20,})`, "gi");
 const clean = (t) => { t = String(t).replace(RED, "[redacted]"); return HOME && HOME.length > 1 ? t.split(HOME).join("~") : t; };
 // every text field of an event (questions, option labels, approval prompt, title, answers, errors) is redacted before it is sent, logged or previewed; ids are kept
 function cleanEvent(v, k = "") {
@@ -147,14 +147,14 @@ const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.f
 function keepForRetry(q, st, item) {
   if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
   const s = stateFor(st, item.e); if (!s) return "dropped";
-  (s.parked = s.parked || {})[item.e.event] = item.e; return "parked";
+  (s.parked = s.parked || {})[item.e.event] = { e: item.e, rounds: item.rounds || 0, since: item.since }; return "parked";
 }
 function refillFromState(q, st, now) {
   let moved = 0;
   for (const s of [...Object.values(st.sent), ...Object.values(st.finished)]) {
-    for (const [name, e] of Object.entries(s.parked || {})) {
+    for (const [name, p] of Object.entries(s.parked || {})) {
       if (q.length >= MAX_RETRY_QUEUE) return moved;
-      q.push({ e, rounds: 0, since: now }); delete s.parked[name]; moved++;
+      q.push({ e: p.e, rounds: p.rounds || 0, since: p.since || now }); delete s.parked[name]; moved++;
     }
     if (s.parked && !Object.keys(s.parked).length) delete s.parked;
   }
@@ -163,7 +163,7 @@ function refillFromState(q, st, now) {
 function retryLater(item) {
   const how = keepForRetry(queue, S, item);
   if (how === "parked") { saveState(); log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is saved and retried when there is room`); }
-  else if (how === "dropped") log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is tried again when the listener restarts`);
+  else if (how === "dropped") log(`retry queue is full and ${item.e.event} ${ref(item.e).slice(-12)} has no saved state, so it is dropped`);
 }
 async function deliver(e) {
   cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);

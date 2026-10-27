@@ -344,7 +344,7 @@ test("retry queue: when it is full, events are saved in state and come back as r
   const opened = { e: { event: "request.opened", requestId: "req-a" }, rounds: 0, since: 0 };
   const closedA = { e: { event: "request.resolved", requestId: "req-a" }, rounds: 0, since: 0 };
   const resolved = { e: { event: "request.resolved", requestId: "req-b" }, rounds: 0, since: 0 };
-  const finished = { e: { event: "thread.finished", runId: "run-1" }, rounds: 0, since: 0 };
+  const finished = { e: { event: "thread.finished", runId: "run-1" }, rounds: 7, since: 4242 };
   const unknown = { e: { event: "thread.finished", runId: "run-unknown" }, rounds: 0, since: 0 };
   for (const item of [opened, closedA, resolved, finished]) assert.equal(l.keepForRetry(full, S, item), "parked");
   assert.equal(l.keepForRetry(full, S, unknown), "dropped");
@@ -358,22 +358,25 @@ test("retry queue: when it is full, events are saved in state and come back as r
   assert.equal(l.refillFromState(rest, S, 125), 1);
   assert.deepEqual([...q.slice(-3), ...rest].map((x) => `${x.e.requestId || x.e.runId} ${x.e.event}`).sort(),
     ["req-a request.opened", "req-a request.resolved", "req-b request.resolved", "run-1 thread.finished"]);
+  const back = [...q.slice(-3), ...rest].find((x) => x.e.runId === "run-1");
+  assert.deepEqual([back.rounds, back.since], [7, 4242], "a saved event keeps its retry count and start time, so the 24h and 10-try limits still hold");
   assert.equal(l.refillFromState([], S, 126), 0, "each saved event is queued once");
   assert.ok([S.sent["req-a"], S.sent["req-b"], S.finished["run-1"]].every((s) => !s.parked));
   assert.equal(l.keepForRetry([], S, opened), "queued");
 });
 test("redaction: quoted passwords with spaces and Bearer/Basic credentials are hidden; ordinary words are not", () => {
-  for (const s of ['password = "correct horse battery staple"', 'password="abcd\\"efghijkl"', "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "Authorization: Basic dXNlcjpwYXNz", "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'"]) {
+  for (const s of ['password = "correct horse battery staple"', 'password="abcd\\"efghijkl"', "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "Authorization: Basic dXNlcjpwYXNz", "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'", "passwords: hunter2hunter2", "tokens = abcdefghijkl"]) {
     const out = l.clean(s);
     assert.match(out, /\[redacted\]/, s);
-    assert.doesNotMatch(out, /horse|efghijkl|two words|hunter2|abcDEF1234567890xyz|abcdefghijklmnop|dXNlcjpwYXNz/, s);
+    assert.doesNotMatch(out, /horse|efghijkl|two words|hunter2|abcDEF1234567890xyz|abcdefghijkl|dXNlcjpwYXNz/, s);
   }
   for (const s of ["we use basic authentication here", "Bearer tokens are fine to mention", "a token: short", "Authorization: required for this endpoint", "the Authorization header is missing"]) assert.equal(l.clean(s), s);
 });
-test("redaction: export.js and t3listen use the same pattern", () => {
+test("redaction: export.js, survey.js and t3listen use the same pattern", () => {
   const fs = require("fs");
   const red = (f) => fs.readFileSync(path.join(__dirname, "..", "tools", f), "utf8").match(/const RED ?= ?new RegExp\((.*)\);/)[1];
   assert.equal(red("export.js"), red("t3listen"));
+  assert.equal(red("survey.js"), red("t3listen"));
 });
 
 test("preview-finish: a thread only in T3's archived list is found by its title", async () => {

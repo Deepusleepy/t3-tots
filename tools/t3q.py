@@ -253,13 +253,15 @@ def health():
         mi = dict(l.split(":", 1) for l in open("/proc/meminfo")); kb = lambda k: int(mi[k].split()[0]) * 1024
         print(f"memory: {kb('MemAvailable')/1e9:.1f} GB available of {kb('MemTotal')/1e9:.0f} GB"); print("load avg:", os.getloadavg(), "cores", os.cpu_count())
 
+def is_num(v): return isinstance(v, (int, float)) and not isinstance(v, bool)
+
 def token_rates(entry, suffix="", std=None):
-    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    if not isinstance(entry, dict): return None
     inp, out = entry.get(f"input_cost_per_token{suffix}"), entry.get(f"output_cost_per_token{suffix}")
-    if not num(inp) or not num(out): return None
+    if not is_num(inp) or not is_num(out): return None
     def cache(name, field):
         v = entry.get(f"{name}{suffix}")
-        if num(v): return v
+        if is_num(v): return v
         return std[field] / std["in"] * inp if std and std["in"] > 0 else inp
     return {"in": inp, "out": out, "cr": cache("cache_read_input_token_cost", "cr"), "cw": cache("cache_creation_input_token_cost", "cw")}
 
@@ -268,8 +270,8 @@ def speed_rates(entry, speed):
     std = token_rates(entry)
     if std is None: return None
     if speed == 1:
-        mult = (entry.get("provider_specific_entry") or {}).get("fast")
-        if isinstance(mult, (int, float)) and mult > 0: return {k: v * mult for k, v in std.items()}
+        pse = entry.get("provider_specific_entry"); mult = pse.get("fast") if isinstance(pse, dict) else None
+        if is_num(mult) and mult > 0: return {k: v * mult for k, v in std.items()}
         return token_rates(entry, "_priority", std) or std
     if speed == 2: return token_rates(entry, "_ultrafast", std) or std
     return std
@@ -288,7 +290,7 @@ def usage():
         n = dt.datetime.now(); cut = (n - dt.timedelta(days=n.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000; DAYS = "this week,"
     def rate(m, prov):
         for k in (m, f"{prov}/{m}", m.split("@")[0], "-".join(m.split("-")[:-1])):
-            if k in rates and "input_cost_per_token" in rates[k]: return rates[k]
+            if k in rates and token_rates(rates[k]): return rates[k]
     seen = set(); agg = {k: collections.defaultdict(lambda: [0, 0, 0, 0, 0.0]) for k in ("model", "provider", "day")}; unpriced = collections.Counter()
     for path, f in u.get("files", {}).items():
         prov = f.get("p", "?")
@@ -303,7 +305,7 @@ def usage():
             rep = r[9] if len(r) > 9 else None; spd = r[10] if len(r) > 10 else 0
             pmi = r[11] if len(r) > 11 else None
             priced_as = models[pmi] if isinstance(pmi, int) and 0 <= pmi < len(models) else m
-            rt = speed_rates(rate(priced_as, prov), spd); cost = 0.0
+            rt = speed_rates(rate(priced_as, prov) or rate(m, prov), spd); cost = 0.0
             if isinstance(rep, (int, float)): cost = rep
             elif rt: cost = inp * rt["in"] + cr * rt["cr"] + cw * rt["cw"] + out * rt["out"]
             else: unpriced[m] += inp + cr + cw + out
