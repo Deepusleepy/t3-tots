@@ -362,3 +362,17 @@ test("retry queue: when it is full, events are saved in state and come back as r
   assert.ok([S.sent["req-a"], S.sent["req-b"], S.finished["run-1"]].every((s) => !s.retryLater && s.e), "the event stays saved until it is delivered");
   assert.equal(l.keepForRetry([], S, opened), "queued");
 });
+
+test("redaction: quoted passwords with spaces and Bearer/Basic credentials are hidden; ordinary words are not", () => {
+  for (const s of ['password = "correct horse battery staple"', "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'"]) {
+    const out = l.clean(s);
+    assert.match(out, /\[redacted\]/, s);
+    assert.doesNotMatch(out, /horse|two words|hunter2|abcDEF1234567890xyz|dXNlcjpwYXNzMTIzNDU2/, s);
+  }
+  for (const s of ["we use basic authentication here", "Bearer tokens are fine to mention", "a token: short"]) assert.equal(l.clean(s), s);
+});
+test("redaction: export.js and t3listen use the same pattern", () => {
+  const fs = require("fs");
+  const red = (f) => fs.readFileSync(path.join(__dirname, "..", "tools", f), "utf8").match(/const RED ?= ?new RegExp\((.*)\);/)[1];
+  assert.equal(red("export.js"), red("t3listen"));
+});
