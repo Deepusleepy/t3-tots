@@ -31,7 +31,7 @@ Check: <the command from "Pick the check">
 Rules:
 - No changes in the output: send nothing and write nothing to memory or a journal.
 - finished: tell the user "<TARGET> finished at <time>", 2 lines of result, offer files (t3-get-output) and offer to stop this watch. Report the finish only once, and skip it if t3listen already reported it in chat. A finish can also mean the thread is asking something or has a plan ready; say which.
-- question, approval-*, limit, error, queue-held, queue-stuck, stale-request, quiet, stalled, unreadable: follow t3-watch "Handle an event".
+- question, approval, limit, error, queue-held, queue-stuck, stale-request, quiet, stalled, unreadable: follow t3-watch "Handle an event".
 - first, state, reply: send nothing, unless the user asked for progress updates.
 - Computer unreachable, or T3 closed there (`T3_NOT_RUNNING`, `T3_NOT_REACHABLE`): tell the user once, then keep checking quietly until it is back.
 ```
@@ -44,8 +44,7 @@ In delegated mode, act first and report after:
 | Event | What to do |
 |---|---|
 | `question` | Answer it or escalate it, as t3-tots-rules "Decisions" says. |
-| `approval-low`, `approval-normal` | Accept it with `t3ctl answer --thread <t> --request <id> --decision <d>`, where `<d>` is the accept option that `t3ctl pending --thread <t> --json` lists. |
-| `approval-high` | Ask the user. Don't accept it yourself. |
+| `approval` | Decline it with `t3ctl answer --thread <t> --request <id> --decision decline --redirect`, so the thread skips it or takes a safer way and keeps going. On `REDIRECT_NOT_DELIVERED`, run the send command it prints. Log the prompt and its reason for the report. Never accept one yourself. |
 | `queue-stuck` | `t3ctl queue --thread <t> --resume` once. |
 | `queue-held` | Leave it. Someone held it on purpose. Tell the user. |
 | `limit` | If `autoResume` isn't set, run `t3ctl resume-at-reset --thread <t>`. |
@@ -61,4 +60,4 @@ Keep a short log of what you decided and why, and send it to the user when they'
 Start it when the user hands over control (t3-tots-rules "Decisions"). Before the first check:
 1. Save the scope and the end condition to memory.
 2. On a Mac, keep it awake for the run (t3-tots-rules "Computers").
-3. Confirm in one line which threads, until when, and what you'll still ask about.
+3. Confirm in one line which threads, until when, and what you'll still ask about. Approvals are declined with a redirect and listed in the report, never accepted.

@@ -195,7 +195,7 @@ function requestInfo(p, r) {
     o.responseMode = (it && it.responseMode) || ((r.responseCapability || {}).type === "message" ? "message" : "live");
     o.questions = ((it && it.questions) || []).map((q) => ({ id: q.id, header: q.header, question: q.question, options: (q.options || []).map((x) => ({ label: x.label, description: x.description, ...(x.value !== undefined ? { value: x.value } : {}) })),
       multiSelect: !!q.multiSelect, allowCustomAnswer: q.allowCustomAnswer !== false, required: q.required !== false }));
-  } else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, appName: (it && it.appName) || null,
+  } else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, reason: (it && it.reason) || null, appName: (it && it.appName) || null,
     options: (it && it.options && it.options.length ? it.options : [{ decision: "accept", label: "Allow" }, { decision: "decline", label: "Deny" }]).map((x) => ({ decision: x.decision, label: x.label, ...(x.warning ? { warning: x.warning } : {}) })) };
   if (r.answers) o.answers = r.answers; if (r.decision) o.decision = r.decision; if (r.resolvedAt) o.resolvedAt = r.resolvedAt;
   return o;
@@ -208,238 +208,11 @@ function printRequest(r) {
     q.options.forEach((x, i) => console.log(`     ${i + 1}. ${x.label}${x.description && x.description !== x.label ? " - " + x.description : ""}`));
     if (q.allowCustomAnswer) console.log("     (free-text answer allowed)");
   }
-  if (r.approval) { const k = riskOf(r.approval); console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}\n  risk hint: ${k.level}${k.reasons.length ? " (" + k.reasons.join(", ") + ")" : ""}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
+  if (r.approval) { console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}${r.approval.reason ? "\n  why it asks: " + r.approval.reason : ""}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
 }
 // --- pure helpers (unit-tested in tests/t3ctl.test.js; no network) ---
-// riskOf: a hint for approvals so a watcher can approve routine ones and hold risky ones. The agent still decides.
-// GIT: "git", "git.exe" or "git.cmd" (optional " or ' after the name), plus any global options
-// before the subcommand (-C path or -Cpath, -c k=v, --git-dir/--work-tree/--namespace =value or the next token, --no-pager)
-const GIT = String.raw`\bgit(?:\.exe|\.cmd)?["']?(?:\s+(?:-[Cc]\s*(?:"[^"]*"|'[^']*'|\S+)|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+(?:"[^"]*"|'[^']*'|\S+))|--?[\w-]+(?:=\S+)?))*\s+`;
-const git = (rest) => new RegExp(GIT + rest, "i");
-const gitCs = (rest) => new RegExp(GIT + rest); // -C/-B/-W/-S (force-create / worktree / staged), not -c/-b/-s
-// uopt: unique prefixes of a long option (git accepts these). min is the first unambiguous length after "--".
-function uopt(name, min) {
-  const s = String(name).replace(/^--/, "");
-  let rest = "";
-  for (let i = s.length - 1; i >= min; i--) rest = `(?:${s[i].replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}${rest})?`;
-  return `--${s.slice(0, min).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}${rest}`;
-}
-// find -exec/-ok wrappers (env/command/nice/nohup/git/timeout/gtimeout/busybox/time/flock/setsid/
-// stdbuf/ionice/taskset/chrt/prlimit/choom/setarch/linux32/linux64/i386/x86_64/setpriv/unshare/
-// nsenter, with flags) then rm; a shell -c 'rm' (sh/bash/zsh/dash/ksh/ash/mksh/rbash/fish/csh/
-// tcsh, busybox sh, and script/capsh -c); or perl/node/python deleting via unlink/os.remove/
-// posix.remove/removedirs/rmtree/remove_tree/remove. Paths and quotes allowed.
-const FIND_SH_NAME = String.raw`(?:(?:ba|z|da)?sh|ksh|ash|mksh|rbash|fish|csh|tcsh|script|capsh)`;
-const FIND_DEL_NAME = String.raw`(?:rm|unlink|rmdir)`;
-const FIND_WRAP_NAME = String.raw`(?:env|command|nice|nohup|git|timeout|gtimeout|busybox|time|flock|setsid|stdbuf|ionice|taskset|chrt|prlimit|choom|setarch|linux32|linux64|i386|x86_64|setpriv|unshare|nsenter)`;
-const FIND_INT_NAME = String.raw`(?:perl|node|python3?)`;
-const FIND_INT_DEL = String.raw`(?:${FIND_DEL_NAME}|unlinkSync|rmSync|rmdirSync|os\.remove|os\.unlink|posix\.remove|rmtree|remove_tree|removedirs|remove)`;
-const FIND_BIN = (name) => String.raw`['"]?(?:\S*\/)?${name}(?:\.exe)?['"]?`;
-const FIND_RM = FIND_BIN(FIND_DEL_NAME);
-const FIND_SH = FIND_BIN(FIND_SH_NAME);
-const FIND_INT = FIND_BIN(FIND_INT_NAME);
-const FIND_WRAP = String.raw`${FIND_BIN(FIND_WRAP_NAME)}(?:\s+(?!${FIND_BIN(FIND_DEL_NAME)}|${FIND_BIN(FIND_SH_NAME)}|${FIND_BIN(FIND_INT_NAME)})\S+)*`;
-const FIND_EXEC_DEL = String.raw`-(?:exec|execdir|ok|okdir)\s+(?:${FIND_WRAP}\s+)*(?:${FIND_RM}|${FIND_SH}[\s\S]*?\b${FIND_DEL_NAME}\b|${FIND_INT}[\s\S]*?\b${FIND_INT_DEL}\b)`;
-// quoted or ANSI-C $'...' flag: empty quotes / $'', a quote, or a backslash may wrap the
-// token, sit after the dashes, or sit between letters; a backslash-newline inside quotes
-// joins the next line; and $'...\xHH...' / \x{HH} / \nnn / \u / \U may spell a letter or a
-// dash. bash 5.2 \u is 1–4 hex digits, \U is 1–8 (greedy, so $'\u2dC' is U+02DC not -C;
-// $'\u2d'C closes the quote first). At the width cap a further hex letter is the next
-// character ($'\u002df' / $'\U0000002df' are -f). Under-width \U keeps reading hex
-// ($'\U002df' is U+02DF, not -f); protectU rewrites \U so /i cannot fold it onto \u.
-// \x{…} reads hex until } or a non-hex byte; } is optional. Value mod 256
-// ($'\x{2d}C' / $'\x{12d}C' / $'\x{12dp' / $'\x{102d}C' are -C / -p).
-// 3-digit octal also keeps the low 8 bits ($'\453main' / $'\053main' are +main;
-// $'\472gone' is :gone; $'-\546' is -f). Unquoted {a,b} brace expansion is
-// applied before matching (--{force,} / {-rf,} / {:gone,} equal argv).
-// --pru"ne" / --''prune / ''--prune / $'--pr\x75ne' / $'\x2d\x2dprune' / $'--pr\165ne'
-// / $'\u2d\u2dprune' / $'\x{2d}p' / -n"p" / -S"W" / -v\rf equal argv.
-// (?![\\$'"]*[A-Za-z0-9…]) after the token keeps unique prefixes from eating a longer word
-// (--word is not --worktree; --follow-tags is not --force). The class must contain a real
-// backslash so \x / \u / \U / octal continue the word ($'--fo\x{6c}low-tags' is
-// --follow-tags, not --fo). A template needs \\\\ to emit that backslash in the source.
-// protectU rewrites \U to \ + U_ESC, so U_ESC counts as a continuing letter (the byte
-// after \ is no longer U).
-// QWRAP/QSEP take one quote per iteration (not {1,2}): n quotes is linear, not Fibonacci.
-const QWRAP = String.raw`(?:\$?['"])*`;
-const QSEP = String.raw`(?:\$?['"]|\\\n[ \t]*|\\)*`;
-const U_ESC = "\uE000"; // stands in for bash \U so /i cannot fold it onto \u (Node 22 rejects (?-i:))
-const protectU = (s) => String(s).replace(/\\U/g, "\\" + U_ESC);
-const hexd = (s) => [...s].map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d)).join("");
-function qenc(code) { // ANSI-C spellings of one byte; bash \u/\U width cap, \x{} / octal mod 256
-  if (code > 255) return "";
-  const raw = code.toString(16), HEX = hexd(raw), pad = hexd(raw.padStart(2, "0"));
-  const oct = code.toString(8), oct3 = oct.padStart(3, "0"), oct256 = (code + 256).toString(8);
-  // 1–3 octal digits; a 3-digit value+256 is the same byte ($'\453' / $'\053' / $'\53' are '+').
-  const octRe = oct === oct3 ? `\\\\${oct3}|\\\\${oct256}` : `\\\\${oct3}|\\\\${oct}|\\\\${oct256}`;
-  const uN = 4 - raw.length, UN = 8 - raw.length;
-  // Full-width \u/\U (4 / 8 hex digits): bash stops there, so a following hex letter is
-  // the next character ($'\u002df' → -f). Under-width keeps (?![0-9A-Fa-f]) so greed
-  // traps stay off ($'\u2df' / $'\U2df' are U+02DF, not dash + f). \U is matched as
-  // U_ESC (protectU rewrites the subject): Node 22 rejects (?-i:), and /i would
-  // let the 4-digit \u arm match under-width \U ($'\U002df' is U+02DF).
-  const uShort = uN ? `\\\\u0{0,${uN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
-  const UShort = UN ? `\\\\${U_ESC}0{0,${UN - 1}}${HEX}(?![0-9A-Fa-f])|` : "";
-  // \x{…}: bash reads hex after \x{ until } or a non-hex byte; } is optional. Value
-  // mod 256 ($'\x{12d}' / $'\x{102d}' / $'\x{12dp' are '-'/'-p'). Last two hex digits
-  // are the low 8 bits; a one-nibble body is the value itself (code < 16). Stop the
-  // hex run at the first non-hex so $'\x{2df}' stays byte 0xdf, not dash + f.
-  const xBody = raw.length === 1 ? `(?:${HEX}|[0-9A-Fa-f]*${pad})` : `[0-9A-Fa-f]*${pad}`;
-  return `\\\\x${pad}|\\\\x\\{${xBody}(?:\\}|(?![0-9A-Fa-f]))|${octRe}|${uShort}\\\\u0{${uN}}${HEX}|${UShort}\\\\${U_ESC}0{${UN}}${HEX}`;
-}
-function qhex(ch) {
-  const lit = ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
-  const enc = qenc(ch.charCodeAt(0));
-  return enc ? `(?:${lit}|${enc})` : lit;
-}
-const QCLS = new Map();
-function qcls(cls, fold) { // encodings of chars in […], not any \xHH (so \x2d is not [pf])
-  const key = fold ? cls + "i" : cls;
-  let r = QCLS.get(key); if (r) return r;
-  if (cls.length < 3 || cls[1] === "^") { QCLS.set(key, cls); return cls; }
-  const inner = cls.slice(1, -1), chars = [];
-  for (let i = 0; i < inner.length; ) {
-    if (i + 2 < inner.length && inner[i + 1] === "-") {
-      const a = inner.charCodeAt(i), b = inner.charCodeAt(i + 2);
-      if (a <= b) { for (let c = a; c <= b; c++) chars.push(c); i += 3; continue; }
-    }
-    chars.push(inner.charCodeAt(i++));
-  }
-  if (fold) { // git()/rm /i: [dmf] matches D; also encode $'\104' / $'\x44' (-D)
-    for (const c of [...chars]) {
-      if (c >= 65 && c <= 90) chars.push(c + 32);
-      else if (c >= 97 && c <= 122) chars.push(c - 32);
-    }
-  }
-  const enc = [...new Set(chars)].map(qenc).filter(Boolean);
-  r = enc.length ? `(?:${cls}|${enc.join("|")})` : cls;
-  QCLS.set(key, r); return r;
-}
-function qflex(s, fold) {
-  let out = "", i = 0;
-  while (i < s.length) {
-    if (s[i] === "\\" && i + 1 < s.length) {
-      const n = s[i + 1];
-      out += s.slice(i, i + 2); i += 2;
-      if (!"bBdDsSwWtnrfAv".includes(n)) out += QSEP;
-      continue;
-    }
-    if (s[i] === "[") {
-      let j = i + 1;
-      if (s[j] === "^") j++;
-      if (s[j] === "]") j++;
-      while (j < s.length && s[j] !== "]") j++;
-      if (j >= s.length) { out += s[i++]; continue; }
-      const cls = s.slice(i, j + 1); i = j + 1;
-      let q = ""; if (i < s.length && "*+?".includes(s[i])) q = s[i++];
-      const atom = qcls(cls, fold);
-      out += (q === "*" || q === "+") ? `(?:${atom}${QSEP})${q}` : atom + q + QSEP;
-      continue;
-    }
-    if (s[i] === "(") {
-      const m = s.slice(i).match(/^\(\?(?::|<?=|<?!|=|!)/);
-      if (m) { out += m[0]; i += m[0].length; continue; }
-      out += s[i++]; continue;
-    }
-    if (")|^$".includes(s[i]) || "*+?".includes(s[i])) { out += s[i++]; continue; }
-    if (s[i] === "{") { const m = s.slice(i).match(/^\{\d+(?:,\d*)?\}/); if (m) { out += m[0]; i += m[0].length; continue; } }
-    out += qhex(s[i++]) + QSEP;
-  }
-  return out;
-}
-const qflag = (inner, fold = true) => `${QWRAP}${qflex(String(inner), fold)}${QWRAP}(?![\\\\$'"]*[A-Za-z0-9${U_ESC}])`;
-// +refspec, including quoted '+feature' / "+refs/heads/a:b" / '+ :gone', bash $'+feature',
-// \+feature, and qenc spellings of + (0x2b): $'\x{2b}main' / $'\x2bmain' / $'\x{12b}' /
-// $'\x{2bmain' / $'\u002bmain' / $'\U0000002bmain' / $'\453main' / $'\053main'
-const PLUS_SPEC = String.raw`(?:\\?${qhex("+")}\S+|['"]${qhex("+")}\s*[^'"]+['"]|\$['"]${qhex("+")}\s*[^'"]+['"])`;
-// delete refspec :gone, including quoted ':feature', bash $':gone', \:gone / ''\:gone /
-// \:''gone (backslash before : is argv :), and qenc of : (0x3a) including $'\472gone'
-const DEL_SPEC = String.raw`(?:${QWRAP}\\?${qhex(":")}${QSEP}\S|\$['"]${qhex(":")}\s*[^'"]+['"])`;
-// dest main/master with the same quote / $'' / backslash / qenc joins as flags
-// (m''ain / m\ain / $'\x6dain' / $':m'ain are argv main).
-// qflag's trailing lookahead treats \x / octal / \u as more of the word so unique
-// prefixes don't end at an escape ($'--fo\x{6c}low-tags' is --follow-tags). After
-// main/master a qenc of : or / is a word boundary in argv (main:feature), so
-// MAIN_DEST allows those encodings as the end of the dest. Literal main\:feature
-// already ended the word (backslash then :); keep that.
-const MAIN_SEP = String.raw`(?:${qhex(":")}|${qhex("/")})`;
-const MAIN_DEST = `${QWRAP}${qflex("(?:main|master)\\b")}${QWRAP}(?=${QSEP}${MAIN_SEP}|(?![\\\\$'"]*[A-Za-z0-9${U_ESC}]))`;
-// fetch :main / :refs/heads/main (qenc colon: $'\x{3a}main' / $'\72main' / $'\472main';
-// dest also qflex so :m''ain / :m\ain / $':m'ain / feature:m''ain are argv :main).
-// No lookbehind after the colon: $'\72main' ends the encoding on a hex/octal digit.
-const FETCH_HEAD = String.raw`${QWRAP}\\?${qhex(":")}${QSEP}(?:${qflex("refs/heads/")})?${MAIN_DEST}`;
-// push dest main/master: the same colon join as FETCH_HEAD, slash join
-// refs/heads/main (qenc of / ends on a hex/octal digit the same way), or
-// MAIN_DEST after space. Don't look behind ($'\x3amain' / $'\x2fmain').
-const PUSH_MAIN = String.raw`(?:${FETCH_HEAD}|${QWRAP}${qflex("refs/heads/")}${MAIN_DEST}|(?<=\s)${MAIN_DEST})`;
-// same git command: indented continuation, or a backslash-newline with optional indent
-const MORE = String.raw`[^\n]*(?:(?:\n[ \t]+|\\\n[ \t]*)[^\n]*)*`;
-// checkout discards: -f/-2/-3/--force/--ours/--theirs always (even with -b/--orphan on the same command).
-// Pathspecs (quoted . / .. / globs / windows \, magic :(…), unquoted leading-dot (.gitignore), extensionless Makefile/README/
-// Dockerfile/LICENSE/LICENCE/Gemfile/VERSION/COPYING/Jenkinsfile/Justfile/Containerfile/
-// Rakefile/Procfile/Pipfile/CODEOWNERS/UNLICENSE/Vagrantfile/Brewfile/Podfile/Fastfile/
-// NOTICE/OWNERS), ` -- `, tree-ish+path, or two
-// operands — but a create-branch-only checkout (-b/--orphan, no discard) stays out. A later
-// `&& git checkout -b` does not hide a discard on an earlier checkout (stop at && || ; unescaped
-// newline). A `\` + newline is the same command.
-const CHK = String.raw`(?:[^&\n|;]|\\\n[ \t]*)*`;
-const EXTLESS = String.raw`(?:GNUmakefile|Makefile|makefile|README|Dockerfile|LICENSE|LICENCE|Gemfile|VERSION|COPYING|Jenkinsfile|Justfile|Containerfile|Rakefile|Procfile|Pipfile|CODEOWNERS|UNLICENSE|Vagrantfile|Brewfile|Podfile|Fastfile|NOTICE|OWNERS)`;
-const PATHY = String.raw`(?:['"](?:\.\.?|[^'"]*[./*?\\[][^'"]*|:\([^'"]*\)[^'"]*|${EXTLESS})['"]|(?:\.\.?(?:[/\\]\S*)?|\.[^./\\\s]\S*)|[^\s-][^\s]*[/\\.?*\[][^\s]*|:\([^)\s]*\)\S*|${EXTLESS})`;
-const CHECKOUT_DISCARD = String.raw`checkout\b(?:${CHK}(?:(?<=\s)${qflag(String.raw`-[a-z]*[f23][a-z]*\b`)}|${qflag("--force\\b")}|${qflag(uopt("ours", 2) + "\\b")}|${qflag(uopt("theirs", 2) + "\\b")})|(?!${CHK}(?:\s-b\b|\s--orphan(?:\s|=)))${CHK}(?:\s--\s|\s${PATHY}(?:\s|$)|(?:HEAD(?:[@{~^]\S*)?|[0-9a-f]{7,40}|@(?:[~^{]\S*)?|['"]HEAD['"])\s+\S|(?<=\s)[^\s-][^\s]*\s+[^\s-]))`;
-const FETCH_FLAG = String.raw`${qflag(uopt("prune", 5) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}`;
-const RISK_HIGH = [
-  [new RegExp(String.raw`\brm\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(String.raw`-[fidv]*[rfd][fidv]*\b`)}|${qflag(String.raw`(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b`)})`, "i"), "deletes files (rm -r/-f)"],
-  [new RegExp(String.raw`\bfind\b[\s\S]*?(\s-delete\b|\s+${FIND_EXEC_DEL})`, "i"), "deletes files (find -delete/-exec rm)"],
-  [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:${qflag("--force\\b")}|${qflag("--force-with-lease\\b")}|${qflag(String.raw`-[A-Za-z]*f[A-Za-z]*\b`)}|${PLUS_SPEC})`), "force push"],
-  [git(String.raw`push\b${MORE}${PUSH_MAIN}`), "pushes to main/master"],
-  [git(String.raw`(?:reset\b${MORE}${qflag(uopt("hard", 1) + "\\b")}|clean\b${MORE}(?:${qflag(String.raw`-[a-z]*f[a-z]*\b`)}|${qflag("--force\\b")})|branch\b${MORE}(\s${qflag(String.raw`-[A-Za-z]*[dmf][A-Za-z]*\b`)}|\s(?:${qflag(uopt("delete", 1) + "\\b")}|${qflag(uopt("move", 2) + "\\b")}|${qflag(uopt("force", 4) + "\\b")}))|push\b${MORE}(?:\s(?:${qflag(uopt("delete", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*d[A-Za-z]*\b`)}|${DEL_SPEC})|\n[ \t]+(?:${qflag(uopt("delete", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*d[A-Za-z]*\b`)}|${DEL_SPEC}))|${CHECKOUT_DISCARD}|switch\b${MORE}(?:${qflag(uopt("discard-changes", 2) + "\\b")}|${qflag("--force-create\\b")}|${qflag("--force\\b")}|(?<=\s)${qflag(String.raw`-[A-Za-z]*f[A-Za-z]*\b`)})|restore\b${MORE}${qflag(uopt("worktree", 1) + "\\b")}|push\b${MORE}(?:\s|\n[ \t]+)*(?:${qflag(uopt("mirror", 1) + "\\b")}|${qflag(uopt("all", 2) + "\\b")}|${qflag(uopt("branches", 1) + "\\b")}|${qflag(uopt("prune", 3) + "\\b")})|fetch\b${MORE}(\s${PLUS_SPEC}|\s*(?:${PLUS_SPEC})|${FETCH_HEAD}|\s(?:${FETCH_FLAG})|\n[ \t]+(?:${FETCH_FLAG}|${PLUS_SPEC}))|pull\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(uopt("prune", 3) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}|${PLUS_SPEC})|remote(?:(?:\s|\\\n[ \t]*)(?:${qflag("-v\\b")}|${qflag("--verbose\\b")}))*(?:\s|\\\n[ \t]*)+(?:${qflag("prune\\b")}|${qflag("update\\b")}(?:[^&\n|;]|\\\n[ \t]*|\n[ \t]+)*(?:(?<=\s)${qflag(String.raw`-p\b`)}|${qflag(uopt("prune", 1) + "\\b")})))`), "discards or deletes git work"],
-  [gitCs(String.raw`(?:branch\b${MORE}(?<=\s)${qflag(String.raw`-[A-Za-z]*C[A-Za-z]*\b`, false)}|checkout\b${MORE}(?<=\s)${qflag(String.raw`-[A-Za-z]*B[A-Za-z]*\b`, false)}|switch\b${MORE}(?<=\s)${qflag(String.raw`-[A-Za-z]*C[A-Za-z]*\b`, false)}|restore\b(?:${MORE}(?:${qflag(uopt("worktree", 1) + "\\b", false)}|(?<=\s)${qflag(String.raw`-[A-Za-z]*W[A-Za-z]*\b`, false)})|(?!${MORE}(?:${qflag("--staged\\b", false)}|(?<=\s)${qflag(String.raw`-[A-Za-z]*S[A-Za-z]*\b`, false)}))))`), "discards or deletes git work"],
-  [/\b(remove-item|ri|del|erase|rd|rmdir)\b[^\n]*(\s-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b|\s\/s\b|\s\/q\b)/i, "deletes files (Remove-Item -Recurse/-Force, del /s)"],
-  [/\brm\b[^\n]*(\s-re(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?\b|\s-fo(?:r(?:c(?:e)?)?)?\b)/i, "deletes files (PowerShell rm -Recurse/-Force)"],
-  [/\bsudo\b|\bdoas\b|\brunas\b|-verb\s+runas\b|\bset-executionpolicy\b/i, "runs as admin"], [/\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(ba|z)?sh\b|\biex\b/i, "runs a downloaded script"],
-  [/\b(mkfs|diskutil\s+erase|format\s+[a-z]:|format-volume|clear-disk|dd\s+if=)/i, "touches disks"], [/\bchmod\s+-R\s+777\b|\bchown\s+-R\b/i, "changes permissions recursively"],
-  [/(^|[\s"'\/\\])(\.env\b|secrets?[\/\\]|id_(rsa|ed25519)|\.ssh[\/\\]|credentials?\b|[\w.-]*token[\w.-]*\.(json|txt)\b|\.cli-proxy-api|keychain)/i, "reads or writes secrets"],
-  [/\b(npm|pnpm|yarn|cargo)\s+publish\b|\bgh\s+release\s+(create|delete)|\bgh\s+repo\s+(delete|edit\b[^\n]*--visibility)|\bgh\s+pr\s+merge\b/i, "publishes, merges or changes a repo"],
-  [/\b(vercel|netlify|fly|wrangler)\b[^\n]*\b(--prod|deploy)\b|\bkubectl\s+(apply|delete)\b|\bterraform\s+(apply|destroy)\b/i, "deploys"],
-  [/\bdrop\s+(table|database)\b|\btruncate\s+table\b/i, "drops data"], [/\b(shutdown|reboot|killall|pkill|taskkill|stop-process|restart-computer|stop-computer)\b|\bkill\s+-9\b/i, "kills processes or the machine"],
-];
-const READ_ONLY = new RegExp(String.raw`^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![\s\S]*(-delete|${FIND_EXEC_DEL}))|tree|du|df|git\s+(status|log|diff|show|branch(?:(?:\s+(?:--list|--show-current|-v{1,2}|--verbose))+(?:\s+\S+)*|\s*)?$|remote\s+-v\s*$|rev-parse|ls-files|blame|fetch(?![^\n]*(\s${PLUS_SPEC}|\s(?![\w.+-]+:\/\/)(?:[^\s:@]+\\?${qhex(":")}[^\s]+|${QWRAP}\\?${qhex(":")}${QSEP}\S)|\s(?:${FETCH_FLAG}))))|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b`, "i");
-// unwrapShell: Codex shows commands as `bash -lc '...'` or `pwsh -Command "..."`; judge the inner command.
-function unwrapShell(c) { const m = String(c).trim().match(/^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?"?\s+-l?c\s+([\s\S]+)$|^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:pwsh|powershell)(?:\.exe)?"?\s+(?:-\w+\s+)*?-c(?:ommand)?\s+([\s\S]+)$/i);
-  if (!m) return String(c); const x = (m[1] || m[2]).trim(); return /^(['"]).*\1$/s.test(x) ? x.slice(1, -1) : x; }
-const WRITES = /(^|[^0-9&>])>{1,2}(?!&)\s*(?!\/dev\/null\b|\$null\b|nul\b)\S|\btee\b|\bout-file\b|\bset-content\b|\badd-content\b|\$\(|`/i;
-// bash expands unquoted {a,b} before argv; riskOf sees the source. Inline each
-// alternative so --{force,} / {-rf,} / {:gone,} match the same as --force / -rf / :gone.
-// Quoted braces stay literal. ${…} and \{ are left alone.
-function expandBraces(s) {
-  const saved = [];
-  let t = String(s).replace(/\$'(?:\\[\s\S]|[^'\\])*'|'(?:[^']*)'|"(?:\\[\s\S]|[^"\\])*"/g, (m) => {
-    saved.push(m);
-    return "\uE001" + (saved.length - 1) + "\uE001";
-  });
-  for (let n = 0; n < 8; n++) {
-    let hit = false;
-    t = t.replace(/(\S*)\{([^{}]*),[^{}]*\}(\S*)/g, (m, pre, _inner, post) => {
-      if (pre.endsWith("$") || pre.endsWith("\\")) return m;
-      hit = true;
-      const inner = m.slice(pre.length + 1, m.length - post.length - 1);
-      return inner.split(",").map((alt) => pre + alt + post).join(" ");
-    });
-    if (!hit) break;
-  }
-  return t.replace(/\uE001(\d+)\uE001/g, (_, i) => saved[+i]);
-}
-function riskOf(approval) {
-  const a = approval || {}; const inner = expandBraces(unwrapShell(a.prompt || ""));
-  const prompt = a.prompt != null && a.prompt !== "" ? expandBraces(String(a.prompt)) : a.prompt;
-  const parts = [prompt, inner, a.requestKind, a.appName].filter(Boolean).map(String); // raw prompt and unwrap separately (joining made -execdir look like rm -r)
-  const reasons = RISK_HIGH.filter(([re]) => parts.some((s) => re.test(protectU(s)))).map(([, why]) => why);
-  if (reasons.length) return { level: "high", reasons };
-  if (/file_change|apply_patch|write|edit/i.test(String(a.requestKind || "")) && !a.prompt) return { level: "normal", reasons: ["edits files in the workspace"] };
-  const cmds = inner.split(/&&|\|\|?|;|\n/).map((s) => s.trim()).filter(Boolean); // every piped stage must be read-only too
-  if (cmds.length && !WRITES.test(inner) && cmds.every((c) => READ_ONLY.test(protectU(c.replace(/^(cd\s+\S+\s*)$/i, "pwd"))))) return { level: "low", reasons: ["read-only command or test run"] };
-  return { level: "normal", reasons: [] };
-}
+const REFUSALS = new Set(["decline", "cancel"]);
+const approvalAllowed = (decision, userApproved) => REFUSALS.has(decision) || userApproved === true;
 // deliveryOf: where a just-sent message ended up. "started" | "steered" | "queued" (behind a running run) | "held" | "stuck" | "unknown"
 function deliveryOf(p, messageId, activeRunId) {
   const runs = (p && p.runs) || []; const mine = runs.find((r) => r.userMessageId === messageId);
@@ -459,7 +232,7 @@ function watchSnap(t, p, now = Date.now()) {
   const reply = lastA ? String(lastA.text) : ""; const settled = isSettled(t);
   const state = t.activeRunId ? "running" : pend.length ? "waiting" : t.lastErrorClass === "usage_limit" ? "limit" : t.lastError ? "error" : t.hasActionableProposedPlan ? "plan-ready" : /\?\s*[*_`)]*\s*$/.test(reply) ? "asked-you" : "idle";
   return { id: t.id, title: t.title, state, settled, updatedAt: t.updatedAt, checkedAt: new Date(now).toISOString(),
-    pending: pend.map((r) => ({ id: r.requestId, kind: r.kind, answerable: r.answerable, ...(r.approval ? { risk: riskOf(r.approval).level, prompt: String(r.approval.prompt || r.approval.requestKind).slice(0, 160) } : { question: ((r.questions || [])[0] || {}).question || "" }) })),
+    pending: pend.map((r) => ({ id: r.requestId, kind: r.kind, answerable: r.answerable, ...(r.approval ? { prompt: String(r.approval.prompt || r.approval.requestKind).slice(0, 160), reason: r.approval.reason ? String(r.approval.reason).slice(0, 200) : null } : { question: ((r.questions || [])[0] || {}).question || "" }) })),
     queued: runs.length, queueHeld: runs.some((r) => r.queueHeld), replyHash: reply ? crypto.createHash("sha256").update(reply).digest("hex").slice(0, 12) : null,
     reply: reply.replace(/\s+/g, " ").slice(0, 280), resetAt: t.usageLimitResetAt || null,
     autoResume: !!(t.limitRecovery && t.limitRecovery.runId === t.latestRunId && t.limitRecovery.autoResume), error: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null };
@@ -474,7 +247,7 @@ function watchDiff(prev, cur, stallMin = 20, now = Date.now()) { // -> [{ kind, 
   if (!prev) { add("first", `${cur.state}${cur.pending.length ? `, ${cur.pending.length} open request(s)` : ""}`); }
   else if (prev.state !== cur.state) add(prev.state === "running" && DONE.has(cur.state) ? "finished" : "state", `${prev.state} -> ${cur.state}${cur.reply && prev.replyHash !== cur.replyHash ? `: ${cur.reply}` : ""}`);
   const seen = new Set(((prev && prev.pending) || []).map((r) => r.id));
-  for (const r of cur.pending) if (!seen.has(r.id)) add(r.kind === "user_input" ? "question" : `approval-${r.risk}`, r.question || r.prompt || r.kind);
+  for (const r of cur.pending) if (!seen.has(r.id)) add(r.kind === "user_input" ? "question" : "approval", r.kind === "user_input" ? r.question || r.kind : `${r.prompt || r.kind}${r.reason ? ` (why it asks: ${r.reason})` : ""}`);
   const wasStale = new Set(((prev && prev.pending) || []).filter((r) => !r.answerable).map((r) => r.id));
   for (const r of cur.pending) if (!r.answerable && !wasStale.has(r.id)) add("stale-request", `request ${r.id} can't be answered any more; clear it in T3`);
   if (cur.queued && cur.state !== "running" && !(prev && prev.queued && prev.state === cur.state)) add(cur.queueHeld ? "queue-held" : "queue-stuck", `${cur.queued} queued message(s) not running`);
@@ -502,8 +275,10 @@ function buildAnswer(q, v, allowText) { // v: string | string[]; returns the wir
   throw new Error(`"${list[0]}" is not an option for [${q.id}] (options: ${q.options.map((o) => o.label).join(" | ")})${q.allowCustomAnswer ? "; use --text for a free-text answer" : ""}`);
 }
 async function pickRequest(t, o, wantApproval) {
-  const snap = await thread(t.id), p = snap.projection; let pend = pendingOf(p).filter((r) => (r.kind === "user_input") !== wantApproval);
-  if (o.request) pend = pend.filter((r) => r.requestId === String(o.request) || r.requestId.endsWith(String(o.request)));
+  const snap = await thread(t.id), p = snap.projection, open = pendingOf(p).filter((r) => (r.kind === "user_input") !== wantApproval); let pend = open;
+  const ambiguous = (why) => new Error(`AMBIGUOUS: ${why} (${pend.map((r) => r.requestId).join(", ")}); pass the full id with --request`);
+  if (o.request) { const q = String(o.request), exact = open.filter((r) => r.requestId === q); pend = exact.length ? exact : open.filter((r) => r.requestId.endsWith(q)); if (pend.length > 1) throw ambiguous(`--request ${q} matches several requests`); }
+  else if (wantApproval && pend.length > 1) throw ambiguous("several approvals are open");
   else if (pend.length > 1 && t.pendingRuntimeRequest) pend = pend.filter((r) => r.requestId === t.pendingRuntimeRequest.id).concat(pend).slice(0, 1);
   if (!pend.length) throw new Error(`NOT_PENDING: no open ${wantApproval ? "approval" : "question"}${o.request ? " with that --request id" : ""} in "${t.title}" (it may have been answered already)`);
   if (!pend[0].answerable) throw new Error(`NOT_ANSWERABLE: that request can't be answered any more (the run ended). Send a follow-up instead.`);
@@ -527,8 +302,12 @@ async function answer(o) {
   if (o.decision) {
     const r = await pickRequest(t, o, true); const d = String(o.decision);
     if (!r.approval.options.some((x) => x.decision === d)) throw new Error(`--decision must be one of: ${r.approval.options.map((x) => x.decision).join(", ")}`);
+    if (o.redirect && d !== "decline") throw new Error("--redirect only goes with --decision decline");
+    if (!approvalAllowed(d, o["user-approved"])) throw new Error(`NEEDS_USER_APPROVAL: --decision ${d} lets "${t.title}" run: ${r.approval.prompt || r.approval.requestKind}. Show it to the user. After their yes for this request, add --user-approved. To keep the thread moving without them, use --decision decline --redirect.`);
     await respond(t, r.requestId, { decision: d });
-    return confirm(t, r, `decision=${d}`);
+    await confirm(t, r, `decision=${d}`);
+    if (o.redirect) await redirect(t, r);
+    return;
   }
   const r = await pickRequest(t, o, false); const qs = r.questions; let answers = {};
   if (!qs.length) throw new Error("this question has no readable details; answer it in T3");
@@ -542,7 +321,7 @@ async function answer(o) {
     const q = qs[0];
     if (o.text !== undefined) { if (!q.allowCustomAnswer) throw new Error("this question only accepts one of its options (--pick)"); answers[q.id] = String(o.text).trim(); if (!answers[q.id]) throw new Error("--text is empty"); }
     else { let v = String(o.pick); if (v.startsWith("[")) { try { v = JSON.parse(v); } catch { throw new Error("--pick list must be a JSON array of labels"); } } answers[q.id] = buildAnswer(q, v, false); }
-  } else throw new Error("usage: answer --thread <id|title> [--request <id>] (--pick '<option label>' | --text '<free text>' | --answers '<json>' | --decision <d>)");
+  } else throw new Error("usage: answer --thread <id|title> [--request <id>] (--pick '<option label>' | --text '<free text>' | --answers '<json>' | --decision <d> [--user-approved | --redirect])");
   for (const q of qs) if (answers[q.id] === undefined && q.required) throw new Error(`question [${q.id}] "${q.header}" needs an answer too`);
   if (r.responseMode === "message") for (const k of Object.keys(answers)) if (Array.isArray(answers[k])) answers[k] = answers[k].join(", ");
   await respond(t, r.requestId, { answers });
@@ -595,6 +374,30 @@ async function printPr(ref) {
   if (ch && ch.error) console.log(`  checks error: ${ch.error.slice(0, 200)}`); else if (!ch || !ch.checks || !ch.checks.length) console.log("  checks: none reported");
   else { console.log(`  checks: ${ch.state}`); for (const c of ch.checks) console.log(`    ${c.status}  ${c.name}${c.required ? " (required)" : ""}`); }
 }
+async function sendText(t, text, { queue = false, attachments = [], verify = true } = {}) {
+  const busy = !!t.activeRunId, messageId = uuid();
+  await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId,
+    text, attachments, dispatchMode: !busy ? { type: "start_immediately" } : queue ? { type: "queue_after_active" } : { type: "steer_active", targetRunId: t.activeRunId } });
+  console.log(`sent to ${t.id}  "${t.title}"${busy ? (queue ? " (queued after current run)" : " (steered into the running run)") : ""}`);
+  return verify ? verifyDelivery(t, messageId, queue) : "unverified";
+}
+async function redirect(t, r) {
+  const text = redirectText(r.approval); let d = null, why = "";
+  try { d = await sendText(await findThread(t.id), text); } catch (e) { why = e.message; }
+  if (d === "started" || d === "steered" || d === "queued") { console.log("REDIRECTED: told the thread to skip it or use a safer way, and to carry on"); return; }
+  const f = path.join(__dirname, "out", "prompts", `${new Date().toISOString().slice(0, 10)}-redirect-${hereKey(r.requestId)}.md`);
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text);
+  throw new Error(`REDIRECT_NOT_DELIVERED: the approval was declined, but the follow-up didn't reach the thread (${why || d}). Send it with: t3ctl send --thread ${t.id} --prompt-file ${f}`);
+}
+function redirectText(approval) {
+  return [
+    `T3 Tots declined this permission request because the user is away: ${approval.prompt || approval.requestKind}`,
+    approval.reason ? `Why it asked: ${approval.reason}` : null,
+    "Don't run it again, and don't get around the check with a different command that does the same thing.",
+    "If a safer way does the same job without discarding or overwriting anyone's uncommitted work, use it. Otherwise skip that step and carry on with the rest.",
+    "When you finish, list what still needs the user's OK.",
+  ].filter(Boolean).join("\n");
+}
 // A steer that lands after the run ends, or a queue that T3 holds, leaves the message sitting unsent. Check, fix once, else say so.
 async function verifyDelivery(t, messageId, wantQueue) {
   let d = "unknown", fixed = false, stuckSeen = 0;
@@ -605,10 +408,10 @@ async function verifyDelivery(t, messageId, wantQueue) {
     if (d !== "stuck") { stuckSeen = 0; continue; }
     if (++stuckSeen >= 2 && !fixed) { await dispatch("queue.resume", t.id); fixed = true; stuckSeen = 0; } // a run can show "queued" for a moment before it starts
   }
-  if (d === "held") { console.log(`QUEUE_HELD: the message is queued but this thread's queue is held (someone stopped it on purpose). Start it with: t3ctl queue --thread ${t.id} --resume`); return; }
-  if (d === "queued" && !wantQueue) { console.log(`queued: the steer became a queued message and runs after the current run. To push it in now: list it with t3ctl queue --thread ${t.id}, then add --steer <runId>`); return; }
-  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); return; }
-  if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return; }
+  if (d === "held") { console.log(`QUEUE_HELD: the message is queued but this thread's queue is held (someone stopped it on purpose). Start it with: t3ctl queue --thread ${t.id} --resume`); return d; }
+  if (d === "queued" && !wantQueue) { console.log(`queued: the steer became a queued message and runs after the current run. To push it in now: list it with t3ctl queue --thread ${t.id}, then add --steer <runId>`); return d; }
+  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); return d; }
+  if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return d; }
   throw new Error(`SEND_STUCK: the message is ${d} in "${t.title}" and resuming the queue didn't start it. Try: t3ctl queue --thread ${t.id} --resume, then t3ctl status --thread ${t.id}`);
 }
 // --- skills: copy the T3 Tots skills into an agent's skills folder (no T3 or token needed) ---
@@ -700,11 +503,7 @@ const main = async () => {
   else if (cmd === "send") {
     const prompt = promptOf(o); if (!o.thread || !prompt) throw new Error("usage: send --thread <id|title> (--prompt <text> | --prompt-file <path>) [--queue] [--wait [--timeout seconds]] [--no-verify]");
     const t = await findThread(o.thread);
-    const busy = !!t.activeRunId, messageId = uuid();
-    await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId,
-      text: prompt, attachments: await uploadImages(o.attach), dispatchMode: !busy ? { type: "start_immediately" } : o.queue ? { type: "queue_after_active" } : { type: "steer_active", targetRunId: t.activeRunId } });
-    console.log(`sent to ${t.id}  "${t.title}"${busy ? (o.queue ? " (queued after current run)" : " (steered into the running run)") : ""}`);
-    if (!o["no-verify"]) await verifyDelivery(t, messageId, !!o.queue);
+    await sendText(t, prompt, { queue: !!o.queue, attachments: await uploadImages(o.attach), verify: !o["no-verify"] });
     if (o.wait) { await wait(t.id, +o.timeout || 300); await printLast(t.id, 2); }
   }
   else if (cmd === "queue") {
@@ -737,7 +536,7 @@ const main = async () => {
   else if (cmd === "rename") { const t = await findThread(o.thread); if (!o.title) throw new Error("--title required"); await dispatch("thread.metadata.update", t.id, { title: String(o.title) }); console.log(`renamed "${t.title}" -> "${o.title}"`); }
   else if (cmd === "interrupt") { const t = await findThread(o.thread); if (!t.activeRunId) { console.log("not running"); return; } await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: "t3ctl", holdQueue: !!o.hold }); console.log(`interrupted run in "${t.title}"`); }
   else if (cmd === "pending") { const t = await findThread(o.thread); const pend = pendingOf((await thread(t.id)).projection);
-    if (o.json) console.log(JSON.stringify(pend.map((r) => (r.approval ? { ...r, risk: riskOf(r.approval) } : r)))); else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
+    if (o.json) console.log(JSON.stringify(pend)); else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
   else if (cmd === "answer") await answer(o);
   else if (cmd === "diff") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; const n = p.checkpoints.filter((c) => c.status !== "missing").length;
     const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
@@ -847,7 +646,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, uopt, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

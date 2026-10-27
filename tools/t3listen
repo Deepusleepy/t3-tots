@@ -102,7 +102,7 @@ function requestInfo(p, r) {
   try { const c = contextOf(p, it); if (c) o.context = c; } catch {}
   if (r.kind === "user_input") o.questions = ((it && it.questions) || []).map((q) => ({ id: q.id, header: q.header, question: q.question,
     options: (q.options || []).map((x) => ({ label: x.label, description: x.description, ...(x.value !== undefined ? { value: x.value } : {}) })), multiSelect: !!q.multiSelect, allowCustomAnswer: q.allowCustomAnswer !== false, required: q.required !== false }));
-  else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, appName: (it && it.appName) || null,
+  else o.approval = { requestKind: (it && it.requestKind) || r.kind, prompt: (it && it.prompt) || null, reason: (it && it.reason) || null, appName: (it && it.appName) || null,
     options: (it && it.options && it.options.length ? it.options : [{ decision: "accept", label: "Allow" }, { decision: "decline", label: "Deny" }]).map((x) => ({ decision: x.decision, label: x.label, ...(x.warning ? { warning: x.warning } : {}) })) };
   return o;
 }
