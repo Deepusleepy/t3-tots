@@ -15,6 +15,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use t
 
 ## 2. Fetch
 - `t3ctl files --thread '<t>' --last-turn` copies the files the last turn created or changed into `<tools folder>/out/`, keeping each file's path inside the project (`out/src/index.ts`), so files with the same name don't overwrite each other. Leave out `--last-turn` for the whole thread. It never copies dotfiles or dot folders (`.env`, `.ssh`, `.gnupg`), files whose path names a token, auth or oauth (as a word: `author.md` is fine), secret, credential, password, keychain or private key, key files (`id_rsa`, `id_ed25519`, `.pem`, `.p12`, `.key`), symlinks, or files outside the project; it lists them as not copied.
+- A file that only changed while the run was going, with nothing showing this thread made it, is also listed as not copied, because another session may have made it. Show those to the user and copy only the ones they pick: `t3ctl files --thread '<t>' --include '<path>[,<path>]'`.
 - Files outside the project appear only if a reply names them. Take the path from `t3ctl read`.
 - `t3ctl diff --thread '<t>'` gives the diff in a git project.
 - For videos and other files already on the computer, CopyToBox them directly.

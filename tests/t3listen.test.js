@@ -376,3 +376,42 @@ test("redaction: export.js and t3listen use the same pattern", () => {
   const red = (f) => fs.readFileSync(path.join(__dirname, "..", "tools", f), "utf8").match(/const RED ?= ?new RegExp\((.*)\);/)[1];
   assert.equal(red("export.js"), red("t3listen"));
 });
+
+test("preview-finish: a thread only in T3's archived list is found by its title", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-archived-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const archived = { id: "arch-only-thread-42", title: "Shipped last week" };
+  const asked = [];
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [{ id: "live-thread-001", title: "Live" }], archivedThreads: [] }));
+    if (u === "/api/orchestration/threads/" + archived.id) return res.end(JSON.stringify({ projection: { thread: archived, runs: [] } }));
+    res.statusCode = 404; res.end("{}");
+  });
+  srv.on("upgrade", (req, sock) => {
+    const accept = crypto.createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    sock.on("data", (d) => {
+      if ((d[0] & 15) === 8) return sock.end();
+      if ((d[0] & 15) !== 1) return;
+      let len = d[1] & 127, off = 2; if (len === 126) { len = d.readUInt16BE(2); off = 4; }
+      const mask = d.subarray(off, off + 4), m = JSON.parse(Buffer.from(d.subarray(off + 4, off + 4 + len)).map((b, i) => b ^ mask[i % 4]).toString("utf8"));
+      asked.push(m.tag);
+      const value = m.tag === "orchestration.getArchivedShellSnapshot" ? { schemaVersion: 1, snapshotSequence: 1, projects: [], threads: [archived] } : {};
+      const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit: { _tag: "Success", value } }));
+      sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
+    });
+    sock.on("error", () => {});
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = (q) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", q],
+    { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
+  try {
+    let r = await run("Shipped last week"); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/);
+    assert.ok(asked.includes("orchestration.getArchivedShellSnapshot"), asked.join());
+    r = await run("never existed"); assert.equal(r.code, 1, r.out); assert.match(r.out, /NOT_FOUND/);
+  } finally { srv.close(); }
+});

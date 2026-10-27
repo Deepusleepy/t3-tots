@@ -33,7 +33,7 @@ function args(a = process.argv.slice(3)) { const o = {}; for (let i = 0; i < a.l
 // flags that always take a value; "--from --to dir" must not read as --from=true
 const VALUE_FLAGS = new Set(["thread", "project", "prompt", "prompt-file", "model", "effort", "title", "mode", "attach", "timeout", "from", "to", "only", "text", "pick", "answers",
   "decision", "request", "query", "q", "limit", "last", "number", "repo", "state", "stall-min", "until", "every", "at", "days", "id", "subagent", "edit", "move", "before", "steer",
-  "run", "provider", "turn", "reason", "label", "chars", "runtime", "worktree", "enable", "disable", "delete", "copy"]);
+  "run", "provider", "turn", "reason", "label", "chars", "runtime", "worktree", "include", "enable", "disable", "delete", "copy"]);
 function missingValue(o, cmd) { // --cancel takes a run id only for queue; elsewhere it is a switch
   return Object.keys(o).find((k) => o[k] === true && (VALUE_FLAGS.has(k) || (k === "cancel" && cmd === "queue"))); }
 async function get(p) {
@@ -153,7 +153,7 @@ function outPath(outDir, root, f) {
   const safe = rel && !path.isAbsolute(rel) && !rel.split(/[\\/]+/).includes("..") ? rel : path.basename(f);
   return path.join(outDir, safe);
 }
-async function changedFiles(t, lastTurn) {
+async function changedFiles(t, lastTurn, include = []) {
   const p = (await thread(t.id)).projection; const proj = (await shell()).projects.find((x) => x.id === t.projectId);
   const root = t.worktreePath || (proj && proj.workspaceRoot);
   let runs = p.runs.filter((r) => r.startedAt); if (lastTurn) runs = runs.slice(-1); if (!runs.length) return [];
@@ -168,16 +168,17 @@ async function changedFiles(t, lastTurn) {
     const walk = (d, depth) => { if (depth > 6) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (/^(\.git|node_modules|\.next|dist|build|\.venv|__pycache__)$/.test(e.name)) continue; const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, depth + 1); else { try { const m = fs.statSync(f).mtimeMs; if (m >= from && m <= to) add(f, "modified-during-run"); } catch {} } } };
     try { walk(root, 0); } catch {} }
+  const picked = new Set(include.map((p) => canonical(path.isAbsolute(p) ? p : path.join(root || "", p))));
   return [...found].map(([f, why]) => { let st = null; try { st = fs.lstatSync(f); } catch {}
-    const skip = sensitivePath(f, root) ? "sensitive name" : !insideProject(f, root) ? "outside the project" : st && !st.isFile() ? (st.isSymbolicLink() ? "symlink" : "not a file") : "";
+    const skip = sensitivePath(f, root) ? "sensitive name" : !insideProject(f, root) ? "outside the project" : st && !st.isFile() ? (st.isSymbolicLink() ? "symlink" : "not a file")
+      : why === "modified-during-run" && !picked.has(canonical(f)) ? `changed during the run, but nothing shows this thread made it; copy it only if the user picks it, with --include '${f}'` : "";
     return { path: f, why, exists: !!st, skip, root }; });
 }
 const CASE_FOLDING_FS = process.platform === "win32" || process.platform === "darwin";
+const canonical = (p) => { let r; try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); } return CASE_FOLDING_FS ? r.toLowerCase() : r; };
 function insideProject(f, root) {
   if (!root) return false;
-  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
-  const fold = (p) => (CASE_FOLDING_FS ? p.toLowerCase() : p);
-  const rel = path.relative(fold(real(root)), fold(real(f)));
+  const rel = path.relative(canonical(root), canonical(f));
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 async function thread(id) { return get(`/api/orchestration/threads/${encodeURIComponent(id)}`); }
@@ -565,7 +566,7 @@ const main = async () => {
   else if (cmd === "answer") await answer(o);
   else if (cmd === "diff") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; const n = p.checkpoints.filter((c) => c.status !== "missing").length;
     const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
-  else if (cmd === "files") { const t = await findThread(o.thread); const fl = await changedFiles(t, !!o["last-turn"]);
+  else if (cmd === "files") { const t = await findThread(o.thread); const fl = await changedFiles(t, !!o["last-turn"], o.include === undefined ? [] : String(o.include).split(",").map((x) => x.trim()).filter(Boolean));
     const outDir = path.join(__dirname, "out"); if (o.copy !== "no") fs.mkdirSync(outDir, { recursive: true });
     for (const f of fl) { let note = f.skip ? `  (not copied: ${f.skip})` : ""; if (f.exists && !f.skip && o.copy !== "no") { const dst = outPath(outDir, f.root, f.path); fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(f.path, dst); note = ` -> ${dst}`; } console.log(`${f.exists ? "" : "(gone) "}${f.path}  [${f.why}]${note}`); }
     if (!fl.length) console.log("no files found"); }
@@ -671,7 +672,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] [--include path,path] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
 if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

@@ -560,7 +560,12 @@ async function previewFinish() { // print the run-end event the listener would s
   let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
   // live + archived: a thread missing from both (or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
-  let id = q; try { id = pickThread([...(sh.threads || []), ...(sh.archivedThreads || [])], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); }
+  const listed = [...(sh.threads || []), ...(sh.archivedThreads || [])];
+  let id = q; try { id = pickThread(listed, q).id; } catch (first) {
+    let archived = [];
+    if (/^NOT_FOUND/.test(first.message)) { try { archived = ((await wsRpc(ep, "orchestration.getArchivedShellSnapshot", {})) || {}).threads || []; } catch {} }
+    try { id = pickThread([...listed, ...archived], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); }
+  }
   const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip, run } = await buildEnd(ep, t, null, { preview: true });

@@ -481,3 +481,32 @@ test("archive and unarchive: idle threads only, archived threads found through T
     assert.deepEqual(sent.map((p) => [p.type, p.threadId]), [["thread.archive", idle.id], ["thread.unarchive", old.id], ["thread.unarchive", old.id]]);
   } finally { t3.close(); }
 });
+
+test("files: a file that only changed during the run is listed but copied only when picked with --include", async () => {
+  const fs = require("fs"), os = require("os");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-include-"));
+  fs.writeFileSync(path.join(root, "made.txt"), "the thread wrote this");
+  fs.writeFileSync(path.join(root, "other.txt"), "another session wrote this");
+  const project = { id: "proj-include-1", title: "Include", workspaceRoot: root };
+  const thread = { id: "thread-include-01", title: "Include thread", projectId: project.id, status: "idle" };
+  const started = new Date(Date.now() - 60000).toISOString(), done = new Date(Date.now() + 60000).toISOString();
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [project], threads: [thread] }),
+    projection: () => ({ thread, runs: [{ id: "run-1", startedAt: started, completedAt: done }], checkpoints: [],
+      turnItems: [{ runId: "run-1", type: "file_change", fileName: path.join(root, "made.txt") }] }),
+  });
+  const line = (out, name) => out.split("\n").find((l) => l.includes(name)) || "";
+  const copied = (name) => fs.existsSync(path.join(t3.tmp, "out", name));
+  try {
+    let r = await t3.run("files", "--thread", thread.id);
+    assert.equal(r.code, 0, r.out);
+    assert.match(line(r.out, "made.txt"), /->/);
+    assert.match(line(r.out, "other.txt"), /not copied: changed during the run, but nothing shows this thread made it/);
+    assert.ok(copied("made.txt") && !copied("other.txt"));
+    r = await t3.run("files", "--thread", thread.id, "--include", "other.txt");
+    assert.equal(r.code, 0, r.out); assert.match(line(r.out, "other.txt"), /->/); assert.ok(copied("other.txt"));
+    fs.rmSync(path.join(t3.tmp, "out"), { recursive: true });
+    r = await t3.run("files", "--thread", thread.id, `--include=${path.join(root, "other.txt")}`);
+    assert.equal(r.code, 0, r.out); assert.ok(copied("other.txt"), r.out);
+  } finally { t3.close(); }
+});
