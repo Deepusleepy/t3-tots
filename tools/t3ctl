@@ -83,7 +83,10 @@ async function findThread(q) {
   q = String(q); const s = await shell(); const listed = [...s.threads, ...(s.archivedThreads || [])];
   let hit = null, miss = null;
   try { hit = pickThread(listed, q); if (strongMatch(hit, q)) return hit; } catch (e) { miss = e; }
-  let archived; try { archived = await rpc("orchestration.getArchivedShellSnapshot", {}); } catch { if (hit) return hit; throw miss; }
+  let archived; try { archived = await rpc("orchestration.getArchivedShellSnapshot", {}); } catch (err) {
+    if (hit) return hit;
+    throw /^NOT_FOUND/.test(miss.message) ? new Error(`${miss.message} (T3's archived threads couldn't be checked: ${String(err.message).slice(0, 160)})`) : miss;
+  }
   return pickThread([...listed, ...((archived && archived.threads) || [])], q);
 }
 const strongMatch = (t, q) => t.id === q || (q.length >= 8 && String(t.id).startsWith(q)) || norm(t.title) === norm(q);
@@ -112,9 +115,9 @@ function modelSel(o, fallback, s) {
 }
 const EFFORT_KEYS = { codex: "reasoningEffort", cursor: "reasoning_effort", opencode: "variant", muse: "reasoningEffort", grok: "reasoningEffort" };
 function withEffort(sel, effort, knownOptions = sel.options) {
-  const known = (knownOptions || []).find((x) => /effort|variant/i.test(x.id));
+  const known = (knownOptions || []).find((x) => x && /effort|variant/i.test(x.id));
   const key = known ? known.id : EFFORT_KEYS[sel.instanceId] || "effort";
-  return { ...sel, options: [...(sel.options || []).filter((x) => x.id !== key), { id: key, value: String(effort) }] };
+  return { ...sel, options: [...(sel.options || []).filter((x) => x && x.id !== key), { id: key, value: String(effort).trim() }] };
 }
 function workspaceOf(o) {
   if (o.worktree === undefined) return { type: "root" };
@@ -171,6 +174,7 @@ async function changedFiles(t, lastTurn, include = []) {
   const picked = new Set(include.map((p) => canonical(path.isAbsolute(p) ? p : path.join(root || "", p))));
   return [...found].map(([f, why]) => { let st = null; try { st = fs.lstatSync(f); } catch {}
     const skip = sensitivePath(f, root) ? "sensitive name" : !insideProject(f, root) ? "outside the project" : st && !st.isFile() ? (st.isSymbolicLink() ? "symlink" : "not a file")
+      : st && st.nlink > 1 && !picked.has(canonical(f)) ? `hard link, so its content may live outside the project; copy it only if the user picks it, with --include '${f}'`
       : why === "modified-during-run" && !picked.has(canonical(f)) ? `changed during the run, but nothing shows this thread made it; copy it only if the user picks it, with --include '${f}'` : "";
     return { path: f, why, exists: !!st, skip, root }; });
 }

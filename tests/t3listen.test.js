@@ -365,12 +365,15 @@ test("retry queue: when it is full, events are saved in state and come back as r
   assert.equal(l.keepForRetry([], S, opened), "queued");
 });
 test("redaction: quoted passwords with spaces and Bearer/Basic credentials are hidden; ordinary words are not", () => {
-  for (const s of ['password = "correct horse battery staple"', 'password="abcd\\"efghijkl"', "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "Authorization: Basic dXNlcjpwYXNz", "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'", "passwords: hunter2hunter2", "tokens = abcdefghijkl"]) {
+  for (const s of ['password = "correct horse battery staple"', 'password="abcd\\"efghijkl"', "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "Authorization: Basic dXNlcjpwYXNz", "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'", "passwords: hunter2hunter2", "tokens = abcdefghijkl",
+    '{"password": "correct horse battery staple"}', '{"api_key":"abcdefghijklmnopQRST"}', 'password: "say \\"hunter2\\" please"', "password: hunter2",
+    "Bearer abcdefghijklmnop", "secret_key=supersecretvalue", "client_secret: 'abc def ghi'"]) {
     const out = l.clean(s);
     assert.match(out, /\[redacted\]/, s);
-    assert.doesNotMatch(out, /horse|efghijkl|two words|hunter2|abcDEF1234567890xyz|abcdefghijkl|dXNlcjpwYXNz/, s);
+    assert.doesNotMatch(out, /horse|efghijkl|two words|hunter2|abcDEF1234567890xyz|abcdefghijkl|dXNlcjpwYXNz|QRST|supersecret|def ghi/, s);
   }
-  for (const s of ["we use basic authentication here", "Bearer tokens are fine to mention", "a token: short", "Authorization: required for this endpoint", "the Authorization header is missing"]) assert.equal(l.clean(s), s);
+  for (const s of ["we use basic authentication here", "Bearer tokens are fine to mention", "a token: short", "Authorization: required for this endpoint", "the Authorization header is missing",
+    "topsecret: value12345", "basic 0123456789abcdef is the sample", "the bearer 123456789012345 is late"]) assert.equal(l.clean(s), s);
 });
 test("redaction: export.js, survey.js and t3listen use the same pattern", () => {
   const fs = require("fs");
