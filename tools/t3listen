@@ -77,7 +77,7 @@ const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
 // short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
 // SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
 const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
-const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|passwd|password)\\s*[:=]\\s*(?:"[^"\\n]{4,}"|'[^'\\n]{4,}'|\\S{8,})|\\b(?:bearer|basic)\\s+(?=[A-Za-z0-9._~+/=-]*\\d)[A-Za-z0-9._~+/=-]{12,})`, "gi");
+const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|passwd|password)\\s*[:=]\\s*(?:"(?:[^"\\\\\\n]|\\\\.){4,}"|'(?:[^'\\\\\\n]|\\\\.){4,}'|\\S{8,})|\\bauthorization\\s*[:=]\\s*(?:(?:bearer|basic|token)\\s+)?[A-Za-z0-9._~+/=-]{12,}|\\bbearer\\s+[A-Za-z0-9._~+/=-]{20,})`, "gi");
 const clean = (t) => { t = String(t).replace(RED, "[redacted]"); return HOME && HOME.length > 1 ? t.split(HOME).join("~") : t; };
 // every text field of an event (questions, option labels, approval prompt, title, answers, errors) is redacted before it is sent, logged or previewed; ids are kept
 function cleanEvent(v, k = "") {
@@ -136,9 +136,9 @@ async function post(e) { // one attempt; returns { ok, status, body, retry }
 }
 const ref = (e) => String(e.requestId || e.runId || "");
 function markDelivered(e) {
-  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && (f.e || f.retryLater)) { delete f.e; delete f.retryLater; saveState(); } return; }
+  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && (f.e || f.parked)) { delete f.e; delete f.parked; saveState(); } return; }
   const s = S.sent[e.requestId]; if (!s) return;
-  delete s.e; delete s.retryLater;
+  if (s.parked) { delete s.parked[e.event]; if (!Object.keys(s.parked).length) delete s.parked; }
   if (e.event === "request.opened") s.delivered = true; else if (e.event === "request.resolved" && s.closing) delete S.sent[e.requestId];
   saveState();
 }
@@ -147,13 +147,16 @@ const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.f
 function keepForRetry(q, st, item) {
   if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
   const s = stateFor(st, item.e); if (!s) return "dropped";
-  s.e = item.e; s.retryLater = true; return "parked";
+  (s.parked = s.parked || {})[item.e.event] = item.e; return "parked";
 }
 function refillFromState(q, st, now) {
   let moved = 0;
   for (const s of [...Object.values(st.sent), ...Object.values(st.finished)]) {
-    if (q.length >= MAX_RETRY_QUEUE) break;
-    if (s.retryLater && s.e) { delete s.retryLater; q.push({ e: s.e, rounds: 0, since: now }); moved++; }
+    for (const [name, e] of Object.entries(s.parked || {})) {
+      if (q.length >= MAX_RETRY_QUEUE) return moved;
+      q.push({ e, rounds: 0, since: now }); delete s.parked[name]; moved++;
+    }
+    if (s.parked && !Object.keys(s.parked).length) delete s.parked;
   }
   return moved;
 }
@@ -450,7 +453,7 @@ async function run() {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
     S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {};
-    for (const s of Object.values(S.sent)) { delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) delete f2.retryLater;
+    for (const s of Object.values(S.sent)) { delete s.parked; delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) { delete f2.parked; delete f2.retryLater; }
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
@@ -561,10 +564,10 @@ async function previewFinish() { // print the run-end event the listener would s
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
   // live + archived: a thread missing from both (or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
   const listed = [...(sh.threads || []), ...(sh.archivedThreads || [])];
-  let id = q; try { id = pickThread(listed, q).id; } catch (first) {
-    let archived = [];
-    if (/^NOT_FOUND/.test(first.message)) { try { archived = ((await wsRpc(ep, "orchestration.getArchivedShellSnapshot", {})) || {}).threads || []; } catch {} }
-    try { id = pickThread([...listed, ...archived], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); }
+  let id = q, strong = false; try { const hit = pickThread(listed, q); id = hit.id; strong = hit.id === q || (q.length >= 8 && String(hit.id).startsWith(q)) || normT(hit.title || "") === normT(q); } catch {}
+  if (!strong) {
+    let archived = []; try { archived = ((await wsRpc(ep, "orchestration.getArchivedShellSnapshot", {})) || {}).threads || []; } catch {}
+    try { id = pickThread([...listed, ...archived], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); id = q; }
   }
   const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };

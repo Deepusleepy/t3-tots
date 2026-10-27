@@ -127,7 +127,7 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 
 `status --json` adds `queued` (messages waiting in the queue) and `queueHeld` (the queue was held on purpose); `threads` and `status` show a held queue as `queue held` and settled threads as `(settled)`. `threads --main` hides threads that agents spawned (reviewers, sub-tasks), the same split t3q.py uses. A PM's or a thread's sub-task threads are listed by `subtasks --thread t`. `models` lists the models already used in T3, with the name of each provider's effort setting; skip the `<synthetic>` entry. `limits` prints reset times in local time and marks a reset that already passed with `(passed)`.
 
-The default token scopes don't cover usage or cost totals, T3 settings (including "Auto-resume limited threads"), worktrees, file writes or terminals.
+The default token scopes don't cover usage or cost totals, T3 settings (including "Auto-resume limited threads"), managing or removing worktrees, file writes or terminals. Starting a thread in a new worktree with `new --worktree` works with the default token.
 
 `t3ctl watch` prints only what changed since its last run, so an empty output means nothing changed, with or without `--json`. Its state lives in the file given with `--state`, relative to the folder it runs from (default `watch-state.json` in the tools folder). Events:
 
@@ -179,7 +179,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
 | `REDIRECT_NOT_DELIVERED` | The approval was declined, but the follow-up didn't reach the thread. Don't rerun `answer` (the request is closed). Run the `t3ctl send ... --prompt-file` command it prints |
-| `THREAD_RUNNING` | `t3ctl archive` won't archive a running thread. Stop it first, or wait until it finishes |
+| `THREAD_RUNNING` | `t3ctl archive` won't archive a running thread. Wait until it finishes, or stop it first only with the user's OK for that stop |
 | `NOT_LIMITED` | The thread isn't stopped on a usage limit, so there is nothing to resume |
 | `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
 | `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |

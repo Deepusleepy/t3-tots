@@ -12,7 +12,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Find the thread 
 | Action | Command |
 |---|---|
 | Settle or unsettle (reversible) | `t3ctl settle --thread '<t>'`, `t3ctl unsettle --thread '<t>'` |
-| Archive or unarchive (reversible; hides it from the sidebar and stops its PR watches) | `t3ctl archive --thread '<t>'`, `t3ctl unarchive --thread '<t>'`. A running thread can't be archived (`THREAD_RUNNING`); stop it first only if the user says so |
+| Archive or unarchive (hides it from the sidebar and stops its PR watches; unarchive brings it back, but PR watches stay off until set again) | `t3ctl archive --thread '<t>'`, `t3ctl unarchive --thread '<t>'`. A running thread can't be archived (`THREAD_RUNNING`); stop it first only if the user says so. Check `t3ctl pending --thread '<t>'` first: archiving a thread with an open question or approval stops phone answers for it, so tell the user before archiving one |
 | Rename | `t3ctl rename --thread '<t>' --title '<new>'` |
 | Stop the running turn | `t3ctl interrupt --thread '<t>'`; `--hold` also holds the queue |
 | Stop a run and its sub-tasks | `t3ctl stop --thread '<t>'`; this holds the queue |

@@ -510,3 +510,25 @@ test("files: a file that only changed during the run is listed but copied only w
     assert.equal(r.code, 0, r.out); assert.ok(copied("other.txt"), r.out);
   } finally { t3.close(); }
 });
+
+test("findThread: an archived thread with the exact title wins over an active thread that only contains the words", async () => {
+  const live = { id: "thread-live-follow", title: "Release follow up", status: "idle", archivedAt: null, updatedAt: "2026-10-02T00:00:00Z" };
+  const old = { id: "thread-arch-release", title: "Release", status: "idle", archivedAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" };
+  const notes = { id: "thread-arch-notes", title: "Release notes", status: "idle", archivedAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z" };
+  const sent = [];
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [], threads: [live], archivedThreads: [] }),
+    onRpc: (tag, payload) => (tag === "orchestration.getArchivedShellSnapshot" ? { threads: [old, notes] } : (sent.push(payload), {})),
+  });
+  try {
+    let r = await t3.run("unarchive", "--thread", "Release"); assert.equal(r.code, 0, r.out); assert.match(r.out, /unarchived "Release"/);
+    r = await t3.run("archive", "--thread", "Release follow up"); assert.equal(r.code, 0, r.out); assert.match(r.out, /archived "Release follow up"/);
+    r = await t3.run("archive", "--thread", "follow"); assert.equal(r.code, 0, r.out); assert.match(r.out, /archived "Release follow up"/);
+    r = await t3.run("unarchive", "--thread", "Rel"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/);
+    assert.deepEqual(sent.map((p) => [p.type, p.threadId]), [["thread.unarchive", old.id], ["thread.archive", live.id], ["thread.archive", live.id]]);
+  } finally { t3.close(); }
+});
+test("modelSel: --effort uses each provider's own effort option name", () => {
+  for (const [instanceId, key] of [["muse", "reasoningEffort"], ["grok", "reasoningEffort"], ["codex", "reasoningEffort"], ["opencode", "variant"], ["claudeAgent", "effort"]])
+    assert.deepEqual(t.modelSel({ effort: "high" }, { instanceId, model: "m" }, null).options, [{ id: key, value: "high" }], instanceId);
+});

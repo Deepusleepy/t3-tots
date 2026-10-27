@@ -342,34 +342,33 @@ test("retry queue: when it is full, events are saved in state and come back as r
   const S = { sent: { "req-a": { threadId: "t1", delivered: false }, "req-b": { threadId: "t1", closing: true } }, finished: { "run-1": { threadId: "t2", at: 1 } } };
   const full = Array.from({ length: l.MAX_RETRY_QUEUE }, (_, i) => ({ e: { event: "thread.finished", runId: `old-${i}` }, rounds: 1, since: 0 }));
   const opened = { e: { event: "request.opened", requestId: "req-a" }, rounds: 0, since: 0 };
+  const closedA = { e: { event: "request.resolved", requestId: "req-a" }, rounds: 0, since: 0 };
   const resolved = { e: { event: "request.resolved", requestId: "req-b" }, rounds: 0, since: 0 };
   const finished = { e: { event: "thread.finished", runId: "run-1" }, rounds: 0, since: 0 };
   const unknown = { e: { event: "thread.finished", runId: "run-unknown" }, rounds: 0, since: 0 };
-  assert.equal(l.keepForRetry(full, S, opened), "parked");
-  assert.equal(l.keepForRetry(full, S, resolved), "parked");
-  assert.equal(l.keepForRetry(full, S, finished), "parked");
+  for (const item of [opened, closedA, resolved, finished]) assert.equal(l.keepForRetry(full, S, item), "parked");
   assert.equal(l.keepForRetry(full, S, unknown), "dropped");
   assert.equal(full.length, l.MAX_RETRY_QUEUE);
-  assert.equal(S.sent["req-a"].e, opened.e); assert.equal(S.finished["run-1"].retryLater, true);
-  const q = full.slice(0, l.MAX_RETRY_QUEUE - 2);
-  assert.equal(l.refillFromState(q, S, 123), 2);
+  assert.deepEqual(Object.keys(S.sent["req-a"].parked).sort(), ["request.opened", "request.resolved"], "an opened and a resolved event of one request are both kept");
+  const q = full.slice(0, l.MAX_RETRY_QUEUE - 3);
+  assert.equal(l.refillFromState(q, S, 123), 3);
   assert.equal(q.length, l.MAX_RETRY_QUEUE);
   assert.equal(l.refillFromState(q, S, 124), 0, "a full queue takes nothing more");
   const rest = [];
   assert.equal(l.refillFromState(rest, S, 125), 1);
-  assert.deepEqual([...q.slice(-2), ...rest].map((x) => x.e.requestId || x.e.runId).sort(), ["req-a", "req-b", "run-1"]);
+  assert.deepEqual([...q.slice(-3), ...rest].map((x) => `${x.e.requestId || x.e.runId} ${x.e.event}`).sort(),
+    ["req-a request.opened", "req-a request.resolved", "req-b request.resolved", "run-1 thread.finished"]);
   assert.equal(l.refillFromState([], S, 126), 0, "each saved event is queued once");
-  assert.ok([S.sent["req-a"], S.sent["req-b"], S.finished["run-1"]].every((s) => !s.retryLater && s.e), "the event stays saved until it is delivered");
+  assert.ok([S.sent["req-a"], S.sent["req-b"], S.finished["run-1"]].every((s) => !s.parked));
   assert.equal(l.keepForRetry([], S, opened), "queued");
 });
-
 test("redaction: quoted passwords with spaces and Bearer/Basic credentials are hidden; ordinary words are not", () => {
-  for (const s of ['password = "correct horse battery staple"', "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'"]) {
+  for (const s of ['password = "correct horse battery staple"', 'password="abcd\\"efghijkl"', "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "Authorization: Basic dXNlcjpwYXNz", "api_key='two words here'", "passwd: 'hunter2 hunter2'", "Authorization: Bearer abcDEF1234567890xyz", "curl -H 'Authorization: Basic dXNlcjpwYXNzMTIzNDU2'"]) {
     const out = l.clean(s);
     assert.match(out, /\[redacted\]/, s);
-    assert.doesNotMatch(out, /horse|two words|hunter2|abcDEF1234567890xyz|dXNlcjpwYXNzMTIzNDU2/, s);
+    assert.doesNotMatch(out, /horse|efghijkl|two words|hunter2|abcDEF1234567890xyz|abcdefghijklmnop|dXNlcjpwYXNz/, s);
   }
-  for (const s of ["we use basic authentication here", "Bearer tokens are fine to mention", "a token: short"]) assert.equal(l.clean(s), s);
+  for (const s of ["we use basic authentication here", "Bearer tokens are fine to mention", "a token: short", "Authorization: required for this endpoint", "the Authorization header is missing"]) assert.equal(l.clean(s), s);
 });
 test("redaction: export.js and t3listen use the same pattern", () => {
   const fs = require("fs");
