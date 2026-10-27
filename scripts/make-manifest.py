@@ -66,7 +66,7 @@ def main() -> int:
     m = build(version)
     new = json.dumps(m, indent=1, ensure_ascii=False) + "\n"
     path = ROOT / "manifest.json"
-    old = path.read_text() if path.exists() else ""
+    old = path.read_bytes().decode("utf-8") if path.exists() else ""
     counts = f"{sum(f['kind'] == 'tool' for f in m['files'])} tool files, {len({f['dest'].split('/')[0] for f in m['files'] if f['kind'] == 'skill'})} skills, {version}"
     if "--check" in sys.argv[1:]:
         if old != new:
@@ -74,7 +74,7 @@ def main() -> int:
             return 1
         print(f"manifest ok ({counts})")
         return 0
-    path.write_text(new)
+    path.write_bytes(new.encode("utf-8"))
     print(f"wrote manifest.json ({counts})")
     return 0
 
