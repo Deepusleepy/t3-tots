@@ -34,9 +34,9 @@ import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urlli
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.29"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
- "tools/t3ctl": ["t3ctl", "3af55920f86267ad82aa84944725cb44b847a6d84ae82a5809cfe085f63aabd1"],
+ "tools/t3ctl": ["t3ctl", "1786a06ca35fdb4bbf6eff2dc02b3af55cb566b6b43fcab93db26b6c96e4e902"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "e230edeebb42f0b9aed481e4e868f2f20f5f76d0e107224d4e6dae05f7b8a655"],
+ "tools/t3listen": ["t3listen", "c2741d36c04dc45d2668c5721ff2c38bfb26e7b3f3acf7369fd7efd8b7eba57d"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "c25e93bc3515d554de7086adec3b79b32f58f6b869b220b015899b4d6253a3eb"],
  "tools/survey.js": ["survey.js", "206fff36b57e111fd061417f2c21eb7ee09fa5dfe1537843a81242d47e5d6052"],

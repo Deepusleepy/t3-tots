@@ -44,7 +44,7 @@ In delegated mode, act first and report after:
 | Event | What to do |
 |---|---|
 | `question` | Answer it or escalate it, as t3-tots-rules "Decisions" says. |
-| `approval` | Run `t3ctl pending --thread <t> --json`. If it shows `standing: true`, accept it with `t3ctl answer --thread <t> --request <id> --decision accept`. Otherwise send it to the user as a card with the command, options and warnings, and accept it only after their yes for that request, adding `--user-approved`. Never accept one yourself. |
+| `approval` | Decline it with `t3ctl answer --thread <t> --request <id> --decision decline --redirect`, so the thread skips it or takes a safer way and keeps going. Log the prompt and its reason for the report. Never accept one yourself. |
 | `queue-stuck` | `t3ctl queue --thread <t> --resume` once. |
 | `queue-held` | Leave it. Someone held it on purpose. Tell the user. |
 | `limit` | If `autoResume` isn't set, run `t3ctl resume-at-reset --thread <t>`. |
@@ -60,4 +60,4 @@ Keep a short log of what you decided and why, and send it to the user when they'
 Start it when the user hands over control (t3-tots-rules "Decisions"). Before the first check:
 1. Save the scope and the end condition to memory.
 2. On a Mac, keep it awake for the run (t3-tots-rules "Computers").
-3. Confirm in one line which threads, until when, and what you'll still ask about. Every approval is still asked, except exact standing approvals.
+3. Confirm in one line which threads, until when, and what you'll still ask about. Approvals are declined with a redirect and listed in the report, never accepted.

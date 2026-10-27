@@ -69,13 +69,11 @@ Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-ans
 
 Delegated mode starts only when you hand over control, for example "I'm away, keep it moving". The agent then answers routine questions, nudges stalled threads, and resumes threads after a usage limit.
 
-It never accepts an approval (a thread asking to run a command or change files) on its own. Each approval comes to you as a card, and the agent accepts it only after your yes for that request. `t3ctl answer` backs this up. An accept without `--user-approved` is refused with `NEEDS_USER_APPROVAL`, and nothing is sent.
+Even a full-access thread can stop on "Allow running this command?" when a safety check flags it, for example a git hook that asks before `git reset --hard`. In delegated mode the agent never says yes to these. It declines them with `t3ctl answer --decision decline --redirect`, which tells the thread not to retry or work around it, to use a safer way or skip that step, and to keep going. You get the list of what was declined and why when you're back.
 
-The one exception is a standing approval: an exact command you typed, saved with `t3ctl standing --add '<command>'`. It covers that command word for word, and nothing else.
+When you're around, each approval comes to you as a card with the reason it asks, and the agent accepts it only after your yes for that request. `t3ctl answer` backs this up. An accept without `--user-approved` is refused with `NEEDS_USER_APPROVAL`, and nothing is sent.
 
-Approval cards show warnings such as "deletes files" or "force push" to help you decide. A command with no warnings can still be dangerous.
-
-Threads that `t3ctl new` and `t3ctl tasks --upsert` start run in full access unless you pass `--runtime`, so they don't ask for approvals.
+Threads that `t3ctl new` and `t3ctl tasks --upsert` start run in full access unless you pass `--runtime`.
 
 ## Requirements
 
@@ -88,7 +86,7 @@ Threads that `t3ctl new` and `t3ctl tasks --upsert` start run in full access unl
 - `t3q.py` opens `statev2.sqlite` read-only. From `server-runtime.json` it reads only `host`, `port` and `pid`.
 - Scripts never open T3's `secrets/` or other credentials. The only token they read sits next to them, after your yes, with a 90-day TTL, and is never printed. Issue and revoke: [t3-tots-rules "Token"](skills/t3-tots-rules/SKILL.md).
 - Traffic stays on `127.0.0.1` except optional `t3listen` POSTs to your webhook. Exports redact API-key patterns and your home path.
-- No token: read-only. With one, `t3ctl answer` sends only the answer you chose, and accepts an approval only with `--user-approved` or for an exact standing approval. `t3ctl skills` writes only into `--to` and its own `out/`.
+- No token: read-only. With one, `t3ctl answer` sends only the answer you chose, and accepts an approval only with `--user-approved`. `t3ctl skills` writes only into `--to` and its own `out/`.
 
 Report issues in [SECURITY.md](SECURITY.md).
 
@@ -97,5 +95,5 @@ Report issues in [SECURITY.md](SECURITY.md).
 - `scripts/check.sh`. Syntax, tests, manifest freshness, CRLF on the Windows wrappers, private-word scan. Never-ship words go one per line in `~/.config/t3-tots/private-words.txt` (do not commit it). No list fails the check. `T3TOTS_NO_PRIVATE_WORDS=1` skips it on purpose.
 - After changing a tool, add it to `TOOLS` in `scripts/make-manifest.py` and run that script. It rewrites `manifest.json` from `VERSION`.
 - `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, and updates the manifest. It copies nothing if the scan fails.
-- `warningsOf` in `tools/t3ctl` only labels approvals. Nothing decides on it, so don't extend its patterns to make approvals safer. Approval decisions go through `approvalAuthority`.
+- Never decide an approval by reading its text. T3 often shows a description instead of the command. Approval decisions go through `approvalAuthority`.
 - Release only from a tag. Installers download by tag and check every hash.

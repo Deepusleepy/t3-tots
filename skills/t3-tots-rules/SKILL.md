@@ -14,7 +14,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 |---|---|
 | t3-new-thread, t3-templates, t3-get-output, t3-pm-thread | Prompts into T3 |
 | t3-thread-actions | The thread action asked: `settle`, `unsettle`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
-| t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, and the standing approvals list, under "Decisions" below |
+| t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, under "Decisions" below |
 | t3-watch (delegated mode) | One nudge per stall (`send`), `queue --resume` once for a stuck queue, and `resume-at-reset` on a usage limit |
 | t3-phone-answers | `t3listen` setup, after a yes. In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
 | t3-update, t3-sync | The items the user picked |
@@ -43,17 +43,16 @@ Never delete or archive threads, and never change T3 settings. t3-update may upd
 ## Decisions
 This section is the one source for who decides; other skills and AGENTS.md point here. A thread asks for two kinds of decision. A question (`user_input`) asks what to build. An approval asks permission to run a command or change files. Who decides depends on the mode the user set, which is saved in memory:
 
-1. Default mode: show questions to the user as cards (or numbered options; see "Grok Bot only") and answer only with their exact pick for that question (t3-phone-answers "Answering"). Summarise approvals and leave them for the app, unless the user says yes to that request in chat or a standing approval (item 3) covers it. Offer thread actions such as `resume-at-reset`; don't run them.
+1. Default mode: show questions to the user as cards (or numbered options; see "Grok Bot only") and answer only with their exact pick for that question (t3-phone-answers "Answering"). Summarise approvals and leave them for the app, unless the user says yes to that request in chat. Offer thread actions such as `resume-at-reset`; don't run them.
 2. Delegated mode starts when the user says something like "decide for me", "do whatever you need" or "I'm away, keep it moving". Record the scope and the end condition in memory. In this mode:
    - Answer routine questions yourself and tell the user afterwards what you picked and why.
-   - Never accept an approval yourself. Send each one to the user as a card (or numbered options) with its command, options and warnings, and accept it only after their yes for that request. A standing approval (item 3) is the one exception.
+   - Never accept an approval yourself. A thread asks for one only when a safety check flagged the command (for example a git hook on `git reset --hard`), even in full access. Decline it with `t3ctl answer --thread <t> --request <id> --decision decline --redirect`. That also tells the thread not to retry or work around it, to use a safer way or skip that step, and to carry on. Log it, and list every declined approval with its reason in your report.
    - Run the delegated-mode actions in the Writes table, and log each one.
    - Escalate questions about product direction, money, publishing, or anything the user said to keep for themselves.
-3. Standing approvals: exact commands the user typed, saved with `t3ctl standing --add '<command>'` after their yes. Never save a kind of command ("read-only commands", "test runs") or a command the user didn't type word for word. `t3ctl answer` accepts a standing approval only when the approval's command is exactly one on the list, either bare or as the whole single-quoted body of `bash -lc '...'` or `pwsh -Command '...'`, and only with `--decision accept`. `t3ctl standing` lists them and `--remove '<command>'` drops one.
 
-`t3ctl pending` prints warnings under an approval, such as "deletes files" or "force push", and `pending --json` adds `warnings` and `standing` (true when a standing approval covers it). Show the warnings to the user. They are labels only. A command with no warnings can still delete files, run downloaded code or read secrets, so no warnings is never a reason to accept.
+The prompt T3 shows is often a short description ("Redo merges with PR names"), not the command itself. `t3ctl pending` prints `why it asks:` with the reason the safety check gave, and `pending --json` has it as `approval.reason`. Show the reason to the user on the card. Never judge an approval safe from its text.
 
-`t3ctl answer --decision` accepts an approval only with `--user-approved` (pass it only after the user's yes for that request) or for a standing approval. Otherwise it refuses with `NEEDS_USER_APPROVAL` and sends nothing. `decline` and `cancel` need neither. Always pass `--request <id>` with the id the user saw. When several approvals are open, or the id matches more than one, t3ctl stops with `AMBIGUOUS` instead of picking one.
+`t3ctl answer --decision` accepts an approval only with `--user-approved`. Pass it only after the user's yes for that request. Otherwise it refuses with `NEEDS_USER_APPROVAL` and sends nothing. `decline` and `cancel` need neither. Always pass `--request <id>` with the id the user saw. When several approvals are open, or the id matches more than one, t3ctl stops with `AMBIGUOUS` instead of picking one.
 
 Never invent the user's preferences. The thread decides how to do the work. The user decides what to build. Your prompts carry the user's context, not your design choices.
 
@@ -118,7 +117,7 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p` (required) `[--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
 | Watch | `watch --thread a[,b] [--state file] [--stall-min 20] [--json]` |
 | Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise) |
-| Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved])`, `standing [--add command \| --remove command]` (no token needed) |
+| Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved \| --redirect])` |
 | Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
 | Thread actions | `settle`, `unsettle`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
@@ -137,7 +136,7 @@ The default token scopes don't cover usage or cost totals, T3 settings (includin
 | `first` | The first check of a thread, with its state |
 | `finished` | A run ended and the thread is idle, asking, or has a plan ready. Also a run that started and ended between two checks |
 | `state` | Any other state change |
-| `question`, `approval` | A new request. An approval shows its command and any warnings |
+| `question`, `approval` | A new request. An approval shows its prompt and why it asks |
 | `stale-request` | An open request that can't be answered, because its run ended. Reported once per request |
 | `queue-held`, `queue-stuck` | The queue was held on purpose, or is stuck |
 | `limit` | The thread stopped on a usage limit |
@@ -153,7 +152,7 @@ Optional. It needs the token and `listen.json`. It follows T3's live events and 
 ### Other scripts and data files
 - `export.js` writes a redacted JSON export for reports. Options work like t3ctl (`--project Foo` or `--project=Foo`; an unknown option is `USAGE`). `--project` is a filter: an exact id, else a folder, else an exact title (case ignored) picks that project, and two exact matches stop with `AMBIGUOUS` listing them; otherwise every project whose title contains the words is exported, and it prints a note naming them. No `--project` means all. `survey.js` lists activity and stale threads.
 - `t3ui` and `ui-*.applescript` are a macOS-only UI fallback. They use the running T3 Code app, or `T3_APP`.
-- Data files the skills create in the tools folder: `templates.md`, `trackers/`, `update-prefs.json`, `sync-prefs.json`, `sync-backups/`, `out/`, `README.md`, `watch-state.json`, `watch-<name>.json`, `autoresume.json`. `t3ctl new` writes `started-here.json`. `t3ctl standing` writes `standing-approvals.json`. t3listen writes `listen.json` (private), `listen-state.json`, `answered-here.json` and `listen.log`.
+- Data files the skills create in the tools folder: `templates.md`, `trackers/`, `update-prefs.json`, `sync-prefs.json`, `sync-backups/`, `out/`, `README.md`, `watch-state.json`, `watch-<name>.json`, `autoresume.json`. `t3ctl new` writes `started-here.json`. t3listen writes `listen.json` (private), `listen-state.json`, `answered-here.json` and `listen.log`.
 - Don't leave scratch files (CSVs, `.bak` copies, screenshots) in the tools folder. Put scratch files in `out/`. On Grok Bot, pages are built on the box (`/workspace`).
 
 ### Master copy
@@ -178,7 +177,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
-| `BAD_STANDING` | `standing-approvals.json` isn't a JSON list of commands. Nothing was accepted. Tell the user, and fix the file only after their yes |
+| `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
 | `NOT_LIMITED` | The thread isn't stopped on a usage limit, so there is nothing to resume |
 | `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
 | `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |
