@@ -33,7 +33,7 @@ function args(a = process.argv.slice(3)) { const o = {}; for (let i = 0; i < a.l
 // flags that always take a value; "--from --to dir" must not read as --from=true
 const VALUE_FLAGS = new Set(["thread", "project", "prompt", "prompt-file", "model", "effort", "title", "mode", "attach", "timeout", "from", "to", "only", "text", "pick", "answers",
   "decision", "request", "query", "q", "limit", "last", "number", "repo", "state", "stall-min", "until", "every", "at", "days", "id", "subagent", "edit", "move", "before", "steer",
-  "run", "provider", "turn", "reason", "label", "chars", "runtime", "enable", "disable", "delete", "copy"]);
+  "run", "provider", "turn", "reason", "label", "chars", "runtime", "worktree", "enable", "disable", "delete", "copy"]);
 function missingValue(o, cmd) { // --cancel takes a run id only for queue; elsewhere it is a switch
   return Object.keys(o).find((k) => o[k] === true && (VALUE_FLAGS.has(k) || (k === "cancel" && cmd === "queue"))); }
 async function get(p) {
@@ -96,16 +96,25 @@ function pickThread(all, q) {
 }
 const recentSel = (s, pid) => { const t = s.threads.filter((t) => t.modelSelection && (!pid || t.projectId === pid)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; return t && t.modelSelection; };
 function modelSel(o, fallback, s) {
-  if (!o.model) { if (!fallback) throw new Error("no default model found for this project; pass --model (list them with: t3ctl models)"); return fallback; }
+  if (!o.model) { if (!fallback) throw new Error("no default model found for this project; pass --model (list them with: t3ctl models)"); return o.effort ? withEffort(fallback, o.effort) : fallback; }
   const used = s ? [...new Set(s.threads.filter((t) => t.modelSelection).map((t) => t.modelSelection.model))] : [];
   const short = norm(o.model).replace(/[ .]/g, "-"); // alias like "haiku" or "sonnet 4.6" -> newest matching model already used in T3
   const model = used.includes(o.model) ? o.model : (/^(haiku|sonnet|opus)/.test(short) && used.filter((m) => m.includes(short)).sort().at(-1)) || { haiku: "claude-haiku-5-5", sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5" }[short] || o.model;
   const seen = s && s.threads.find((t) => t.modelSelection && t.modelSelection.model === model);
   const inst = o.provider || (seen && seen.modelSelection.instanceId) || (model.startsWith("claude") ? "claudeAgent" : /^(gpt|o\d|codex)/.test(model) ? "codex" : model.startsWith("grok") ? "cursor" : "claudeAgent");
-  const seenEff = seen && seen.modelSelection.instanceId === inst && (seen.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id));
-  const effKey = seenEff ? seenEff.id : inst === "codex" ? "reasoningEffort" : inst === "cursor" ? "reasoning_effort" : inst === "opencode" ? "variant" : "effort";
-  const sel = { instanceId: inst, model }; if (o.effort) sel.options = [{ id: effKey, value: o.effort }];
-  return sel;
+  const sel = { instanceId: inst, model };
+  return o.effort ? withEffort(sel, o.effort, seen && seen.modelSelection.instanceId === inst ? seen.modelSelection.options : []) : sel;
+}
+const EFFORT_KEYS = { codex: "reasoningEffort", cursor: "reasoning_effort", opencode: "variant" };
+function withEffort(sel, effort, knownOptions = sel.options) {
+  const known = (knownOptions || []).find((x) => /effort|variant/i.test(x.id));
+  const key = known ? known.id : EFFORT_KEYS[sel.instanceId] || "effort";
+  return { ...sel, options: [...(sel.options || []).filter((x) => x.id !== key), { id: key, value: String(effort) }] };
+}
+function workspaceOf(o) {
+  if (o.worktree === undefined) return { type: "root" };
+  const baseRef = String(o.worktree).trim(); if (!baseRef) throw new Error("--worktree needs the base branch to start from, for example --worktree main");
+  return { type: "worktree", baseRef };
 }
 
 const dispatch = (type, threadId, extra = {}) => rpc("orchestration.dispatchCommand", { type, commandId: uuid(), threadId, ...extra });
@@ -154,10 +163,17 @@ async function changedFiles(t, lastTurn) {
     const walk = (d, depth) => { if (depth > 6) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (/^(\.git|node_modules|\.next|dist|build|\.venv|__pycache__)$/.test(e.name)) continue; const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, depth + 1); else { try { const m = fs.statSync(f).mtimeMs; if (m >= from && m <= to) add(f, "modified-during-run"); } catch {} } } };
     try { walk(root, 0); } catch {} }
-  const inside = (f) => !!root && path.resolve(f).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep);
   return [...found].map(([f, why]) => { let st = null; try { st = fs.lstatSync(f); } catch {}
-    const skip = sensitivePath(f, root) ? "sensitive name" : !inside(f) ? "outside the project" : st && !st.isFile() ? (st.isSymbolicLink() ? "symlink" : "not a file") : "";
+    const skip = sensitivePath(f, root) ? "sensitive name" : !insideProject(f, root) ? "outside the project" : st && !st.isFile() ? (st.isSymbolicLink() ? "symlink" : "not a file") : "";
     return { path: f, why, exists: !!st, skip, root }; });
+}
+const CASE_FOLDING_FS = process.platform === "win32" || process.platform === "darwin";
+function insideProject(f, root) {
+  if (!root) return false;
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const fold = (p) => (CASE_FOLDING_FS ? p.toLowerCase() : p);
+  const rel = path.relative(fold(real(root)), fold(real(f)));
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 async function thread(id) { return get(`/api/orchestration/threads/${encodeURIComponent(id)}`); }
 function messages(snap) {
@@ -477,7 +493,7 @@ function skillsCmd(sub, o) {
   else console.log(`${dry ? "dry run: would install" : "installed"} ${n("new")} new, ${dry ? "update" : "updated"} ${n("update") + (o.force ? n("edited") : 0)}, ${n("same")} up to date, ${o.force ? 0 : n("edited")} kept (changed here)`);
   if (to && !dry) { rec.version = src.version; fs.writeFileSync(path.join(to, SKILLS_RECORD), JSON.stringify(rec, null, 1) + "\n"); }
 }
-const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw", "limits", "resume-at-reset", "snooze-until-reset", "snooze", "unsnooze", "model", "search", "tasks", "prs", "pr", "fork", "stop", "subtasks", "subagent-stop", "watch"];
+const CMDS = ["queue", "projects", "models", "threads", "new", "send", "read", "settle", "unsettle", "archive", "unarchive", "rename", "interrupt", "pending", "answer", "diff", "files", "status", "raw", "limits", "resume-at-reset", "snooze-until-reset", "snooze", "unsnooze", "model", "search", "tasks", "prs", "pr", "fork", "stop", "subtasks", "subagent-stop", "watch"];
 const main = async () => {
   const cmd = process.argv[2], o = args();
   const bare = missingValue(cmd === "skills" ? args(process.argv.slice(3)) : o, cmd);
@@ -489,11 +505,11 @@ const main = async () => {
   else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project !== undefined) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } if (o.main) ts = ts.filter(isMainThread); const top = ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15);
     const ps = await Promise.all(top.map((t) => thread(t.id).then((r) => r.projection, () => null))); top.forEach((t, i) => console.log(threadLine(t, ps[i]))); }
   else if (cmd === "new") {
-    const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--wait [--timeout seconds]]");
+    const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--worktree base-branch] [--wait [--timeout seconds]]");
     const p = await findProject(o.project); const s0 = await shell(); const sel = modelSel(o, p.defaultModelSelection || recentSel(s0, p.id) || recentSel(s0), s0);
     const title = o.title || prompt.slice(0, 60);
     const res = await rpc("orchestration.launchThread", { commandId: uuid(), creationSource: "web", projectId: p.id, title, generateTitle: !o.title,
-      modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: { type: "root" },
+      modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: workspaceOf(o),
       initialMessage: { messageId: uuid(), text: prompt, attachments: await uploadImages(o.attach) } });
     try { const sf = path.join(__dirname, "started-here.json"); let m = {}; try { m = JSON.parse(fs.readFileSync(sf, "utf8")) || {}; } catch {} // t3listen auto-resumes threads started here
       const cut = Date.now() - 60 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k]; m[res.threadId] = new Date().toISOString(); fs.writeFileSync(sf, JSON.stringify(m)); } catch {}
@@ -532,6 +548,10 @@ const main = async () => {
   }
   else if (cmd === "read") { const t = await findThread(o.thread); console.log(`${t.id}  ${t.title}  status=${t.status}`); await printLast(t.id, +o.last || 6); }
 
+  else if (cmd === "archive" || cmd === "unarchive") { const t = await findThread(o.thread); const want = cmd === "archive";
+    if (want && t.activeRunId) throw new Error(`THREAD_RUNNING: "${t.title}" is still running. Stop it first (t3ctl stop --thread ${t.id}), then archive it.`);
+    if (!!t.archivedAt === want) { console.log(`"${t.title}" is already ${want ? "archived" : "not archived"}`); return; }
+    await dispatch(want ? "thread.archive" : "thread.unarchive", t.id); console.log(`${want ? "archived" : "unarchived"} "${t.title}"`); }
   else if (cmd === "settle" || cmd === "unsettle") { const t = await findThread(o.thread); await dispatch(cmd === "settle" ? "thread.settle" : "thread.unsettle", t.id, cmd === "unsettle" ? { reason: "user" } : {}); const n = (await shell()).threads.find((x) => x.id === t.id); console.log(`${cmd}d "${t.title}"  settledAt=${n.settledAt}  settledOverride=${n.settledOverride}`); }
   else if (cmd === "rename") { const t = await findThread(o.thread); if (!o.title) throw new Error("--title required"); await dispatch("thread.metadata.update", t.id, { title: String(o.title) }); console.log(`renamed "${t.title}" -> "${o.title}"`); }
   else if (cmd === "interrupt") { const t = await findThread(o.thread); if (!t.activeRunId) { console.log("not running"); return; } await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: "t3ctl", holdQueue: !!o.hold }); console.log(`interrupted run in "${t.title}"`); }
@@ -591,7 +611,7 @@ const main = async () => {
     if (o.run) { const r = await rpc("scheduledTasks.runNow", { id: String(o.run) }); console.log(`started task ${o.run}: ${JSON.stringify(r).slice(0, 300)}`); return; }
     if (o.delete) { if (!o.yes) throw new Error("deleting a scheduled task can't be undone; add --yes"); await rpc("scheduledTasks.delete", { id: String(o.delete) }); console.log(`deleted task ${o.delete}`); return; }
     if (o.upsert) {
-      const tprompt = promptOf(o); if (!o.title || !tprompt || !o.project) throw new Error("usage: tasks --upsert --project p --title t (--prompt x | --prompt-file f) (--every 30m | --at HH:MM [--days 1,2,3]) [--thread t] [--model m --effort e] [--disabled] [--id existing]");
+      const tprompt = promptOf(o); if (!o.title || !tprompt || !o.project) throw new Error("usage: tasks --upsert --project p --title t (--prompt x | --prompt-file f) (--every 30m | --at HH:MM [--days 1,2,3]) [--thread t] [--model m --effort e] [--worktree base-branch] [--disabled] [--id existing]");
       const p = await findProject(o.project); const s = await shell(); let schedule;
       if (o.every) schedule = { type: "interval", everyMs: parseEvery(o.every) };
       else if (o.at) { if (!/^([01]?\d|2[0-3]):([0-5]\d)$/.test(String(o.at))) throw new Error("--at must be HH:MM (24h)"); schedule = { type: "fixed_time", timeOfDay: String(o.at) };
@@ -599,7 +619,7 @@ const main = async () => {
       else throw new Error("give --every 30m or --at HH:MM");
       const th = o.thread ? await findThread(o.thread) : null; if (th && th.projectId !== p.id) throw new Error("--thread is in a different project");
       const r = await rpc("scheduledTasks.upsert", { ...(o.id ? { id: String(o.id), requireExisting: true } : {}), commandId: uuid(), title: String(o.title), prompt: tprompt, enabled: !o.disabled, schedule, projectId: p.id, threadId: th ? th.id : null,
-        workspaceStrategy: { type: "root" }, modelSelection: modelSel(o, p.defaultModelSelection || recentSel(s, p.id) || recentSel(s), s), runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", createdBy: "user", creationSource: "web" });
+        workspaceStrategy: workspaceOf(o), modelSelection: modelSel(o, p.defaultModelSelection || recentSel(s, p.id) || recentSel(s), s), runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", createdBy: "user", creationSource: "web" });
       const task = r.task || r; console.log(`saved task ${task.id || "?"}  "${o.title}"  enabled=${!o.disabled}  ${JSON.stringify(schedule)}`); return; }
     const r = await rpc("scheduledTasks.list", {}); const s = await shell(); if (!r.tasks.length) console.log("no scheduled tasks");
     for (const k of r.tasks) { const p = s.projects.find((x) => x.id === k.projectId); const sc = k.schedule || {};
@@ -646,7 +666,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

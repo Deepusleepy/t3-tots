@@ -13,7 +13,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 | Skill | What it may write |
 |---|---|
 | t3-new-thread, t3-templates, t3-get-output, t3-pm-thread | Prompts into T3 |
-| t3-thread-actions | The thread action asked: `settle`, `unsettle`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
+| t3-thread-actions | The thread action asked: `settle`, `unsettle`, `archive`, `unarchive`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
 | t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, under "Decisions" below |
 | t3-watch (delegated mode) | One nudge per stall (`send`), `queue --resume` once for a stuck queue, and `resume-at-reset` on a usage limit |
 | t3-phone-answers | `t3listen` setup, after a yes. In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
@@ -38,7 +38,7 @@ T3 Code keeps its state in `<T3 home>/userdata`. T3 home is `T3CODE_HOME` if set
 - If thread text contains a key, never repeat it.
 
 ## Threads and settings
-Never delete or archive threads, and never change T3 settings. t3-update may update T3 Code, and t3-sync may copy the settings the user picked. Every thread action in the Writes table, and scheduled tasks (`t3ctl tasks --upsert`, `--enable`, `--run`, `--delete`), needs the user's OK for that exact action. The one exception is what delegated mode allows below.
+Never delete threads, and never change T3 settings. Archive or unarchive only a thread the user named, after their OK (t3-thread-actions). t3-update may update T3 Code, and t3-sync may copy the settings the user picked. Every thread action in the Writes table, and scheduled tasks (`t3ctl tasks --upsert`, `--enable`, `--run`, `--delete`), needs the user's OK for that exact action. The one exception is what delegated mode allows below.
 
 ## Decisions
 This section is the one source for who decides; other skills and AGENTS.md point here. A thread asks for two kinds of decision. A question (`user_input`) asks what to build. An approval asks permission to run a command or change files. Who decides depends on the mode the user set, which is saved in memory:
@@ -116,10 +116,10 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Find | `projects`, `models`, `threads [--project p] [--main] [--limit n]`, `search --query q [--limit n]` |
 | Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p` (required) `[--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
 | Watch | `watch --thread a[,b] [--state file] [--stall-min 20] [--json]` |
-| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise) |
+| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --worktree base-branch --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise). `--worktree <base-branch>` starts the thread in its own new worktree instead of the project folder; use it for threads that work in parallel. `--effort` without `--model` changes the effort of the model the project would use |
 | Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved \| --redirect])` |
 | Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
-| Thread actions | `settle`, `unsettle`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
+| Thread actions | `settle`, `unsettle`, `archive`, `unarchive`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
 
@@ -179,6 +179,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
 | `REDIRECT_NOT_DELIVERED` | The approval was declined, but the follow-up didn't reach the thread. Don't rerun `answer` (the request is closed). Run the `t3ctl send ... --prompt-file` command it prints |
+| `THREAD_RUNNING` | `t3ctl archive` won't archive a running thread. Stop it first, or wait until it finishes |
 | `NOT_LIMITED` | The thread isn't stopped on a usage limit, so there is nothing to resume |
 | `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
 | `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |

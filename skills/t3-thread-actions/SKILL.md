@@ -1,9 +1,9 @@
 ---
 name: t3-thread-actions
 description: >-
-  Settle, unsettle, rename, stop, snooze, fork, switch model or search T3 threads,
+  Settle, unsettle, archive, unarchive, rename, stop, snooze, fork, switch model or search T3 threads,
   manage a thread's queue, or resume one after a usage limit. Use for "settle
-  <thread>", "rename <thread>", "stop <thread>", "snooze <thread>", "resume after
+  <thread>", "archive <thread>", "rename <thread>", "stop <thread>", "snooze <thread>", "resume after
   the limit". For "what is <thread> asking", use t3-waiting.
 ---
 Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Find the thread with its "Finding a thread" section, then do only the action asked, on that thread.
@@ -12,6 +12,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Find the thread 
 | Action | Command |
 |---|---|
 | Settle or unsettle (reversible) | `t3ctl settle --thread '<t>'`, `t3ctl unsettle --thread '<t>'` |
+| Archive or unarchive (reversible; hides it from the sidebar and stops its PR watches) | `t3ctl archive --thread '<t>'`, `t3ctl unarchive --thread '<t>'`. A running thread can't be archived (`THREAD_RUNNING`); stop it first only if the user says so |
 | Rename | `t3ctl rename --thread '<t>' --title '<new>'` |
 | Stop the running turn | `t3ctl interrupt --thread '<t>'`; `--hold` also holds the queue |
 | Stop a run and its sub-tasks | `t3ctl stop --thread '<t>'`; this holds the queue |
