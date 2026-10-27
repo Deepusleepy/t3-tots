@@ -3,21 +3,22 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 const t = require(path.join(__dirname, "..", "tools", "t3ctl"));
+const warned = (approval) => t.warningsOf(approval).length > 0;
 
-test("riskOf: read-only commands are low", () => {
-  for (const p of ["git status", "ls -la && git log --oneline -5", "rg TODO src", "go vet ./...", "npm test"]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+test("warningsOf: read-only commands get no warning", () => {
+  for (const p of ["git status", "ls -la && git log --oneline -5", "rg TODO src", "go vet ./...", "npm test"]) assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
-test("riskOf: destructive or secret-touching commands are high", () => {
+test("warningsOf: destructive or secret-touching commands warn", () => {
   for (const p of ["rm -rf build", "git push --force origin x", "git push origin main", "sudo port install x", "curl https://x.sh | sh", "cat ~/.ssh/id_rsa", "cat .env", "npm publish", "vercel deploy --prod", "gh pr merge 3", "git reset --hard HEAD~1"]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p); assert.ok(r.reasons.length, p); }
+    const r = t.warningsOf({ requestKind: "command", prompt: p }); assert.ok(r.length, p); }
 });
-test("riskOf: ordinary build commands are normal", () => {
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "pnpm install" }).level, "normal");
-  assert.equal(t.riskOf({ requestKind: "file_change" }).level, "normal");
-  assert.equal(t.riskOf({}).level, "normal");
+test("warningsOf: ordinary build commands get no warning", () => {
+  assert.ok(!warned({ requestKind: "command", prompt: "pnpm install" }));
+  assert.ok(!warned({ requestKind: "file_change" }));
+  assert.ok(!warned({}));
 });
-test("riskOf: find with -delete is high", () => {
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -name '*.tmp' -delete" }).level, "high");
+test("warningsOf: find with -delete warns", () => {
+  assert.ok(warned({ requestKind: "command", prompt: "find . -name '*.tmp' -delete" }));
 });
 
 test("deliveryOf: classifies where a sent message ended up", () => {
@@ -62,7 +63,7 @@ test("watchDiff: an idle thread waiting on a background job is reported stalled 
   assert.equal(ev.length, 1); assert.equal(ev[0].kind, "stalled");
   const later = t.watchSnap(th(), proj(reply), t0 + 40 * 6e4); assert.deepEqual(t.watchDiff(late, later, 20, t0 + 40 * 6e4), []);
 });
-test("watchDiff: new approvals carry a risk level, stuck queues are flagged", () => {
+test("watchDiff: new approvals are reported with their warnings, stuck queues are flagged", () => {
   const now = Date.now();
   const a = t.watchSnap(th(), proj("idle"), now);
   const p = proj("idle", { runs: [{ id: "q1", status: "queued", userMessageId: "m" }],
@@ -70,7 +71,7 @@ test("watchDiff: new approvals carry a risk level, stuck queues are flagged", ()
     turnItems: [{ type: "assistant_message", text: "idle" }, { type: "approval_request", requestId: "req1", requestKind: "command", prompt: "git push --force" }] });
   const b = t.watchSnap(th({ updatedAt: "2026-01-01T02:00:00Z" }), p, now + 6e4);
   const kinds = t.watchDiff(a, b, 20, now + 6e4).map((e) => e.kind);
-  assert.ok(kinds.includes("approval-high"), kinds.join()); assert.ok(kinds.includes("queue-stuck"), kinds.join());
+  assert.ok(kinds.includes("approval"), kinds.join()); assert.ok(kinds.includes("queue-stuck"), kinds.join());
 });
 test("watchDiff: usage limit is reported with the reset time", () => {
   const now = Date.now();
@@ -93,19 +94,17 @@ test("decodeText: UTF-8 BOM, UTF-16 LE/BE (Windows PowerShell 5) and CRLF", () =
   const be = Buffer.from(s, "utf16le"); be.swap16();
   assert.equal(t.decodeText(Buffer.concat([Buffer.from([0xfe, 0xff]), be])), "Line one\nLine two é\n");
 });
-test("riskOf: pipes into a shell and redirects that write are not low", () => {
-  for (const p of ["cat install.sh | bash", "echo hi > ~/.zshrc", "git log >> notes.md", "ls | tee out.txt", "echo $(whoami)"])
-    assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+test("warningsOf: harmless pipes and stderr redirects get no warning", () => {
   for (const p of ["git log | head -5", "rg TODO | wc -l", "npm test 2>&1", "ls 2>/dev/null"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+    assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
-test("riskOf: shell wrappers are unwrapped and Windows commands are judged", () => {
+test("warningsOf: shell wrappers are unwrapped and Windows commands are judged", () => {
   assert.equal(t.unwrapShell("bash -lc 'git status'"), "git status");
   assert.equal(t.unwrapShell('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-ChildItem src"'), "Get-ChildItem src");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "/bin/zsh -lc 'ls -la && git diff'" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: 'pwsh.exe -NoProfile -Command "Get-Content README.md"' }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "/bin/zsh -lc 'ls -la && git diff'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: 'pwsh.exe -NoProfile -Command "Get-Content README.md"' }));
   for (const p of ['pwsh -Command "Remove-Item -Recurse -Force build"', "rd /s /q dist", "taskkill /F /IM node.exe", "Stop-Process -Name node", "Start-Process pwsh -Verb RunAs"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
 });
 test("watchDiff: a run that ends on a question or a plan is 'finished'", () => {
   const now = Date.now();
@@ -240,13 +239,13 @@ test("sensitivePath: auth is a whole word (author.md is fine); keys, .env, .ssh 
   for (const f of ["author.md", "AUTHORS", "authors/list.md", "docs/authority.md", "envoy.yaml", "src/environment.ts"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
 });
 
-test("riskOf: git options before push (git -C path, git -c k=v) don't hide a force push or a push to main", () => {
+test("warningsOf: git options before push (git -C path, git -c k=v) don't hide a force push or a push to main", () => {
   for (const p of ["git -C /repo push --force", 'git -C "/a b/repo" push origin main', "git -c core.x=y push -f", "git --no-pager -C . push origin HEAD:master", "git -C repo reset --hard"]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p }); assert.ok(r.length, p);
   }
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git -C /repo push origin feature" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git -C /repo push origin feature" }));
 });
-test("riskOf: --git-dir/--work-tree/--namespace take the next token; git.exe, clustered -f, reset options, clean --force, push --delete", () => {
+test("warningsOf: --git-dir/--work-tree/--namespace take the next token; git.exe, clustered -f, reset options, clean --force, push --delete", () => {
   const high = [
     "git --git-dir /repo push --force", "git --work-tree /repo push --force", "git -C /repo --work-tree /wt push --force",
     "git --git-dir /repo reset --hard", "git --work-tree /repo reset --hard", "git -C /repo --work-tree /wt reset --hard",
@@ -258,7 +257,7 @@ test("riskOf: --git-dir/--work-tree/--namespace take the next token; git.exe, cl
     "git.exe -C /repo push --force",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p }); assert.ok(r.length, p);
   }
 });
 test("sensitivePath: acronyms before a sensitive word (HTTPAuth, getHTTPAuth, XMLAuth) are caught", () => {
@@ -268,16 +267,15 @@ test("sensitivePath: acronyms before a sensitive word (HTTPAuth, getHTTPAuth, XM
   for (const f of ["author.md", "AUTHORS", "docs/authority.md"]) assert.equal(t.sensitivePath(path.join(root, f), root), false, f);
 });
 
-test("riskOf: git branch --delete/-m and fetch refspecs are not read-only; listing and bare fetch stay low", () => {
+test("warningsOf: git branch --delete/-m and fetch refspecs warn; listing and bare fetch get no warning", () => {
   for (const p of ["git branch --delete feature", "git branch -D feature", "git branch -m old new", "git branch -M old new"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   for (const p of ["git fetch origin main:main", "git fetch . +refs/heads/experiment:refs/heads/main", "git fetch origin +main"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   for (const p of ["git branch", "git branch --list", "git branch --show-current", "git branch -v", "git fetch", "git fetch origin", "git fetch origin feature", "git fetch https://example.com/repo.git", "git fetch git@github.com:foo/bar.git"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+    assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
-test("riskOf: sibling git forms (clustered -f, tokens before --hard, clean -f anywhere, push :, git.exe quotes, attached -C, git.cmd) are high", () => {
+test("warningsOf: sibling git forms (clustered -f, tokens before --hard, clean -f anywhere, push :, git.exe quotes, attached -C, git.cmd) warn", () => {
   const high = [
     "git push -fv", "git push -fqu", "git push -vfu",
     "git reset HEAD --hard", "git reset -q HEAD --hard",
@@ -289,154 +287,153 @@ test("riskOf: sibling git forms (clustered -f, tokens before --hard, clean -f an
     "git checkout -f", "git switch --discard-changes", "git restore --worktree --source=HEAD .", "git push --mirror",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p }); assert.ok(r.length, p);
   }
 });
-test("riskOf: long-form rm/find/Remove-Item deletes are high", () => {
+test("warningsOf: long-form rm/find/Remove-Item deletes warn", () => {
   for (const p of ["rm --recursive --force", "rm --force", "find . -delete", "find . -exec rm {} +", "Remove-Item -r -fo"]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p }); assert.equal(r.level, "high", p); assert.ok(r.reasons.length, p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p }); assert.ok(r.length, p); assert.ok(r.length, p);
   }
 });
 
-test("riskOf: push delete-refspec is high anywhere after push; HEAD:branch is not", () => {
+test("warningsOf: push delete-refspec warns anywhere after push; HEAD:branch is not", () => {
   for (const p of ["git push :foo", "git push origin :foo", "git push -u origin :foo", "git push --atomic origin :feature", "git --no-pager push -u origin :gone"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push HEAD:branch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git push HEAD:branch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:feature" }));
 });
 
-test("riskOf: switch/restore/checkout destructive forms are high; staged-only restore and create-branch are not", () => {
+test("warningsOf: switch/restore/checkout destructive forms warn; staged-only restore and create-branch are not", () => {
   const high = [
     "git switch -f", "git switch --force", "git switch -C existing", "git switch --force-create existing",
     "git restore .", "git restore --source=HEAD .", "git restore -W .", "git restore --worktree --source=HEAD .",
     "git restore --staged --worktree file", "git restore -S -W file",
     "git checkout -- .", "git checkout HEAD -- file", "git checkout -B existing",
   ];
-  for (const p of high) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  for (const p of high) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore -S file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git switch -c newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
 });
 
-test("riskOf: branch short-flag clusters and --force/-C are high; listing stays low", () => {
+test("warningsOf: branch short-flag clusters and --force/-C warn; listing gets no warning", () => {
   for (const p of ["git branch -d -v feature", "git branch -dv feature", "git branch -Dvf feature", "git branch -C dest", "git branch --force dest"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   for (const p of ["git branch", "git branch --list", "git branch --show-current", "git branch -v"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+    assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: find -exec/-execdir/-ok/-okdir rm (and /rm) are high and not read-only; -execdir is not rm -rf", () => {
+test("warningsOf: find -exec/-execdir/-ok/-okdir rm (and /rm) warn; -execdir is not rm -rf", () => {
   for (const p of ["find /var/tmp -name core -exec /bin/rm {} \\;", "find . -ok rm {} \\;", "find . -execdir rm {} +", "find . -okdir /usr/bin/rm {} \\;", "find . -exec rm {} +"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -name '*.tmp' -print" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -name '*.tmp' -print" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
 });
 
-test("riskOf: PowerShell Remove-Item unique prefixes of Recurse/Force are high; -filter is not", () => {
+test("warningsOf: PowerShell Remove-Item unique prefixes of Recurse/Force warn; -filter is not", () => {
   for (const p of ["Remove-Item -Recurse x", "Remove-Item -r x", "Remove-Item -Force x", "Remove-Item -fo x", "Remove-Item -Rec x", "Remove-Item -Re x", "Remove-Item -for x", "Remove-Item -forc x", "del -rec x"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "Remove-Item -filter x" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "Remove-Item x" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "Remove-Item -filter x" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "Remove-Item x" }));
 });
 
-test("riskOf: fetch --prune/-p and push --all/--prune are high; bare fetch stays low", () => {
+test("warningsOf: fetch --prune/-p and push --all/--prune warn; bare fetch gets no warning", () => {
   for (const p of ["git fetch --prune", "git fetch -p", "git push --all", "git push --prune", "git push --mirror"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   for (const p of ["git fetch", "git fetch origin", "git fetch origin feature"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+    assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: single-quoted git.exe / git.cmd are judged like double-quoted", () => {
+test("warningsOf: single-quoted git.exe / git.cmd are judged like double-quoted", () => {
   for (const p of ["'git.exe' push --force", "'git.cmd' reset --hard", '"git.exe" push --force', '"git.cmd" reset --hard'])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: push -d and quoted delete refspecs are high; HEAD:branch stays normal", () => {
+test("warningsOf: push -d and quoted delete refspecs warn; HEAD:branch gets no warning", () => {
   for (const p of ["git push -d origin feature", "git push origin ':feature'", 'git push origin ":feature"', "git push -u origin ':gone'"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push HEAD:branch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git push HEAD:branch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:feature" }));
 });
 
-test("riskOf: checkout pathspec / tree-ish+path / --ours/--theirs are high; checkout -b is not", () => {
+test("warningsOf: checkout pathspec / tree-ish+path / --ours/--theirs warn; checkout -b is not", () => {
   for (const p of ["git checkout .", "git checkout HEAD file", "git checkout HEAD~1 src/app.js", "git checkout --ours file", "git checkout --theirs path"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --help" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout --help" }));
 });
 
-test("riskOf: unique prefixes of restore --worktree and switch --discard-changes are high", () => {
+test("warningsOf: unique prefixes of restore --worktree and switch --discard-changes warn", () => {
   for (const p of ["git restore --staged --work file", "git restore --staged --workt file", "git restore --w file", "git switch --discard-c main", "git switch --dis main"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git switch -c newbranch" }));
 });
 
-test("riskOf: PowerShell rm -Recurse/-Force is high; Unix rm -r stays a single Unix match", () => {
+test("warningsOf: PowerShell rm -Recurse/-Force warns; Unix rm -r stays a single Unix match", () => {
   for (const p of ["rm -Recurse build", "rm -Force build", "rm -fo build", 'pwsh -Command "rm -Recurse build"']) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.ok(r.reasons.some((x) => /PowerShell rm/i.test(x)), p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
+    assert.ok(r.some((x) => /PowerShell rm/i.test(x)), p);
   }
-  const unix = t.riskOf({ requestKind: "command", prompt: "rm -r build" });
-  assert.equal(unix.level, "high");
-  assert.equal(unix.reasons.filter((x) => /PowerShell rm/i.test(x)).length, 0);
-  assert.equal(unix.reasons.length, 1);
+  const unix = t.warningsOf({ requestKind: "command", prompt: "rm -r build" });
+  assert.ok(unix.length);
+  assert.equal(unix.filter((x) => /PowerShell rm/i.test(x)).length, 0);
+  assert.equal(unix.length, 1);
 });
 
-test("riskOf: find -exec quoted rm, wrappers, unlink/rmdir, and -execdir sh -c rm are high and not read-only", () => {
+test("warningsOf: find -exec quoted rm, wrappers, unlink/rmdir, and -execdir sh -c rm warn", () => {
   const high = [
     "find . -exec 'rm' {} \\;", "find . -exec command rm {} \\;", "find . -exec env rm {} \\;",
     "find . -execdir sh -c 'rm \"$1\"' _ {} \\;", "find . -exec unlink {} \\;", "find . -exec rmdir {} \\;",
     "find . -okdir env rm {} \\;", "find . -ok unlink {} \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
 });
 
-test("riskOf: fetch --force/-f, pull prune, and remote prune are high; bare fetch stays low", () => {
+test("warningsOf: fetch --force/-f, pull prune, and remote prune warn; bare fetch gets no warning", () => {
   for (const p of ["git fetch --force", "git fetch -f origin feature", "git pull -p", "git pull --prune", "git remote prune origin"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   for (const p of ["git fetch", "git fetch origin feature"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+    assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: unique prefixes of already-high long options; skip prefixes git itself rejects", () => {
+test("warningsOf: unique prefixes of already-warned long options; skip prefixes git itself rejects", () => {
   for (const p of ["git push --al origin", "git push --mi origin", "git push --pru origin", "git branch --del feature", "git branch --delet feature", "git branch --mov old new", "rm -d emptydir", "rm --rec build"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   // git branch --for is ambiguous (--force vs --format); git fetch --pru is ambiguous (--prune vs --prune-tags)
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pru" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch --for dest" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --pru" }));
 });
 
-test("riskOf: shorter unique prefixes git 2.43 / GNU rm already accept are high", () => {
+test("warningsOf: shorter unique prefixes git 2.43 / GNU rm already accept warn", () => {
   // git push --de is --delete (unique vs --dry-run). git branch --d/--de is --delete; --mo is --move.
   // rm --r/--re is --recursive; --f is --force; --d is --dir. git switch --di is --discard-changes.
   for (const p of [
     "git push --de origin feature", "git branch --d feature", "git branch --de feature", "git branch --mo old new",
     "rm --r build", "rm --re build", "rm --f build", "rm --d emptydir", "git switch --di main",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
   // skipped: git push --d is ambiguous (--delete vs --dry-run); git switch --d is (--discard-changes vs --detach);
   // git branch --m is (--move vs --merged). git rejects these.
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push --d origin feature" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch --d main" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --m old new" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git push --d origin feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git switch --d main" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch --m old new" }));
 });
 
-test("riskOf: git pull --force/-f/--fo is high like fetch --force; --ff-only stays normal", () => {
+test("warningsOf: git pull --force/-f/--fo warns like fetch --force; --ff-only gets no warning", () => {
   for (const p of ["git pull -f", "git pull --force", "git pull --fo", "git pull -pf origin"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull --ff-only" }));
   // git pull --f is ambiguous (--force vs --ff-only); git rejects it
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --f" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull --f" }));
 });
 
-test("riskOf: find -exec wrappers, quoted/path shells, git rm, and multiline -exec are high and not read-only", () => {
+test("warningsOf: find -exec wrappers, quoted/path shells, git rm, and multiline -exec warn", () => {
   const high = [
     "find . -exec /bin/sh -c 'rm {}' \\;",
     "find . -exec 'sh' -c 'rm {}' \\;",
@@ -452,14 +449,13 @@ test("riskOf: find -exec wrappers, quoted/path shells, git rm, and multiline -ex
     "find . -okdir git rm {} \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
 });
 
-test("riskOf: checkout path / tree-ish+path / --ours --theirs prefixes / -2 -3 are high; -b stays normal", () => {
+test("warningsOf: checkout path / tree-ish+path / --ours --theirs prefixes / -2 -3 warn; -b gets no warning", () => {
   const high = [
     "git checkout ../file", "git checkout ..",
     "git checkout './file'", 'git checkout "./src/app.js"',
@@ -468,26 +464,25 @@ test("riskOf: checkout path / tree-ish+path / --ours --theirs prefixes / -2 -3 a
     "git checkout --our file", "git checkout --ou file", "git checkout --their file", "git checkout --th file",
     "git checkout -2 file", "git checkout -3 file",
   ];
-  for (const p of high) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --help" }).level, "high");
+  for (const p of high) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout main" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout --help" }));
   // git checkout --o is ambiguous (--ours vs --overwrite-ignore); --t is (--theirs vs --track)
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --o file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --t file" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout --o file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout --t file" }));
 });
 
-test("riskOf: quoted force refspecs on push and fetch are high like the unquoted form", () => {
+test("warningsOf: quoted force refspecs on push and fetch warn like the unquoted form", () => {
   for (const p of [
     "git push origin '+feature'", 'git push origin "+feature"',
     "git push origin '+ :gone'", "git push origin '+:gone'",
     "git fetch origin '+feature:feature'", "git fetch origin '+refs/heads/a:refs/heads/b'",
     'git fetch origin "+refs/heads/a:refs/heads/b"',
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: find -exec ksh/ash/fish/csh/busybox/timeout deletes are high and not read-only", () => {
+test("warningsOf: find -exec ksh/ash/fish/csh/busybox/timeout deletes warn", () => {
   const high = [
     "find . -exec ksh -c 'rm {}' \\;",
     "find . -exec /bin/ash -c 'rm {}' \\;",
@@ -503,51 +498,50 @@ test("riskOf: find -exec ksh/ash/fish/csh/busybox/timeout deletes are high and n
     "find . -exec tcsh -c 'rm {}' \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }));
 });
 
-test("riskOf: unique prefixes git already accepts for reset --hard, branch --force, push --mirror", () => {
+test("warningsOf: unique prefixes git already accepts for reset --hard, branch --force, push --mirror", () => {
   for (const p of ["git reset --h", "git reset --ha", "git reset --har", "git reset --hard HEAD"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
   for (const p of ["git branch -f existing HEAD", "git branch --forc existing HEAD", "git branch --force existing HEAD"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch --for dest" }));
   for (const p of ["git branch", "git branch --list", "git branch --show-current", "git branch -v"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git push --m origin" }).level, "high");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git push --mi origin" }).level, "high");
+    assert.ok(!warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(warned({ requestKind: "command", prompt: "git push --m origin" }));
+  assert.ok(warned({ requestKind: "command", prompt: "git push --mi origin" }));
 });
 
-test("riskOf: -b/--orphan exemption does not hide a discard on the same command or chained before -b", () => {
+test("warningsOf: -b/--orphan exemption does not hide a discard on the same command or chained before -b", () => {
   for (const p of [
     "git checkout -f -b newbranch",
     "git checkout -f --orphan newbranch",
     "git checkout -f main && git checkout -b newbranch",
     "git checkout -- . && git checkout -b newbranch",
     "git checkout main file && git checkout -b newbranch",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b new origin/main" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --orphan newbranch" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b new origin/main" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout --orphan newbranch" }));
 });
 
-test("riskOf: quoted / Windows / glob checkout pathspecs are high; bare branch and -b stay normal", () => {
+test("warningsOf: quoted / Windows / glob checkout pathspecs warn; bare branch and -b get no warning", () => {
   for (const p of [
     "git checkout '.'", 'git checkout "."', "git checkout '..'", "git checkout '*.js'",
     "git checkout .\\file", "git checkout '\\.\\src\\app.js'",
     "git checkout src/app.js",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout main" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout feature" }));
 });
 
-test("riskOf: ANSI-C $'' force refspecs and indented continuation flags are high", () => {
+test("warningsOf: ANSI-C $'' force refspecs and indented continuation flags warn", () => {
   for (const p of [
     "git push origin $'+feature'",
     "git fetch origin $'+feature:feature'",
@@ -555,7 +549,7 @@ test("riskOf: ANSI-C $'' force refspecs and indented continuation flags are high
     "git push \\\n  --de origin feature",
     "git fetch \\\n  --force origin feature",
     "git push\n--force origin feature",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
 });
 
 test("uopt: unique prefixes of --all start at --al, not the ambiguous --a", () => {
@@ -563,7 +557,7 @@ test("uopt: unique prefixes of --all start at --al, not the ambiguous --a", () =
   assert.ok(re.test("--al")); assert.ok(re.test("--all")); assert.ok(!re.test("--a")); assert.ok(!re.test("--atomic"));
 });
 
-test("riskOf: find -exec mksh/rbash/time/flock/setsid/gtimeout/perl/node/python3 deletes are high and not read-only", () => {
+test("warningsOf: find -exec mksh/rbash/time/flock/setsid/gtimeout/perl/node/python3 deletes warn", () => {
   const high = [
     "find . -exec mksh -c 'rm {}' \\;",
     "find . -exec rbash -c 'rm {}' \\;",
@@ -576,20 +570,19 @@ test("riskOf: find -exec mksh/rbash/time/flock/setsid/gtimeout/perl/node/python3
     "find . -exec python3 -c 'os.remove(\"a\")' \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec timeout 5 echo {} \\;" }));
 });
 
-test("riskOf: push --branches/--branch/--br/--b are high like --all; --a stays normal", () => {
+test("warningsOf: push --branches/--branch/--br/--b warn like --all; --a gets no warning", () => {
   // git 2.43: --b is unique for --branches (nothing else in git push -h starts with --b).
   // --a stays ambiguous (--all vs --atomic), so that floor stays at --al.
   for (const p of ["git push --branches", "git push --branch", "git push --br", "git push --b origin", "git push --all", "git push --al"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push --a origin" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git push --a origin" }));
   const re = new RegExp(t.uopt("branches", 1) + "\\b");
   assert.ok(re.test("--b")); assert.ok(re.test("--br")); assert.ok(re.test("--branch")); assert.ok(re.test("--branches"));
   assert.ok(!re.test("--atomic"));
@@ -597,7 +590,7 @@ test("riskOf: push --branches/--branch/--br/--b are high like --all; --a stays n
   assert.ok(all.test("--al")); assert.ok(all.test("--all")); assert.ok(!all.test("--a")); assert.ok(!all.test("--atomic"));
 });
 
-test("riskOf: extensionless and magic pathspec checkouts are high; bare branch and -b stay normal", () => {
+test("warningsOf: extensionless and magic pathspec checkouts warn; bare branch and -b get no warning", () => {
   for (const p of [
     "git checkout Makefile",
     "git checkout README",
@@ -619,24 +612,24 @@ test("riskOf: extensionless and magic pathspec checkouts are high; bare branch a
     "git checkout Pipfile",
     "git checkout CODEOWNERS",
     "git checkout UNLICENSE",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b brand-new" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b brand-new" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout main" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout feature" }));
 });
 
-test("riskOf: backslash-newline continuation on branch/checkout/clean/reset is high", () => {
+test("warningsOf: backslash-newline continuation on branch/checkout/clean/reset warns", () => {
   for (const p of [
     "git branch \\\n  -f existing HEAD",
     "git checkout \\\n  -- f",
     "git clean \\\n  -f",
     "git reset \\\n--hard",
     "git reset \\\n  --hard",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: backslash-newline push to main and indented switch/branch -C/checkout -B are high", () => {
+test("warningsOf: backslash-newline push to main and indented switch/branch -C/checkout -B warn", () => {
   // one-line push to main/master and unindented switch -f / branch -C / checkout -B are already high;
   // indent spaces after `\` + newline hid -C/-B, and [^\n]* hid push origin main and --discard-changes.
   for (const p of [
@@ -649,10 +642,10 @@ test("riskOf: backslash-newline push to main and indented switch/branch -C/check
     "git branch \\\n-C feature copied",
     "git checkout \\\n  -B feature",
     "git checkout \\\n-B feature",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: find -exec stdbuf/ionice/taskset/chrt/prlimit and python3 shutil.rmtree are high and not read-only", () => {
+test("warningsOf: find -exec stdbuf/ionice/taskset/chrt/prlimit and python3 shutil.rmtree warn", () => {
   const high = [
     "find . -exec stdbuf -oL rm {} \\;",
     "find . -exec ionice -c3 rm {} \\;",
@@ -663,23 +656,22 @@ test("riskOf: find -exec stdbuf/ionice/taskset/chrt/prlimit and python3 shutil.r
     "find . -exec python3 -c 'import shutil; shutil.rmtree(\"sub\")'",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec time echo {} \\;" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "timeout 5 echo" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "python3 -c 'print(123)'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec time echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "timeout 5 echo" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "python3 -c 'print(123)'" }));
 });
 
-test("riskOf: ANSI-C $':…' delete refspecs are high", () => {
+test("warningsOf: ANSI-C $':…' delete refspecs warn", () => {
   for (const p of ["git push origin $':gone'", "git push origin $':feature'", "git push origin $'+feature'"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:feature" }));
 });
 
-test("riskOf: find -exec choom/setarch/setpriv/unshare rm are high and not read-only", () => {
+test("warningsOf: find -exec choom/setarch/setpriv/unshare rm warn", () => {
   const high = [
     "find . -exec choom -n 0 rm {} \\;",
     "find . -exec setarch x86_64 rm {} \\;",
@@ -687,30 +679,28 @@ test("riskOf: find -exec choom/setarch/setpriv/unshare rm are high and not read-
     "find . -exec unshare --user rm {} \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec choom -n 0 echo {} \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec choom -n 0 echo {} \\;" }));
 });
 
-test("riskOf: find -exec perl remove_tree and python3 removedirs are high and not read-only", () => {
+test("warningsOf: find -exec perl remove_tree and python3 removedirs warn", () => {
   const high = [
     "find . -exec perl -MFile::Path=remove_tree -e 'remove_tree(\"sub\")'",
     "find . -exec python3 -c '(__import__(\"os\").removedirs(\"empty/nested\"))'",
     "find . -exec python3 -c 'import os; os.removedirs(\"empty/nested\")'",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "python3 -c 'print(123)'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "python3 -c 'print(123)'" }));
 });
 
-test("riskOf: backslash-newline pull force/prune, remote prune, and rm -rf are high; --ff-only stays normal", () => {
+test("warningsOf: backslash-newline pull force/prune, remote prune, and rm -rf warn; --ff-only gets no warning", () => {
   for (const p of [
     "git pull \\\n--force origin main:main",
     "git pull \\\n--fo origin main:main",
@@ -722,13 +712,13 @@ test("riskOf: backslash-newline pull force/prune, remote prune, and rm -rf are h
     "git remote \\\n  prune origin",
     "rm \\\n-rf build",
     "rm \\\n  -rf build",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n--ff-only" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull --ff-only" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull \\\n--ff-only" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }));
 });
 
-test("riskOf: find -exec setarch personality aliases (linux32/linux64/i386/x86_64) rm are high and not read-only", () => {
+test("warningsOf: find -exec setarch personality aliases (linux32/linux64/i386/x86_64) rm warn", () => {
   const high = [
     "find . -exec linux32 rm {} \\;",
     "find . -exec linux64 rm {} \\;",
@@ -736,44 +726,41 @@ test("riskOf: find -exec setarch personality aliases (linux32/linux64/i386/x86_6
     "find . -exec x86_64 rm {} \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
   for (const p of [
     "find . -exec linux32 echo {} \\;",
     "find . -exec linux64 echo {} \\;",
     "find . -exec i386 echo {} \\;",
     "find . -exec x86_64 echo {} \\;",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
+  ]) assert.ok(!warned({ requestKind: "command", prompt: p }), p);
 });
 
-test("riskOf: find -exec nsenter rm is high and not read-only; nsenter echo stays low", () => {
+test("warningsOf: find -exec nsenter rm warns; nsenter echo gets no warning", () => {
   const high = ["find . -exec nsenter rm {} \\;", "find . -exec nsenter --user rm {} \\;", "nsenter rm -rf file"];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec nsenter echo {} \\;" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "nsenter echo" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec nsenter echo {} \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "nsenter echo" }));
 });
 
-test("riskOf: find -exec script -c / capsh -- -c rm are high and not read-only", () => {
+test("warningsOf: find -exec script -c / capsh -- -c rm warn", () => {
   const high = [
     "find . -exec script -q -c 'rm {}' /dev/null \\;",
     "find . -exec capsh -- -c 'rm {}' \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec script -q -c 'echo {}' /dev/null \\;" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec capsh -- -c 'echo {}' \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec script -q -c 'echo {}' /dev/null \\;" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec capsh -- -c 'echo {}' \\;" }));
 });
 
-test("riskOf: find -exec python3 -c os.remove spellings that are not literal os.remove are high", () => {
+test("warningsOf: find -exec python3 -c os.remove spellings that are not literal os.remove warn", () => {
   const high = [
     "find . -exec python3 -c '(__import__(\"os\").remove(\"a\"))' \\;",
     "find . -exec python3 -c '(__import__(\"posix\").remove(\"a\"))' \\;",
@@ -781,40 +768,39 @@ test("riskOf: find -exec python3 -c os.remove spellings that are not literal os.
     "find . -exec python3 -c 'import os as o; o.remove(\"a\")' \\;",
   ];
   for (const p of high) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "python3 -c 'print(123)'" }).level, "high");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "find . -exec echo {} \\;" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "python3 -c 'print(123)'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "find . -exec echo {} \\;" }));
 });
 
-test("riskOf: git pull + dest refspecs are high like fetch; --ff-only stays normal", () => {
+test("warningsOf: git pull + dest refspecs warn like fetch; --ff-only gets no warning", () => {
   for (const p of [
     "git pull ../origin +main:main",
     "git pull origin +refs/heads/main:refs/heads/main",
     "git pull origin \\\n+refs/heads/main:refs/heads/main",
     "git pull origin \\\n  +refs/heads/main:refs/heads/main",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n--ff-only" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull --ff-only" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull \\\n--ff-only" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull \\\n  --ff-only" }));
 });
 
-test("riskOf: quoted and $'...' rm -rf / git pull --force flags are high; harmless quoted args stay normal", () => {
+test("warningsOf: quoted and $'...' rm -rf / git pull --force flags warn; harmless quoted args get no warning", () => {
   for (const p of [
     'rm "-rf" dir',
     "rm $'-rf' dir",
     'git pull "--force" origin main',
     "git pull $'--force' origin main",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "rm $'-v' file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull $'origin'" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: 'rm "-v" file' }));
+  assert.ok(!warned({ requestKind: "command", prompt: "rm $'-v' file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: 'git pull "--ff-only"' }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull $'origin'" }));
 });
 
-test("riskOf: git remote -v/--verbose prune and update -p/--prune are high; bare -v stays low; && echo prune is not high", () => {
+test("warningsOf: git remote -v/--verbose prune and update -p/--prune warn; bare -v gets no warning; && echo prune does not warn", () => {
   for (const p of [
     "git remote -v prune origin",
     "git remote --verbose prune origin",
@@ -823,23 +809,23 @@ test("riskOf: git remote -v/--verbose prune and update -p/--prune are high; bare
     "git remote update --prune",
     "git remote update \\\n--prune",
     "git remote update \\\n  --prune",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote -v && echo prune" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v && echo prune" }));
 });
 
-test("riskOf: git restore --staged continued onto --worktree / -S onto -W is high; --staged alone stays normal", () => {
+test("warningsOf: git restore --staged continued onto --worktree / -S onto -W warns; --staged alone gets no warning", () => {
   for (const p of [
     "git restore --staged \\\n  --worktree f",
     "git restore --staged \\\n--worktree f",
     "git restore -S \\\n  -W file",
     "git restore -S \\\n-W file",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore -S file" }));
 });
 
-test("riskOf: restore -S/-W only match as flags, not inside paths; continuations stay high", () => {
+test("warningsOf: restore -S/-W only match as flags, not inside paths; continuations still warn", () => {
   // v1.4.14 dropped (?<=\s) on -W/-S so my-Script / file-W looked like flags.
   for (const p of [
     "git restore my-Script",
@@ -850,13 +836,13 @@ test("riskOf: restore -S/-W only match as flags, not inside paths; continuations
     "git restore --staged \\\n--worktree f",
     "git restore -S \\\n  -W file",
     "git restore -S \\\n-W file",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file-W" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged README-W" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file-W" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged README-W" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file" }));
 });
 
-test("riskOf: joined quotes and backslash-escaped flags are high like whole-token quotes", () => {
+test("warningsOf: joined quotes and backslash-escaped flags warn like whole-token quotes", () => {
   for (const p of [
     'rm -"rf" dir',
     'rm "-"rf dir',
@@ -865,34 +851,34 @@ test("riskOf: joined quotes and backslash-escaped flags are high like whole-toke
     'git pull --"force" origin main',
     'git restore --staged --"worktree" file',
     'git push --"force" origin feature',
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: 'rm "-v" file' }));
+  assert.ok(!warned({ requestKind: "command", prompt: 'git pull "--ff-only"' }));
 });
 
-test("riskOf: git pull backslash-escaped + refspec is high like push; --ff-only stays normal", () => {
+test("warningsOf: git pull backslash-escaped + refspec warns like push; --ff-only gets no warning", () => {
   for (const p of [
     "git pull origin \\+main:main",
     "git pull origin '+main:main'",
     "git pull origin $'+main:main'",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull --ff-only" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git pull \\\n--ff-only" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull --ff-only" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git pull \\\n--ff-only" }));
 });
 
-test("riskOf: git remote quoted -v prune and update --pr are high; --pro / bare -v / && echo prune are not", () => {
+test("warningsOf: git remote quoted -v prune and update --pr warn; --pro / bare -v / && echo prune are not", () => {
   for (const p of [
     'git remote "-v" prune origin',
     "git remote $'-v' prune origin",
     "git remote update --pr origin",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update --pro origin" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote -v && echo prune" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update origin-p" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote update --pro origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v && echo prune" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote update origin-p" }));
 });
 
-test("riskOf: quoted git fetch prune/force are high, not read-only; non-force refspec stays normal", () => {
+test("warningsOf: quoted git fetch prune/force warn; non-force refspec gets no warning", () => {
   for (const p of [
     'git fetch "--prune" origin',
     'git fetch "-p" origin',
@@ -901,12 +887,12 @@ test("riskOf: quoted git fetch prune/force are high, not read-only; non-force re
     "git fetch $'--force' origin",
     "git fetch --prune",
     "git fetch -p",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pr" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin feature:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --pr" }));
 });
 
-test("riskOf: unquoted leading-dot checkout pathspecs are high; bare branches stay normal", () => {
+test("warningsOf: unquoted leading-dot checkout pathspecs warn; bare branches get no warning", () => {
   for (const p of [
     "git checkout .gitignore",
     "git checkout .github",
@@ -916,13 +902,13 @@ test("riskOf: unquoted leading-dot checkout pathspecs are high; bare branches st
     "git checkout ./.gitignore",
     "git checkout -- .gitignore",
     "git checkout HEAD .gitignore",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout feature" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout main" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
 });
 
-test("riskOf: more extensionless checkout names are high; -b / --orphan / branch names stay normal", () => {
+test("warningsOf: more extensionless checkout names warn; -b / --orphan / branch names get no warning", () => {
   for (const p of [
     "git checkout Vagrantfile",
     'git checkout "Vagrantfile"',
@@ -933,13 +919,13 @@ test("riskOf: more extensionless checkout names are high; -b / --orphan / branch
     "git checkout OWNERS",
     "git checkout vagrantfile",
     "git checkout owners",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b Vagrantfile" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout --orphan Vagrantfile" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout main" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b Vagrantfile" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout --orphan Vagrantfile" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout main" }));
 });
 
-test("riskOf: quoted short restore -W/-SW are high; file-W stays a path; my-Script stays high", () => {
+test("warningsOf: quoted short restore -W/-SW warn; file-W stays a path; my-Script still warns", () => {
   // v1.4.15 restored (?<=\\s) on -W/-S so file-W is a path, but a quote between space and dash
   // hid whole-token '-W' / "-W" / $'-W' / '-SW' (argv -W / -SW, discards the worktree).
   for (const p of [
@@ -952,13 +938,13 @@ test("riskOf: quoted short restore -W/-SW are high; file-W stays a path; my-Scri
     "git restore --staged --\"w\" file",
     "git restore --staged \\\n  --worktree f",
     "git restore my-Script",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file-W" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore -S file" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file-W" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore -S file" }));
 });
 
-test("riskOf: git remote update --p / quoted -p / joined --prune are high; --pr stays high; --pro / -v / origin-p are not", () => {
+test("warningsOf: git remote update --p / quoted -p / joined --prune warn; --pr still warns; --pro / -v / origin-p are not", () => {
   // git 2.43 accepts --p/--pr/--pru/--prun/--prune on update. v1.4.15 floored at --pr and
   // (?<=\\s)-p, so --p and quoted/joined -p/--prune (argv -p / --prune) stayed normal.
   for (const p of [
@@ -971,14 +957,14 @@ test("riskOf: git remote update --p / quoted -p / joined --prune are high; --pr 
     "git remote update --pr origin",
     "git remote update --prune origin",
     "git remote update -p",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update --pro origin" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote -v && echo prune" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update origin-p" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote update --pro origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v && echo prune" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote update origin-p" }));
 });
 
-test("riskOf: ANSI-C $ after the dashes is high; fetch is not read-only; harmless quoted args stay normal", () => {
+test("warningsOf: ANSI-C $ after the dashes warns; harmless quoted args get no warning", () => {
   // qflag allowed quote/backslash immediately after -/-- and whole-token $'--prune' / $'-rf',
   // but not -$'' / --$'' (and rm -v"rf" → argv -vrf). Fetch's high path and READ_ONLY share FETCH_FLAG.
   for (const p of [
@@ -995,15 +981,14 @@ test("riskOf: ANSI-C $ after the dashes is high; fetch is not read-only; harmles
     'rm --"force" dir',
     'git fetch "--prune" origin',
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: 'rm "-v" file' }));
+  assert.ok(!warned({ requestKind: "command", prompt: 'git pull "--ff-only"' }));
 });
 
-test("riskOf: fetch mid-word quotes, empty quotes, -np, and ANSI-C hex prune/force are high, not read-only", () => {
+test("warningsOf: fetch mid-word quotes, empty quotes, -np, and ANSI-C hex prune/force warn", () => {
   // v1.4.16 qflag only allowed a quote/$'/backslash immediately after -/--. Mid-word
   // quotes, empty '' / $'', combined -n"p" (argv -np), and $'--pr\x75ne' stayed low
   // because READ_ONLY shares FETCH_FLAG. --fo"rce" was already high (--fo unique prefix).
@@ -1022,17 +1007,16 @@ test("riskOf: fetch mid-word quotes, empty quotes, -np, and ANSI-C hex prune/for
     'git fetch --fo"rce"',
     "git fetch --prune",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --pru" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --pru" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
 });
 
-test("riskOf: restore/remote/push/pull/rm empty quotes, mid-token joins, and ANSI-C hex are high", () => {
+test("warningsOf: restore/remote/push/pull/rm empty quotes, mid-token joins, and ANSI-C hex warn", () => {
   // Same joins as fetch, on verbs already using qflag: -S"W" is argv -SW (worktree), not
   // staged-only -S (quote used to be a word boundary). ''-W / -''W / $''-W / --''worktree
   // glue to -W / --worktree. -v\\rf and $'-v\\x72f' are argv -vrf.
@@ -1061,16 +1045,16 @@ test("riskOf: restore/remote/push/pull/rm empty quotes, mid-token joins, and ANS
     "rm -v\\rf dir",
     "rm $'-v\\x72f'",
     "rm $'-\\x76rf'",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged file-W" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git restore --staged --word file" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git remote update --pro origin" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'rm "-v" file' }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: 'git pull "--ff-only"' }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged file-W" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git restore --staged --word file" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote update --pro origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: 'rm "-v" file' }));
+  assert.ok(!warned({ requestKind: "command", prompt: 'git pull "--ff-only"' }));
 });
 
-test("riskOf: quoted/ANSI-C flags on reset/clean/switch/checkout/branch/push/remote verbs are high", () => {
+test("warningsOf: quoted/ANSI-C flags on reset/clean/switch/checkout/branch/push/remote verbs warn", () => {
   // These verbs never called qflag, so --$'hard' / --"hard" / -"fd" / -$'f' / "-D" /
   // --"delete" / 'prune' / "update" --prune ran at normal. Same helper as fetch.
   for (const p of [
@@ -1087,14 +1071,14 @@ test("riskOf: quoted/ANSI-C flags on reset/clean/switch/checkout/branch/push/rem
     'git push --"prune"',
     "git remote 'prune' origin",
     'git remote "update" --prune',
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git remote -v" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch --for dest" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git switch -c newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git remote -v" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch --for dest" }));
 });
 
-test("riskOf: ANSI-C hex dash / octal / unicode prune is high, not read-only", () => {
+test("warningsOf: ANSI-C hex dash / octal / unicode prune warns", () => {
   // v1.4.17 qhex only rewrote letters as \\xHH. Hex dashes ($'\\x2d\\x2dprune' / $'\\x2dp'),
   // octal u ($'--pr\\165ne'), and unicode u ($'--pr\\u0075ne') stayed low and still pruned.
   for (const p of [
@@ -1104,32 +1088,30 @@ test("riskOf: ANSI-C hex dash / octal / unicode prune is high, not read-only", (
     "git fetch $'--pr\\u0075ne'",
     "git fetch $'--pr\\x75ne'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
 });
 
-test("riskOf: rm ANSI-C hex dash and octal letter -rf is high", () => {
+test("warningsOf: rm ANSI-C hex dash and octal letter -rf warns", () => {
   // Same spellings as fetch: $'\\x2drf' (hex dash) and $'-\\162f' (octal r) are argv -rf.
   for (const p of ["rm $'\\x2drf'", "rm $'-\\162f'", "rm $'-\\x72f'"])
-    assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "rm $'-v' file" }).level, "high");
+    assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "rm $'-v' file" }));
 });
 
-test("riskOf: backslash-newline inside double quotes joins fetch --prune", () => {
+test("warningsOf: backslash-newline inside double quotes joins fetch --prune", () => {
   // --pru"\\<newline>ne" is argv --prune; QSEP did not include newline so this stayed normal.
   const p = 'git fetch --pru"\\\nne"';
-  const r = t.riskOf({ requestKind: "command", prompt: p });
-  assert.equal(r.level, "high", p);
-  assert.notEqual(r.level, "low", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  const r = t.warningsOf({ requestKind: "command", prompt: p });
+  assert.ok(r.length, p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
 });
 
-test("riskOf: quoted / ANSI-C -C and -B go through qflag", () => {
+test("warningsOf: quoted / ANSI-C -C and -B go through qflag", () => {
   // gitCs -C/-B never called qflag: unquoted -C stayed high, but "-C" / $'-C' /
   // checkout -"B" / switch "-C" reset/overwrite at normal.
   for (const p of [
@@ -1139,26 +1121,26 @@ test("riskOf: quoted / ANSI-C -C and -B go through qflag", () => {
     'git switch "-C" feature',
     "git branch -C dest",
     "git checkout -B feature",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b release-2" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b release-2" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git switch -c newbranch" }));
 });
 
-test("riskOf: pathological quote piles on fetch stay fast", () => {
+test("warningsOf: pathological quote piles on fetch stay fast", () => {
   // v1.4.17 QWRAP/QSEP used ['"]{1,2}, so n quotes was Fibonacci. 30 quotes took hundreds
   // of ms; 36 to 38 did not finish in seconds. One quote per iteration stays linear.
   const p = "git fetch --" + '"'.repeat(40) + "xyz";
   const t0 = process.hrtime.bigint();
-  const r = t.riskOf({ requestKind: "command", prompt: p });
+  const r = t.warningsOf({ requestKind: "command", prompt: p });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.ok(ms < 50, `40 quotes took ${ms.toFixed(2)}ms`);
-  assert.equal(r.level, "low", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.ok(!r.length, p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
 });
 
-test("riskOf: bash short \\u / \\U / \\x{} fetch prune/force is high, not read-only", () => {
+test("warningsOf: bash short \\u / \\U / \\x{} fetch prune/force warns", () => {
   // v1.4.18 qhex spelled \\u as exactly four hex digits and had no \\U or \\x{}.
   // bash 5.2 also expands \\u/\\U 1 to 8 hex digits (greedy) and \\x{HH}. Fetch's high
   // path and READ_ONLY share FETCH_FLAG. $'\\U2d'f / $'\\u2d\\u2d'force close the
@@ -1178,18 +1160,17 @@ test("riskOf: bash short \\u / \\U / \\x{} fetch prune/force is high, not read-o
     "git fetch $'--pr\\x{75}ne'",
     "git fetch $'\\u2d\\u2d'force",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x2d\\x2dquiet'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch $'\\x2d\\x2dquiet'" }));
 });
 
-test("riskOf: rm short \\u / \\U / \\x{} -rf is high", () => {
+test("warningsOf: rm short \\u / \\U / \\x{} -rf warns", () => {
   // Same spellings as fetch: $'\\u2drf' / $'\\x{2d}rf' / $'\\U2drf' are argv -rf.
   // $'-\\u72'f / $'-\\U72'f close the quote before f; $'-\\u72f' is - + U+072F.
   for (const p of [
@@ -1200,11 +1181,11 @@ test("riskOf: rm short \\u / \\U / \\x{} -rf is high", () => {
     "rm $'-\\x{72}f'",
     "rm $'-\\u72'f",
     "rm $'-\\U72'f",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "rm $'-v' file" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "rm $'-v' file" }));
 });
 
-test("riskOf: branch/switch -C with quote before C / \\x{2d}C is high", () => {
+test("warningsOf: branch/switch -C with quote before C / \\x{2d}C warns", () => {
   // B/C are hex digits, so $'\\u2dC' is U+02DC, not -C. Argv is -C when the quote
   // closes before C, or when \\x{2d} braces terminate the hex. gitCs -C stays
   // case-sensitive (not -c).
@@ -1214,13 +1195,13 @@ test("riskOf: branch/switch -C with quote before C / \\x{2d}C is high", () => {
     "git switch $'\\u2d'C feature",
     "git switch $'\\x{2d}C' feature",
     "git switch $'\\U2d'C feature",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch $'\\u2dC' dest" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git checkout -b newbranch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git switch -c newbranch" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch $'\\u2dC' dest" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git checkout -b newbranch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git switch -c newbranch" }));
 });
 
-test("riskOf: full-width \\u/\\U after the hex cap is high; greed traps stay off high", () => {
+test("warningsOf: full-width \\u/\\U after the hex cap warns; greed traps stay off", () => {
   // v1.4.19 ended every \\u/\\U arm with (?![0-9A-Fa-f]). bash 5.2 \\u takes at most 4
   // hex digits and \\U at most 8, so $'\\u002df' is argv -f (f is the next character).
   // The lookahead treated that letter as part of the escape, and fetch scored low.
@@ -1244,24 +1225,23 @@ test("riskOf: full-width \\u/\\U after the hex cap is high; greed traps stay off
     "rm $'\\u002drf'",
     "git reset $'\\u002d\\u002dhard'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
   for (const p of [
     "git fetch $'\\U2df'",
     "git fetch $'\\u2df'",
     "git fetch $'\\u2d\\u2dforce'",
     "git branch $'\\u2dC' dest",
-  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\u002d\\u002dquiet'" }).level, "high");
+  ]) assert.ok(!warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch $'\\u002d\\u002dquiet'" }));
 });
 
-test("riskOf: \\x{} low-8-bits dash (value mod 256) is high, not read-only", () => {
+test("warningsOf: \\x{} low-8-bits dash (value mod 256) warns", () => {
   // v1.4.19 allowed only leading zeros in \\x{…} ($'\\x{0*2d}'). bash 5.2 takes the
   // value mod 256, so $'\\x{12d}' / $'\\x{012d}' / $'\\x{102d}' are all '-'. Extra
   // non-zero high digits slipped through and fetch $'\\x{12d}f' scored low.
@@ -1279,27 +1259,26 @@ test("riskOf: \\x{} low-8-bits dash (value mod 256) is high, not read-only", () 
     "git fetch $'\\x{002d}f'",
     "git fetch $'\\x2df'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}no-force'" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch $'\\x2dc' dest" }).level, "high");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git branch $'\\x2dC' dest" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}no-force'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch $'\\x2dc' dest" }));
+  assert.ok(warned({ requestKind: "command", prompt: "git branch $'\\x2dC' dest" }));
   const long = "git fetch $'\\x{" + "1".repeat(80) + "2d}f'";
   const t0 = process.hrtime.bigint();
-  const r = t.riskOf({ requestKind: "command", prompt: long });
+  const r = t.warningsOf({ requestKind: "command", prompt: long });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.ok(ms < 50, `80 extra \\x{} hex digits took ${ms.toFixed(2)}ms`);
-  assert.equal(r.level, "high", long);
+  assert.ok(r.length, long);
 });
 
-test("riskOf: unclosed \\x{…} stops at the first non-hex, like bash", () => {
+test("warningsOf: unclosed \\x{…} stops at the first non-hex, like bash", () => {
   // v1.4.20 required a closing brace (\\x\\{body\\}). bash 5.2 reads hex after
   // \\x{ until } or a non-hex byte; } is optional. Value is that integer mod 256.
   // $'\\x{12dp' / $'\\x{2Dp' / $'\\x{0002dp' are argv -p; a following hex digit is
@@ -1323,32 +1302,31 @@ test("riskOf: unclosed \\x{…} stops at the first non-hex, like bash", () => {
     "git fetch $'\\x{102d}f'",
     "git fetch $'\\x{12d}\\x{12d}prune'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
   for (const p of [
     "git fetch $'\\x{2df}'",
     "git fetch $'\\x{12d\\x{12dforce'",
-  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  ]) assert.ok(!warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
   const unclosed = "git fetch $'\\x{" + "1".repeat(80) + "2dp'";
   const empty = "git fetch $'" + "\\x{}".repeat(40) + "origin'";
   const t0 = process.hrtime.bigint();
-  const r = t.riskOf({ requestKind: "command", prompt: unclosed });
+  const r = t.warningsOf({ requestKind: "command", prompt: unclosed });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   const t1 = process.hrtime.bigint();
-  t.riskOf({ requestKind: "command", prompt: empty });
+  t.warningsOf({ requestKind: "command", prompt: empty });
   const msEmpty = Number(process.hrtime.bigint() - t1) / 1e6;
   assert.ok(ms < 50, `80 extra unclosed \\x{} hex digits took ${ms.toFixed(2)}ms`);
   assert.ok(msEmpty < 50, `40 empty \\x{} probes took ${msEmpty.toFixed(2)}ms`);
-  assert.equal(r.level, "high", unclosed);
+  assert.ok(r.length, unclosed);
 });
 
-test("riskOf: under-width \\U002d is not -f; full-width \\u/\\U stay high", () => {
+test("warningsOf: under-width \\U002d is not -f; full-width \\u/\\U still warn", () => {
   // v1.4.20 compiled git()/rm/READ_ONLY with i. Node 22 rejects (?-i:), so the
   // 4-digit \\u arm (no lookahead) also matched 4-digit \\U. bash \\U still has
   // an 8-digit cap, so $'\\U002df' is U+02DF, not -f. Quote-end and a following
@@ -1365,7 +1343,7 @@ test("riskOf: under-width \\U002d is not -f; full-width \\u/\\U stay high", () =
     "git fetch $'\\u2dC'",
     "git fetch $'\\U2dC'",
     "git branch $'\\U002dC' dest",
-  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  ]) assert.ok(!warned({ requestKind: "command", prompt: p }), p);
   for (const p of [
     "git fetch $'\\u002df'",
     "git fetch $'\\U0000002df'",
@@ -1377,19 +1355,18 @@ test("riskOf: under-width \\U002d is not -f; full-width \\u/\\U stay high", () =
     "git fetch $'\\x{102d}f'",
     "git fetch $'\\x{12d}\\x{12d}prune'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\U002df'" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch $'\\U002df'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch $'\\x{2d}\\x{2d}quiet'" }));
 });
 
-test("riskOf: qflag word-boundary lookahead treats backslash as continuing the word", () => {
+test("warningsOf: qflag word-boundary lookahead treats backslash as continuing the word", () => {
   // v1.4.21 qflag used (?![\\$'"]*[A-Za-z0-9]) in a template, so \\$ became \$ and
   // the class lost the backslash. Unique prefixes (--fo/--for/--h/--f/--d/--al) then
   // ended when the next letter was an ANSI-C escape, while bash still joined it:
@@ -1407,23 +1384,22 @@ test("riskOf: qflag word-boundary lookahead treats backslash as continuing the w
     "rm $'--f\\x{69}le' x",
     "git branch $'--d\\x{72}y-run'",
     "git push $'--al\\x{73}o'",
-  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
+  ]) assert.ok(!warned({ requestKind: "command", prompt: p }), p);
   for (const p of [
     "git fetch $'--fo\\x{72}ce'",
     "git fetch --force",
     "git fetch --fo",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
 });
 
-test("riskOf: qenc spellings of + / : refspecs are high like the literal forms", () => {
+test("warningsOf: qenc spellings of + / : refspecs warn like the literal forms", () => {
   // v1.4.21 PLUS_SPEC / DEL_SPEC matched a literal + / : only. ANSI-C / qenc
   // spellings of + (0x2b) and : (0x3a) bypassed them, so fetch $'\x{2b}main'
   // stayed low (READ_ONLY) and push $'\x{3a}gone' stayed normal.
@@ -1444,9 +1420,8 @@ test("riskOf: qenc spellings of + / : refspecs are high like the literal forms",
     "git push origin '+feature'",
     "git pull origin $'\\x{2b}main:main'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
   for (const p of [
     "git push origin $'\\x{3a}gone'",
@@ -1454,19 +1429,18 @@ test("riskOf: qenc spellings of + / : refspecs are high like the literal forms",
     "git push origin $'\\u003agone'",
     "git push origin :gone",
     "git push origin $':gone'",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:branch" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --no-force" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin $'\\x{2bf}'" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin $'\\u2b0main'" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:branch" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --no-force" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin $'\\x{2bf}'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin $'\\u2b0main'" }));
 });
 
-test("riskOf: qenc 3-digit octal value+256 is the same byte as in-range octal", () => {
+test("warningsOf: qenc 3-digit octal value+256 is the same byte as in-range octal", () => {
   // v1.4.22 qenc emitted \\53/\\053 for + and \\72/\\072 for :. bash 5.2 3-digit
   // octal keeps the low 8 bits, so \\453 is + (299&0xff), \\472 is :, \\546 is f.
   for (const p of [
@@ -1486,16 +1460,15 @@ test("riskOf: qenc 3-digit octal value+256 is the same byte as in-range octal", 
     "git fetch origin $'+main'",
     "git push origin :gone",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
 });
 
-test("riskOf: backslash before a delete refspec colon is high like :gone", () => {
+test("warningsOf: backslash before a delete refspec colon warns like :gone", () => {
   // PLUS_SPEC already allowed \\ before +. DEL_SPEC missed \\:gone / ''\\:gone /
   // \\:''gone (argv :gone). Literal :gone stays high.
   for (const p of [
@@ -1505,12 +1478,12 @@ test("riskOf: backslash before a delete refspec colon is high like :gone", () =>
     "git push origin :gone",
     "git push origin ':gone'",
     "git push origin $':gone'",
-  ]) assert.equal(t.riskOf({ requestKind: "command", prompt: p }).level, "high", p);
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:feature" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin HEAD:branch" }).level, "high");
+  ]) assert.ok(warned({ requestKind: "command", prompt: p }), p);
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin HEAD:branch" }));
 });
 
-test("riskOf: encoded fetch :main/:master is high; leading-colon fetch is not read-only", () => {
+test("warningsOf: encoded fetch :main/:master warns", () => {
   // v1.4.22 fetch high arm :(main|master) and READ_ONLY [^\s:@]+: wanted a literal
   // colon, so $'\\x{3a}main' / $'\\72main' / $'\\472main' stayed low. Leading
   // :gone stayed inside READ_ONLY because the source class is non-empty.
@@ -1523,25 +1496,17 @@ test("riskOf: encoded fetch :main/:master is high; leading-colon fetch is not re
     "git fetch origin :refs/heads/main",
     "git fetch origin :master",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  for (const p of [
-    "git fetch origin :gone",
-    "git fetch origin :feature",
-    "git fetch origin $'\\x{3a}gone'",
-    "git fetch origin $'\\472gone'",
-  ]) assert.notEqual(t.riskOf({ requestKind: "command", prompt: p }).level, "low", p);
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin feature:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
 });
 
-test("riskOf: /i qcls encodes the other case of class letters", () => {
+test("warningsOf: /i qcls encodes the other case of class letters", () => {
   // git()/rm are /i, so [dmf] matches D/M and [rfd] matches R, but qcls only
   // encoded the written case. $'-\\104' / $'-\\x44' (argv -D) stayed normal.
   for (const p of [
@@ -1559,16 +1524,15 @@ test("riskOf: /i qcls encodes the other case of class letters", () => {
     "git branch $'-\\144' gone",
     "git fetch $'-\\146' origin",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch $'-\\143' dest" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git branch -c dest" }).level, "high");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch $'-\\143' dest" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git branch -c dest" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
 });
 
-test("riskOf: brace expansion of flags and delete refspecs is high", () => {
+test("warningsOf: brace expansion of flags and delete refspecs warns", () => {
   // bash expands {a,b} before argv. Contiguous flags split by braces
   // (--{force,} / {-rf,} / {:gone,}) scored low/normal while argv is dangerous.
   // {--force,} / {-f,} already contain the spelling; keep those high.
@@ -1585,18 +1549,17 @@ test("riskOf: brace expansion of flags and delete refspecs is high", () => {
     "git fetch {--force,}",
     "rm {-f,} dir",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --{tags,}" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch '--{force,}'" }).level, "high");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --follow-tags" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch --quiet" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --{tags,}" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch '--{force,}'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --follow-tags" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch --quiet" }));
 });
 
-test("riskOf: quote/escape/brace breaks after a fetch colon dest are high", () => {
+test("warningsOf: quote/escape/brace breaks after a fetch colon dest warn", () => {
   // v1.4.23 FETCH_HEAD qenc'd the colon, then matched refs/heads/ and main|master
   // as literal text. bash still joins :m''ain / :m\\ain / $':m'{ain,} / feature:m''ain
   // to argv :main (or feature:main). Same qflex joins as flags.
@@ -1613,19 +1576,18 @@ test("riskOf: quote/escape/brace breaks after a fetch colon dest are high", () =
     "git fetch origin :refs/heads/master",
     "git fetch origin :re''fs/heads/main",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch '--{force,}'" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin ':m{ain,}'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin feature:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch '--{force,}'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin ':m{ain,}'" }));
 });
 
-test("riskOf: quote/escape/brace breaks of a push dest main/master are high", () => {
+test("warningsOf: quote/escape/brace breaks of a push dest main/master warn", () => {
   // v1.4.23 scored push with \\b(main|master)\\b, so m''ain / $'\\x6dain' /
   // HEAD:m''ain / m{''ain,} stayed normal while argv is main / HEAD:main.
   for (const p of [
@@ -1641,17 +1603,16 @@ test("riskOf: quote/escape/brace breaks of a push dest main/master are high", ()
     "git push origin 'main'",
     "git push origin $'main'",
   ]) {
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin remain" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin domain" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin feature" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin remain" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin domain" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }));
 });
 
-test("riskOf: encoded colon/slash joins on a push dest main/master are high", () => {
+test("warningsOf: encoded colon/slash joins on a push dest main/master warn", () => {
   // v1.4.24 push used (?<!\\w) before MAIN_DEST. A qenc of : or / ends on a
   // hex/octal digit, so $'\\x3amain' / $'\\x2fmain' scored normal while bash
   // argv is HEAD:main / refs/heads/main. FETCH_HEAD already consumes qhex(":")
@@ -1686,23 +1647,22 @@ test("riskOf: encoded colon/slash joins on a push dest main/master are high", ()
     ["git push origin refs/heads/main", "refs/heads/main"],
   ]) {
     assert.equal(argvLast(p), argv, p);
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin remain" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin domain" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mainline" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mastery" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git fetch origin ':m{ain,}'" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch git@github.com:foo/bar.git" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch https://example.com/repo.git" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin feature:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin remain" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin domain" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin mainline" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin mastery" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin ':m{ain,}'" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin 'm{ain,}'" }));
 });
 
-test("riskOf: encoded colon after dest main/master is a word boundary", () => {
+test("warningsOf: encoded colon after dest main/master is a word boundary", () => {
   // v1.4.24 MAIN_DEST used qflag's trailing lookahead, which treats \\x / octal
   // / \\u as more of the word. $'\\x3afeature' after main scored normal (argv
   // main:feature) and :main$'\\x3a'feature dropped from high. Literal
@@ -1723,16 +1683,15 @@ test("riskOf: encoded colon after dest main/master is a word boundary", () => {
     ["git push origin main\\:feature", "main:feature"],
   ]) {
     assert.equal(argvLast(p), argv, p);
-    const r = t.riskOf({ requestKind: "command", prompt: p });
-    assert.equal(r.level, "high", p);
-    assert.notEqual(r.level, "low", p);
+    const r = t.warningsOf({ requestKind: "command", prompt: p });
+    assert.ok(r.length, p);
   }
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin" }).level, "low");
-  assert.equal(t.riskOf({ requestKind: "command", prompt: "git fetch origin feature:feature" }).level, "normal");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin remain" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin domain" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mainline" }).level, "high");
-  assert.notEqual(t.riskOf({ requestKind: "command", prompt: "git push origin mastery" }).level, "high");
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git fetch origin feature:feature" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin remain" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin domain" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin mainline" }));
+  assert.ok(!warned({ requestKind: "command", prompt: "git push origin mastery" }));
 });
 
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
@@ -1761,5 +1720,111 @@ test("findThread: archivedThreads are searched like search/preview-finish", asyn
     r = await run("read", "Old archived"); assert.equal(r.code, 0, r.out); assert.match(r.out, /Old archived/);
     r = await run("pending", "arch-thread-99"); assert.equal(r.code, 0, r.out);
     r = await run("read", "no-such-thread-xx"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
+  } finally { srv.close(); }
+});
+
+test("approvalAuthority: decline and cancel never need anyone; a grant needs the user or an exact standing command", () => {
+  const cmd = (prompt) => ({ requestKind: "command", prompt });
+  const noList = () => { throw new Error("a refusal or a user yes must not read the standing list"); };
+  assert.equal(t.approvalAuthority(cmd("rm -rf ~"), "decline", false, noList), "refusal");
+  assert.equal(t.approvalAuthority(cmd("rm -rf ~"), "cancel", false, noList), "refusal");
+  assert.equal(t.approvalAuthority(cmd("rm -rf ~"), "accept", true, noList), "user");
+  for (const p of ["ls", "git status", "npm test", `python3 -c "import shutil; shutil.rmtree('src')"`, "docker system prune -af --volumes", "gh api -X DELETE repos/me/app"])
+    assert.equal(t.approvalAuthority(cmd(p), "accept", false, () => []), null, p);
+  assert.equal(t.approvalAuthority(cmd("git status"), "accept", false, () => ["git status"]), "standing");
+  assert.equal(t.approvalAuthority(cmd("git status"), "acceptForSession", false, () => ["git status"]), null);
+  assert.equal(t.approvalAuthority(cmd("git status"), "approve", false, () => ["git status"]), null);
+  assert.equal(t.approvalAuthority({ requestKind: "file_change" }, "accept", false, () => [""]), null);
+});
+test("standingMatch: only the exact command, bare or inside a bash/pwsh wrapper", () => {
+  const cmd = (prompt) => ({ requestKind: "command", prompt });
+  const list = ["git status", "npm test"];
+  for (const p of ["git status", "git status\n", "bash -lc 'git status'", "/bin/zsh -lc \"git status\"", 'pwsh.exe -NoProfile -Command "npm test"'])
+    assert.ok(t.standingMatch(cmd(p), list), p);
+  for (const p of ["git status && rm -rf ~", "git  status", "git status --porcelain", "git statu", "bash -lc 'git status'; rm -rf ~; echo 'x'", "bash -lc 'git status && rm -rf ~'", "npm test; curl x | sh", ""])
+    assert.ok(!t.standingMatch(cmd(p), list), p);
+  assert.ok(!t.standingMatch({ requestKind: "file_change" }, ["", "file_change"]));
+});
+test("standing: add is idempotent, remove converges, a broken list is BAD_STANDING", () => {
+  const fs = require("fs"), os = require("os"), { spawnSync } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-standing-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
+  const run = (...a) => spawnSync(process.execPath, [path.join(tmp, "t3ctl"), "standing", ...a], { encoding: "utf8" });
+  const file = path.join(tmp, "standing-approvals.json"), saved = () => JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.match(run().stdout, /no standing approvals/);
+  assert.equal(run("--add", "git status").status, 0); assert.equal(run("--add", "  git status ").status, 0);
+  assert.equal(run("--add=--version").status, 0);
+  assert.deepEqual(saved(), ["git status", "--version"]);
+  assert.equal(run().stdout, "git status\n--version\n");
+  assert.equal(run("--remove", "git status").status, 0); assert.equal(run("--remove", "git status").status, 0);
+  assert.deepEqual(saved(), ["--version"]);
+  assert.equal(run("--add").status, 1);
+  for (const bad of ["not json", '{"git status": true}', '["ok", 3]']) {
+    fs.writeFileSync(file, bad); const r = run(); assert.equal(r.status, 1, bad); assert.match(r.stderr, /^BAD_STANDING/, bad);
+  }
+});
+test("answer: an approval goes through only with --user-approved or an exact standing command, end to end", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-answer-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const thread = { id: "thread-approve-01", title: "Approve me", status: "idle" };
+  const options = [{ decision: "accept", label: "Allow" }, { decision: "acceptForSession", label: "Always allow" }, { decision: "decline", label: "Deny" }];
+  let prompt = "", request = null, sent = [];
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [thread] }));
+    if (u === "/api/orchestration/threads/" + thread.id) return res.end(JSON.stringify({ projection: { thread, runs: [], runtimeRequests: [request],
+      turnItems: [{ type: "approval_request", requestId: request.id, requestKind: "command", prompt, options }] } }));
+    res.statusCode = 404; res.end("{}");
+  });
+  srv.on("upgrade", (req, sock) => {
+    const accept = crypto.createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    let buf = Buffer.alloc(0);
+    sock.on("data", (d) => {
+      buf = Buffer.concat([buf, d]);
+      while (buf.length >= 2) {
+        let len = buf[1] & 127, off = 2; if (len === 126) { len = buf.readUInt16BE(2); off = 4; }
+        if (buf.length < off + 4 + len) return;
+        const op = buf[0] & 15, mask = buf.subarray(off, off + 4), body = Buffer.from(buf.subarray(off + 4, off + 4 + len)).map((b, i) => b ^ mask[i % 4]);
+        buf = buf.subarray(off + 4 + len);
+        if (op === 8) return sock.end();
+        if (op !== 1) continue;
+        const m = JSON.parse(body.toString("utf8")); sent.push(m.payload); request = { ...request, status: "resolved" };
+        const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit: { _tag: "Success", value: {} } }));
+        sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
+      }
+    });
+    sock.on("error", () => {});
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = (...a) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3ctl"), ...a], { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } },
+    (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
+  const reset = (p) => { prompt = p; request = { id: "req-1", kind: "command", status: "pending", createdAt: "x" }; sent = []; };
+  const ask = (p, ...a) => { reset(p); return run("answer", "--thread", thread.id, ...a); };
+  try {
+    let r = await ask(`python3 -c "import shutil; shutil.rmtree('src')"`, "--decision", "accept");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^NEEDS_USER_APPROVAL/); assert.deepEqual(sent, []);
+    r = await ask("git status", "--decision", "accept");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^NEEDS_USER_APPROVAL/); assert.deepEqual(sent, []);
+    r = await ask("rm -rf ~", "--decision", "decline");
+    assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].type, "runtime-request.respond"); assert.equal(sent[0].decision, "decline");
+    r = await ask("rm -rf build", "--decision", "accept", "--user-approved");
+    assert.equal(r.code, 0, r.out); assert.equal(sent[0].decision, "accept");
+    assert.equal((await run("standing", "--add", "git status")).code, 0);
+    reset("bash -lc 'git status'");
+    r = await run("pending", "--thread", thread.id, "--json"); assert.equal(r.code, 0, r.out);
+    assert.equal(JSON.parse(r.out)[0].standing, true); assert.deepEqual(JSON.parse(r.out)[0].warnings, []);
+    r = await ask("bash -lc 'git status'", "--decision", "accept");
+    assert.equal(r.code, 0, r.out); assert.match(r.out, /standing approval/); assert.equal(sent[0].decision, "accept");
+    r = await ask("bash -lc 'git status'", "--decision", "acceptForSession");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^NEEDS_USER_APPROVAL/); assert.deepEqual(sent, []);
+    r = await ask("git status && rm -rf ~", "--decision", "accept");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^NEEDS_USER_APPROVAL/); assert.deepEqual(sent, []);
+    reset("git status && rm -rf ~");
+    r = await run("pending", "--thread", thread.id, "--json");
+    assert.equal(JSON.parse(r.out)[0].standing, false); assert.ok(JSON.parse(r.out)[0].warnings.length);
   } finally { srv.close(); }
 });

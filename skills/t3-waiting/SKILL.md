@@ -17,5 +17,5 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use t
 ## One thread
 1. Run `t3ctl pending --thread '<t>' --json`.
 2. For a question with `answerable: true`, show it as a question card with the options exactly as listed. Answer with the user's pick as in t3-phone-answers "Answering", and confirm that it closed.
-3. For an approval, show the prompt, the options and the risk hint. Answer it only as t3-tots-rules "Decisions" allows.
+3. For an approval, show the prompt, the options and any `warnings`. Accept it only after the user's yes for that request (`--user-approved`), or when `standing` is true, as t3-tots-rules "Decisions" says.
 4. If it isn't answerable, tell the user to answer it in T3.

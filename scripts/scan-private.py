@@ -24,7 +24,7 @@ PATTERNS = [
     # A personal folder under the home folder. Dot folders, Library and t3-tots are generic, so they pass.
     ("personal path", re.compile(HOME_VAR + r"[/\\](?:Developer|Projects|Documents|Desktop|Code|src|dev|work|repos|git|GitHub|Sites)\b", re.I), None),
     ("machine id", re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),
-     re.compile(r"00000000-0000-0000-0000-000000000000|[0-9a-f]{8}-0000-0000-0000-0000000000[0-9a-f]{2}")),
+     re.compile(r"00000000-0000-0000-0000-000000000000|[0-9a-f]{8}-0000-0000-0000-0000000000[0-9a-f]{2}|258EAFA5-E914-47DA-95CA-C5AB0DC85B11")),
     ("computer name", re.compile(r"\b[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*-(?:MacBook|Mac-mini|iMac|Mac-Studio|Mac-Pro)[A-Za-z0-9-]*"
                                  r"|\bMac(?:Book|mini|Studio)-?(?:Pro|Air)?-?\d*\.local\b|\bMacBook-?(?:Pro|Air)(?:-\d+)?(?![ \w])"
                                  r"|\b(?i:DESKTOP|LAPTOP)-(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{5,15}\b|\b[A-Za-z0-9-]+\.local\b"),

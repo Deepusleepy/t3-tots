@@ -33,7 +33,7 @@ function args(a = process.argv.slice(3)) { const o = {}; for (let i = 0; i < a.l
 // flags that always take a value; "--from --to dir" must not read as --from=true
 const VALUE_FLAGS = new Set(["thread", "project", "prompt", "prompt-file", "model", "effort", "title", "mode", "attach", "timeout", "from", "to", "only", "text", "pick", "answers",
   "decision", "request", "query", "q", "limit", "last", "number", "repo", "state", "stall-min", "until", "every", "at", "days", "id", "subagent", "edit", "move", "before", "steer",
-  "run", "provider", "turn", "reason", "label", "chars", "runtime", "enable", "disable", "delete", "copy"]);
+  "run", "provider", "turn", "reason", "label", "chars", "runtime", "enable", "disable", "delete", "copy", "add", "remove"]);
 function missingValue(o, cmd) { // --cancel takes a run id only for queue; elsewhere it is a switch
   return Object.keys(o).find((k) => o[k] === true && (VALUE_FLAGS.has(k) || (k === "cancel" && cmd === "queue"))); }
 async function get(p) {
@@ -208,10 +208,9 @@ function printRequest(r) {
     q.options.forEach((x, i) => console.log(`     ${i + 1}. ${x.label}${x.description && x.description !== x.label ? " - " + x.description : ""}`));
     if (q.allowCustomAnswer) console.log("     (free-text answer allowed)");
   }
-  if (r.approval) { const k = riskOf(r.approval); console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}\n  risk hint: ${k.level}${k.reasons.length ? " (" + k.reasons.join(", ") + ")" : ""}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
+  if (r.approval) { const w = warningsOf(r.approval); console.log(`  ${r.approval.requestKind}${r.approval.appName ? " for " + r.approval.appName : ""}: ${r.approval.prompt || "(no prompt)"}${w.length ? "\n  warnings: " + w.join(", ") : ""}`); for (const x of r.approval.options) console.log(`     --decision ${x.decision}  (${x.label})${x.warning ? "  WARNING: " + x.warning : ""}`); }
 }
 // --- pure helpers (unit-tested in tests/t3ctl.test.js; no network) ---
-// riskOf: a hint for approvals so a watcher can approve routine ones and hold risky ones. The agent still decides.
 // GIT: "git", "git.exe" or "git.cmd" (optional " or ' after the name), plus any global options
 // before the subcommand (-C path or -Cpath, -c k=v, --git-dir/--work-tree/--namespace =value or the next token, --no-pager)
 const GIT = String.raw`\bgit(?:\.exe|\.cmd)?["']?(?:\s+(?:-[Cc]\s*(?:"[^"]*"|'[^']*'|\S+)|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+(?:"[^"]*"|'[^']*'|\S+))|--?[\w-]+(?:=\S+)?))*\s+`;
@@ -387,7 +386,7 @@ const EXTLESS = String.raw`(?:GNUmakefile|Makefile|makefile|README|Dockerfile|LI
 const PATHY = String.raw`(?:['"](?:\.\.?|[^'"]*[./*?\\[][^'"]*|:\([^'"]*\)[^'"]*|${EXTLESS})['"]|(?:\.\.?(?:[/\\]\S*)?|\.[^./\\\s]\S*)|[^\s-][^\s]*[/\\.?*\[][^\s]*|:\([^)\s]*\)\S*|${EXTLESS})`;
 const CHECKOUT_DISCARD = String.raw`checkout\b(?:${CHK}(?:(?<=\s)${qflag(String.raw`-[a-z]*[f23][a-z]*\b`)}|${qflag("--force\\b")}|${qflag(uopt("ours", 2) + "\\b")}|${qflag(uopt("theirs", 2) + "\\b")})|(?!${CHK}(?:\s-b\b|\s--orphan(?:\s|=)))${CHK}(?:\s--\s|\s${PATHY}(?:\s|$)|(?:HEAD(?:[@{~^]\S*)?|[0-9a-f]{7,40}|@(?:[~^{]\S*)?|['"]HEAD['"])\s+\S|(?<=\s)[^\s-][^\s]*\s+[^\s-]))`;
 const FETCH_FLAG = String.raw`${qflag(uopt("prune", 5) + "\\b")}|${qflag(uopt("force", 2) + "\\b")}|${qflag(String.raw`-[A-Za-z]*[pf][A-Za-z]*\b`)}`;
-const RISK_HIGH = [
+const WARNINGS = [
   [new RegExp(String.raw`\brm\b${MORE}(?:\s|\\\n[ \t]*)(?:${qflag(String.raw`-[fidv]*[rfd][fidv]*\b`)}|${qflag(String.raw`(?:${uopt("recursive", 1)}|${uopt("force", 1)}|${uopt("dir", 1)})\b`)})`, "i"), "deletes files (rm -r/-f)"],
   [new RegExp(String.raw`\bfind\b[\s\S]*?(\s-delete\b|\s+${FIND_EXEC_DEL})`, "i"), "deletes files (find -delete/-exec rm)"],
   [git(String.raw`push\b${MORE}(?:\s|--|\n[ \t]+)*(?:${qflag("--force\\b")}|${qflag("--force-with-lease\\b")}|${qflag(String.raw`-[A-Za-z]*f[A-Za-z]*\b`)}|${PLUS_SPEC})`), "force push"],
@@ -403,12 +402,10 @@ const RISK_HIGH = [
   [/\b(vercel|netlify|fly|wrangler)\b[^\n]*\b(--prod|deploy)\b|\bkubectl\s+(apply|delete)\b|\bterraform\s+(apply|destroy)\b/i, "deploys"],
   [/\bdrop\s+(table|database)\b|\btruncate\s+table\b/i, "drops data"], [/\b(shutdown|reboot|killall|pkill|taskkill|stop-process|restart-computer|stop-computer)\b|\bkill\s+-9\b/i, "kills processes or the machine"],
 ];
-const READ_ONLY = new RegExp(String.raw`^\s*(ls|dir|cat|type|head|tail|less|wc|stat|file|pwd|which|where|whoami|echo|date|env\s*$|rg|grep|find(?![\s\S]*(-delete|${FIND_EXEC_DEL}))|tree|du|df|git\s+(status|log|diff|show|branch(?:(?:\s+(?:--list|--show-current|-v{1,2}|--verbose))+(?:\s+\S+)*|\s*)?$|remote\s+-v\s*$|rev-parse|ls-files|blame|fetch(?![^\n]*(\s${PLUS_SPEC}|\s(?![\w.+-]+:\/\/)(?:[^\s:@]+\\?${qhex(":")}[^\s]+|${QWRAP}\\?${qhex(":")}${QSEP}\S)|\s(?:${FETCH_FLAG}))))|gh\s+(pr|issue|run|repo)\s+(view|list|diff|checks|status)|node\s+(-v|--version|--check)|python3?\s+(-V|--version|-m\s+py_compile)|go\s+(vet|version|list|env)|cargo\s+(check|tree)|npm\s+(ls|view|test)|pnpm\s+(ls|test)|bun\s+test|go\s+test|pytest|just\s+(test|check|lint)|sort|uniq|cut|jq|nl|column|get-(childitem|content|item|itemproperty|location|command|process|filehash|date)|test-path|select-string|select-object|measure-object|resolve-path|format-(list|table))\b`, "i");
 // unwrapShell: Codex shows commands as `bash -lc '...'` or `pwsh -Command "..."`; judge the inner command.
 function unwrapShell(c) { const m = String(c).trim().match(/^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?"?\s+-l?c\s+([\s\S]+)$|^(?:"[^"]*[\\/])?(?:\S*[\\/])?(?:pwsh|powershell)(?:\.exe)?"?\s+(?:-\w+\s+)*?-c(?:ommand)?\s+([\s\S]+)$/i);
   if (!m) return String(c); const x = (m[1] || m[2]).trim(); return /^(['"]).*\1$/s.test(x) ? x.slice(1, -1) : x; }
-const WRITES = /(^|[^0-9&>])>{1,2}(?!&)\s*(?!\/dev\/null\b|\$null\b|nul\b)\S|\btee\b|\bout-file\b|\bset-content\b|\badd-content\b|\$\(|`/i;
-// bash expands unquoted {a,b} before argv; riskOf sees the source. Inline each
+// bash expands unquoted {a,b} before argv; warningsOf sees the source. Inline each
 // alternative so --{force,} / {-rf,} / {:gone,} match the same as --force / -rf / :gone.
 // Quoted braces stay literal. ${…} and \{ are left alone.
 function expandBraces(s) {
@@ -429,16 +426,34 @@ function expandBraces(s) {
   }
   return t.replace(/\uE001(\d+)\uE001/g, (_, i) => saved[+i]);
 }
-function riskOf(approval) {
+function warningsOf(approval) {
   const a = approval || {}; const inner = expandBraces(unwrapShell(a.prompt || ""));
   const prompt = a.prompt != null && a.prompt !== "" ? expandBraces(String(a.prompt)) : a.prompt;
   const parts = [prompt, inner, a.requestKind, a.appName].filter(Boolean).map(String); // raw prompt and unwrap separately (joining made -execdir look like rm -r)
-  const reasons = RISK_HIGH.filter(([re]) => parts.some((s) => re.test(protectU(s)))).map(([, why]) => why);
-  if (reasons.length) return { level: "high", reasons };
-  if (/file_change|apply_patch|write|edit/i.test(String(a.requestKind || "")) && !a.prompt) return { level: "normal", reasons: ["edits files in the workspace"] };
-  const cmds = inner.split(/&&|\|\|?|;|\n/).map((s) => s.trim()).filter(Boolean); // every piped stage must be read-only too
-  if (cmds.length && !WRITES.test(inner) && cmds.every((c) => READ_ONLY.test(protectU(c.replace(/^(cd\s+\S+\s*)$/i, "pwd"))))) return { level: "low", reasons: ["read-only command or test run"] };
-  return { level: "normal", reasons: [] };
+  return WARNINGS.filter(([re]) => parts.some((s) => re.test(protectU(s)))).map(([, why]) => why);
+}
+const STANDING = path.join(__dirname, "standing-approvals.json");
+function readStanding() {
+  let raw; try { raw = fs.readFileSync(STANDING, "utf8"); } catch (e) { if (e.code === "ENOENT") return []; throw e; }
+  let list; try { list = JSON.parse(raw); } catch { list = null; }
+  if (!Array.isArray(list) || !list.every((x) => typeof x === "string")) throw new Error(`BAD_STANDING: ${STANDING} must be a JSON list of exact commands`);
+  return list;
+}
+const REFUSALS = new Set(["decline", "cancel"]);
+function standingMatch(approval, standing) {
+  const p = String((approval && approval.prompt) || "").trim();
+  return p !== "" && (standing.includes(p) || standing.includes(unwrapShell(p)));
+}
+function approvalAuthority(approval, decision, userApproved, readStandingList) {
+  if (REFUSALS.has(decision)) return "refusal";
+  if (userApproved) return "user";
+  return decision === "accept" && standingMatch(approval, readStandingList()) ? "standing" : null;
+}
+function standingCmd(o) {
+  const list = readStanding(); const write = (next) => fs.writeFileSync(STANDING, JSON.stringify(next, null, 2) + "\n");
+  if (o.add !== undefined) { const c = String(o.add).trim(); if (!c) throw new Error("--add is empty"); if (!list.includes(c)) write([...list, c]); console.log(`standing approval saved: ${c}`); }
+  else if (o.remove !== undefined) { const c = String(o.remove).trim(); if (list.includes(c)) write(list.filter((x) => x !== c)); console.log(`standing approval removed: ${c}`); }
+  else if (!list.length) console.log("no standing approvals"); else for (const c of list) console.log(c);
 }
 // deliveryOf: where a just-sent message ended up. "started" | "steered" | "queued" (behind a running run) | "held" | "stuck" | "unknown"
 function deliveryOf(p, messageId, activeRunId) {
@@ -459,7 +474,7 @@ function watchSnap(t, p, now = Date.now()) {
   const reply = lastA ? String(lastA.text) : ""; const settled = isSettled(t);
   const state = t.activeRunId ? "running" : pend.length ? "waiting" : t.lastErrorClass === "usage_limit" ? "limit" : t.lastError ? "error" : t.hasActionableProposedPlan ? "plan-ready" : /\?\s*[*_`)]*\s*$/.test(reply) ? "asked-you" : "idle";
   return { id: t.id, title: t.title, state, settled, updatedAt: t.updatedAt, checkedAt: new Date(now).toISOString(),
-    pending: pend.map((r) => ({ id: r.requestId, kind: r.kind, answerable: r.answerable, ...(r.approval ? { risk: riskOf(r.approval).level, prompt: String(r.approval.prompt || r.approval.requestKind).slice(0, 160) } : { question: ((r.questions || [])[0] || {}).question || "" }) })),
+    pending: pend.map((r) => ({ id: r.requestId, kind: r.kind, answerable: r.answerable, ...(r.approval ? { warnings: warningsOf(r.approval), prompt: String(r.approval.prompt || r.approval.requestKind).slice(0, 160) } : { question: ((r.questions || [])[0] || {}).question || "" }) })),
     queued: runs.length, queueHeld: runs.some((r) => r.queueHeld), replyHash: reply ? crypto.createHash("sha256").update(reply).digest("hex").slice(0, 12) : null,
     reply: reply.replace(/\s+/g, " ").slice(0, 280), resetAt: t.usageLimitResetAt || null,
     autoResume: !!(t.limitRecovery && t.limitRecovery.runId === t.latestRunId && t.limitRecovery.autoResume), error: t.lastError ? String(t.lastError.message || "error").slice(0, 200) : null };
@@ -474,7 +489,7 @@ function watchDiff(prev, cur, stallMin = 20, now = Date.now()) { // -> [{ kind, 
   if (!prev) { add("first", `${cur.state}${cur.pending.length ? `, ${cur.pending.length} open request(s)` : ""}`); }
   else if (prev.state !== cur.state) add(prev.state === "running" && DONE.has(cur.state) ? "finished" : "state", `${prev.state} -> ${cur.state}${cur.reply && prev.replyHash !== cur.replyHash ? `: ${cur.reply}` : ""}`);
   const seen = new Set(((prev && prev.pending) || []).map((r) => r.id));
-  for (const r of cur.pending) if (!seen.has(r.id)) add(r.kind === "user_input" ? "question" : `approval-${r.risk}`, r.question || r.prompt || r.kind);
+  for (const r of cur.pending) if (!seen.has(r.id)) add(r.kind === "user_input" ? "question" : "approval", r.kind === "user_input" ? r.question || r.kind : `${r.prompt || r.kind}${(r.warnings || []).length ? ` (warnings: ${r.warnings.join(", ")})` : ""}`);
   const wasStale = new Set(((prev && prev.pending) || []).filter((r) => !r.answerable).map((r) => r.id));
   for (const r of cur.pending) if (!r.answerable && !wasStale.has(r.id)) add("stale-request", `request ${r.id} can't be answered any more; clear it in T3`);
   if (cur.queued && cur.state !== "running" && !(prev && prev.queued && prev.state === cur.state)) add(cur.queueHeld ? "queue-held" : "queue-stuck", `${cur.queued} queued message(s) not running`);
@@ -527,8 +542,10 @@ async function answer(o) {
   if (o.decision) {
     const r = await pickRequest(t, o, true); const d = String(o.decision);
     if (!r.approval.options.some((x) => x.decision === d)) throw new Error(`--decision must be one of: ${r.approval.options.map((x) => x.decision).join(", ")}`);
+    const by = approvalAuthority(r.approval, d, o["user-approved"] === true, readStanding);
+    if (!by) throw new Error(`NEEDS_USER_APPROVAL: --decision ${d} lets "${t.title}" run: ${r.approval.prompt || r.approval.requestKind}. Show it to the user. After their yes for this request, add --user-approved. Only an exact command saved with t3ctl standing --add goes through without it.`);
     await respond(t, r.requestId, { decision: d });
-    return confirm(t, r, `decision=${d}`);
+    return confirm(t, r, `decision=${d}${by === "standing" ? " (standing approval)" : ""}`);
   }
   const r = await pickRequest(t, o, false); const qs = r.questions; let answers = {};
   if (!qs.length) throw new Error("this question has no readable details; answer it in T3");
@@ -542,7 +559,7 @@ async function answer(o) {
     const q = qs[0];
     if (o.text !== undefined) { if (!q.allowCustomAnswer) throw new Error("this question only accepts one of its options (--pick)"); answers[q.id] = String(o.text).trim(); if (!answers[q.id]) throw new Error("--text is empty"); }
     else { let v = String(o.pick); if (v.startsWith("[")) { try { v = JSON.parse(v); } catch { throw new Error("--pick list must be a JSON array of labels"); } } answers[q.id] = buildAnswer(q, v, false); }
-  } else throw new Error("usage: answer --thread <id|title> [--request <id>] (--pick '<option label>' | --text '<free text>' | --answers '<json>' | --decision <d>)");
+  } else throw new Error("usage: answer --thread <id|title> [--request <id>] (--pick '<option label>' | --text '<free text>' | --answers '<json>' | --decision <d> [--user-approved])");
   for (const q of qs) if (answers[q.id] === undefined && q.required) throw new Error(`question [${q.id}] "${q.header}" needs an answer too`);
   if (r.responseMode === "message") for (const k of Object.keys(answers)) if (Array.isArray(answers[k])) answers[k] = answers[k].join(", ");
   await respond(t, r.requestId, { answers });
@@ -679,6 +696,7 @@ const main = async () => {
   const cmd = process.argv[2], o = args();
   const bare = missingValue(cmd === "skills" ? args(process.argv.slice(3)) : o, cmd);
   if (bare) die("USAGE", `--${bare} needs a value (use --${bare}=<value> for a value that starts with --). Run t3ctl with no arguments for usage.`);
+  if (cmd === "standing") return standingCmd(o);
   if (cmd === "skills") return skillsCmd(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "list", args(process.argv.slice(3)));
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
@@ -737,7 +755,7 @@ const main = async () => {
   else if (cmd === "rename") { const t = await findThread(o.thread); if (!o.title) throw new Error("--title required"); await dispatch("thread.metadata.update", t.id, { title: String(o.title) }); console.log(`renamed "${t.title}" -> "${o.title}"`); }
   else if (cmd === "interrupt") { const t = await findThread(o.thread); if (!t.activeRunId) { console.log("not running"); return; } await dispatch("run.interrupt", t.id, { runId: t.activeRunId, reason: "t3ctl", holdQueue: !!o.hold }); console.log(`interrupted run in "${t.title}"`); }
   else if (cmd === "pending") { const t = await findThread(o.thread); const pend = pendingOf((await thread(t.id)).projection);
-    if (o.json) console.log(JSON.stringify(pend.map((r) => (r.approval ? { ...r, risk: riskOf(r.approval) } : r)))); else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
+    if (o.json) { const standing = pend.some((r) => r.approval) ? readStanding() : []; console.log(JSON.stringify(pend.map((r) => (r.approval ? { ...r, warnings: warningsOf(r.approval), standing: standingMatch(r.approval, standing) } : r)))); } else { if (!pend.length) console.log(`no open questions or approvals in "${t.title}"`); else { console.log(`${t.id}  "${t.title}"`); pend.forEach(printRequest); } } }
   else if (cmd === "answer") await answer(o);
   else if (cmd === "diff") { const t = await findThread(o.thread); const p = (await thread(t.id)).projection; const n = p.checkpoints.filter((c) => c.status !== "missing").length;
     const d = await rpc("orchestration.getFullThreadDiff", { threadId: t.id, toTurnCount: +o.turn || n }); console.log(d.diff || "(empty diff - project may not be a git repo)"); }
@@ -847,7 +865,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|...) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
+  else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved]) | diff --thread t | files --thread t [--last-turn] [--copy no] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force] | standing [--add cmd | --remove cmd]");
 };
-if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, uopt, riskOf, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, unwrapShell, uopt, warningsOf, standingMatch, approvalAuthority, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });

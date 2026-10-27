@@ -39,7 +39,7 @@ Anything for the user goes to the main chat as a hand-off, with `machine`, `thre
   1. One short briefing message first: what the thread is doing and what it's asking about, in one or two sentences built from `title`, `project`, `machine` and `context`. Don't list the questions or options in it, and don't recommend anything.
   2. Then each question as its own card, one at a time, in order (the next one after the user answers). Use the option labels exactly, put each option's description in the card if it fits, allow multiple choices if `multiSelect`, and add a typed-answer choice only if `allowCustomAnswer`. Nothing is pre-selected.
   3. Keep each pick (for each question `id`: its label, list of labels, or typed text). When every required question has an answer, submit them all at once (see "Answering"). Several events that arrive together: explain them together, then cards per thread.
-- In delegated mode, answer as t3-tots-rules "Decisions" allows, with `t3ctl answer` instead of cards, and tell the user after in one line what you picked and why.
+- In delegated mode, answer questions as t3-tots-rules "Decisions" allows, with `t3ctl answer` instead of cards, and tell the user after in one line what you picked and why. Approvals still go to the user as cards.
 - `request.opened` with `approval` (only when the user turned approvals on): show the prompt and options verbatim, warnings included. Otherwise stay quiet.
 - `answerable: false` or no questions: tell the user to answer it in T3.
 - `request.resolved`: if `answeredHere` is true, stay quiet. Otherwise, if it's still unanswered here, say in one line that it closed ("answered in T3: Blue", "cancelled", "expired") and drop any remaining cards for it.
@@ -50,7 +50,7 @@ Anything for the user goes to the main chat as a hand-off, with `machine`, `thre
 When the user has picked, on the computer whose ListMachines label matches `machine` (ask if none matches), from the tools folder:
 - One question: `node t3ctl answer --thread '<threadId>' --request '<requestId>' --pick '<exact label>'`. For typed words use `--text '<their words>'`.
 - Several questions (one request) or multi-select: once all are answered, one call: `--answers '{"<question id>": "<label>", "<other id>": ["<label>", "<label>"], "<typed id>": "<their words>"}'`. Typed text goes in as the value for questions with `allowCustomAnswer`.
-- Approval: `--decision <decision from options>`. Check the risk hint first (t3-tots-rules "Decisions").
+- Approval: after the user's yes for that request, `--decision <accept option> --user-approved`. For their no, `--decision decline`. Without `--user-approved`, t3ctl accepts only a standing approval and prints `NEEDS_USER_APPROVAL` for anything else (t3-tots-rules "Decisions").
 Success prints `answered "<title>": ... (request resolved)`; confirm in one line. `NOT_PENDING` means it was already answered or closed, so say so. `NOT_ANSWERABLE` means the run ended, so offer a follow-up (`t3ctl send`) instead. An option error means the label didn't match, so show the options again. In the default mode, never answer without the user's pick, never reuse an earlier pick for a new question, and never answer a question the user didn't see. In delegated mode, answer as t3-tots-rules "Decisions" allows and tell the user what you picked.
 
 After a successful answer, t3ctl lists any other requests still open in that thread. Deal with them, or tell the user to clear them in T3.

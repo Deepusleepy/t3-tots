@@ -2,6 +2,8 @@
 
 Grok Bot / chat companion for [T3 Code](https://github.com/pingdotgg/t3code), with skills and helper tools. Thread status, waiting items, new threads, answers, reports, watches, and updates.
 
+T3 Tots is unofficial. `t3ctl` and `t3listen` use T3 Code's internal local websocket API, which isn't public or stable, and `t3q.py` reads its database read-only. A T3 Code update can break them. T3 Tots will move to the official API when T3 ships one.
+
 [MIT](LICENSE). No accounts or telemetry. The only outbound send is optional `t3listen` to a webhook you set up.
 
 Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and verify by following [AGENTS.md](AGENTS.md). Shared rules: [t3-tots-rules](skills/t3-tots-rules/SKILL.md).
@@ -63,6 +65,18 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
+## Delegated mode and approvals
+
+Delegated mode starts only when you hand over control, for example "I'm away, keep it moving". The agent then answers routine questions, nudges stalled threads, and resumes threads after a usage limit.
+
+It never accepts an approval (a thread asking to run a command or change files) on its own. Each approval comes to you as a card, and the agent accepts it only after your yes for that request. `t3ctl answer` backs this up. An accept without `--user-approved` is refused with `NEEDS_USER_APPROVAL`, and nothing is sent.
+
+The one exception is a standing approval: an exact command you typed, saved with `t3ctl standing --add '<command>'`. It covers that command word for word, and nothing else.
+
+Approval cards show warnings such as "deletes files" or "force push" to help you decide. A command with no warnings can still be dangerous.
+
+Threads that `t3ctl new` and `t3ctl tasks --upsert` start run in full access unless you pass `--runtime`, so they don't ask for approvals.
+
 ## Requirements
 
 - **Python 3.8+** for `t3q.py` and `cleanup/scan.py` (3.9+ for `report/report.py`). Windows: `py -3`.
@@ -74,7 +88,7 @@ Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-ans
 - `t3q.py` opens `statev2.sqlite` read-only. From `server-runtime.json` it reads only `host`, `port` and `pid`.
 - Scripts never open T3's `secrets/` or other credentials. The only token they read sits next to them, after your yes, with a 90-day TTL, and is never printed. Issue and revoke: [t3-tots-rules "Token"](skills/t3-tots-rules/SKILL.md).
 - Traffic stays on `127.0.0.1` except optional `t3listen` POSTs to your webhook. Exports redact API-key patterns and your home path.
-- No token: read-only. With one, `t3ctl answer` sends only the answer you chose. `t3ctl skills` writes only into `--to` and its own `out/`.
+- No token: read-only. With one, `t3ctl answer` sends only the answer you chose, and accepts an approval only with `--user-approved` or for an exact standing approval. `t3ctl skills` writes only into `--to` and its own `out/`.
 
 Report issues in [SECURITY.md](SECURITY.md).
 
@@ -83,4 +97,5 @@ Report issues in [SECURITY.md](SECURITY.md).
 - `scripts/check.sh`. Syntax, tests, manifest freshness, CRLF on the Windows wrappers, private-word scan. Never-ship words go one per line in `~/.config/t3-tots/private-words.txt` (do not commit it). No list fails the check. `T3TOTS_NO_PRIVATE_WORDS=1` skips it on purpose.
 - After changing a tool, add it to `TOOLS` in `scripts/make-manifest.py` and run that script. It rewrites `manifest.json` from `VERSION`.
 - `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, and updates the manifest. It copies nothing if the scan fails.
+- `warningsOf` in `tools/t3ctl` only labels approvals. Nothing decides on it, so don't extend its patterns to make approvals safer. Approval decisions go through `approvalAuthority`.
 - Release only from a tag. Installers download by tag and check every hash.
