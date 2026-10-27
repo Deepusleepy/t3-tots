@@ -2,7 +2,7 @@
 
 Grok Bot / chat companion for [T3 Code](https://github.com/pingdotgg/t3code), with skills and helper tools. Thread status, waiting items, new threads, answers, reports, watches, and updates.
 
-T3 Tots is unofficial. `t3ctl` and `t3listen` use T3 Code's internal local websocket API, which isn't public or stable, and `t3q.py` reads its database read-only. A T3 Code update can break them. T3 Tots will move to the official API when T3 ships one.
+T3 Tots is unofficial. `t3ctl` and `t3listen` use T3 Code's internal local websocket API, which isn't public or stable, and `t3q.py` reads its database read-only. A T3 Code update can break them. T3 Code now has an official [MCP server for outside agents](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md) and a `t3 thread` command. They don't cover everything T3 Tots does yet, such as permission approvals, live events to a webhook, resuming a stuck queue and usage-limit recovery. T3 Tots moves features onto the official interfaces as they gain coverage.
 
 [MIT](LICENSE). No accounts or telemetry. The only outbound send is optional `t3listen` to a webhook you set up.
 
