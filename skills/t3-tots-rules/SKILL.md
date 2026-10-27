@@ -178,6 +178,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
+| `REDIRECT_NOT_DELIVERED` | The approval was declined, but the follow-up didn't reach the thread. Don't rerun `answer` (the request is closed). Run the `t3ctl send ... --prompt-file` command it prints |
 | `NOT_LIMITED` | The thread isn't stopped on a usage limit, so there is nothing to resume |
 | `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
 | `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |

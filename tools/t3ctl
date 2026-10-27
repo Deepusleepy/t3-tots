@@ -306,7 +306,7 @@ async function answer(o) {
     if (!approvalAllowed(d, o["user-approved"])) throw new Error(`NEEDS_USER_APPROVAL: --decision ${d} lets "${t.title}" run: ${r.approval.prompt || r.approval.requestKind}. Show it to the user. After their yes for this request, add --user-approved. To keep the thread moving without them, use --decision decline --redirect.`);
     await respond(t, r.requestId, { decision: d });
     await confirm(t, r, `decision=${d}`);
-    if (o.redirect) { await sendText(await findThread(t.id), redirectText(r.approval)); console.log("REDIRECTED: told the thread to skip it or use a safer way, and to carry on"); }
+    if (o.redirect) await redirect(t, r);
     return;
   }
   const r = await pickRequest(t, o, false); const qs = r.questions; let answers = {};
@@ -379,14 +379,22 @@ async function sendText(t, text, { queue = false, attachments = [], verify = tru
   await rpc("orchestration.dispatchCommand", { type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: uuid(), threadId: t.id, messageId,
     text, attachments, dispatchMode: !busy ? { type: "start_immediately" } : queue ? { type: "queue_after_active" } : { type: "steer_active", targetRunId: t.activeRunId } });
   console.log(`sent to ${t.id}  "${t.title}"${busy ? (queue ? " (queued after current run)" : " (steered into the running run)") : ""}`);
-  if (verify) await verifyDelivery(t, messageId, queue);
+  return verify ? verifyDelivery(t, messageId, queue) : "unverified";
+}
+async function redirect(t, r) {
+  const text = redirectText(r.approval); let d = null, why = "";
+  try { d = await sendText(await findThread(t.id), text); } catch (e) { why = e.message; }
+  if (d === "started" || d === "steered" || d === "queued") { console.log("REDIRECTED: told the thread to skip it or use a safer way, and to carry on"); return; }
+  const f = path.join(__dirname, "out", "prompts", `${new Date().toISOString().slice(0, 10)}-redirect-${hereKey(r.requestId)}.md`);
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text);
+  throw new Error(`REDIRECT_NOT_DELIVERED: the approval was declined, but the follow-up didn't reach the thread (${why || d}). Send it with: t3ctl send --thread ${t.id} --prompt-file ${f}`);
 }
 function redirectText(approval) {
   return [
     `T3 Tots declined this permission request because the user is away: ${approval.prompt || approval.requestKind}`,
     approval.reason ? `Why it asked: ${approval.reason}` : null,
     "Don't run it again, and don't get around the check with a different command that does the same thing.",
-    "If a safer way does the same job without losing anyone's work, use it (for example git stash or git restore instead of git reset --hard). Otherwise skip that step and carry on with the rest.",
+    "If a safer way does the same job without discarding or overwriting anyone's uncommitted work, use it. Otherwise skip that step and carry on with the rest.",
     "When you finish, list what still needs the user's OK.",
   ].filter(Boolean).join("\n");
 }
@@ -400,10 +408,10 @@ async function verifyDelivery(t, messageId, wantQueue) {
     if (d !== "stuck") { stuckSeen = 0; continue; }
     if (++stuckSeen >= 2 && !fixed) { await dispatch("queue.resume", t.id); fixed = true; stuckSeen = 0; } // a run can show "queued" for a moment before it starts
   }
-  if (d === "held") { console.log(`QUEUE_HELD: the message is queued but this thread's queue is held (someone stopped it on purpose). Start it with: t3ctl queue --thread ${t.id} --resume`); return; }
-  if (d === "queued" && !wantQueue) { console.log(`queued: the steer became a queued message and runs after the current run. To push it in now: list it with t3ctl queue --thread ${t.id}, then add --steer <runId>`); return; }
-  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); return; }
-  if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return; }
+  if (d === "held") { console.log(`QUEUE_HELD: the message is queued but this thread's queue is held (someone stopped it on purpose). Start it with: t3ctl queue --thread ${t.id} --resume`); return d; }
+  if (d === "queued" && !wantQueue) { console.log(`queued: the steer became a queued message and runs after the current run. To push it in now: list it with t3ctl queue --thread ${t.id}, then add --steer <runId>`); return d; }
+  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); return d; }
+  if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return d; }
   throw new Error(`SEND_STUCK: the message is ${d} in "${t.title}" and resuming the queue didn't start it. Try: t3ctl queue --thread ${t.id} --resume, then t3ctl status --thread ${t.id}`);
 }
 // --- skills: copy the T3 Tots skills into an agent's skills folder (no T3 or token needed) ---

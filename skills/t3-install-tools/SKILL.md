@@ -34,7 +34,7 @@ import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urlli
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.29"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
- "tools/t3ctl": ["t3ctl", "1786a06ca35fdb4bbf6eff2dc02b3af55cb566b6b43fcab93db26b6c96e4e902"],
+ "tools/t3ctl": ["t3ctl", "a3b5d9636e8cf8dfbbae293dbaaeb56d64f77821ca9d920ab1643bd6b660d4d7"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "c2741d36c04dc45d2668c5721ff2c38bfb26e7b3f3acf7369fd7efd8b7eba57d"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],

@@ -44,7 +44,7 @@ In delegated mode, act first and report after:
 | Event | What to do |
 |---|---|
 | `question` | Answer it or escalate it, as t3-tots-rules "Decisions" says. |
-| `approval` | Decline it with `t3ctl answer --thread <t> --request <id> --decision decline --redirect`, so the thread skips it or takes a safer way and keeps going. Log the prompt and its reason for the report. Never accept one yourself. |
+| `approval` | Decline it with `t3ctl answer --thread <t> --request <id> --decision decline --redirect`, so the thread skips it or takes a safer way and keeps going. On `REDIRECT_NOT_DELIVERED`, run the send command it prints. Log the prompt and its reason for the report. Never accept one yourself. |
 | `queue-stuck` | `t3ctl queue --thread <t> --resume` once. |
 | `queue-held` | Leave it. Someone held it on purpose. Tell the user. |
 | `limit` | If `autoResume` isn't set, run `t3ctl resume-at-reset --thread <t>`. |

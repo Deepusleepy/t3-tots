@@ -46,7 +46,7 @@ test("watchDiff: an idle thread waiting on a background job is reported stalled 
   assert.equal(ev.length, 1); assert.equal(ev[0].kind, "stalled");
   const later = t.watchSnap(th(), proj(reply), t0 + 40 * 6e4); assert.deepEqual(t.watchDiff(late, later, 20, t0 + 40 * 6e4), []);
 });
-test("watchDiff: new approvals are reported with their warnings, stuck queues are flagged", () => {
+test("watchDiff: new approvals are reported with why they ask, stuck queues are flagged", () => {
   const now = Date.now();
   const a = t.watchSnap(th(), proj("idle"), now);
   const p = proj("idle", { runs: [{ id: "q1", status: "queued", userMessageId: "m" }],
@@ -259,7 +259,7 @@ test("answer: an approval goes through only with --user-approved; decline --redi
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const thread = { id: "thread-approve-01", title: "Approve me", status: "idle" };
   const options = [{ decision: "accept", label: "Allow" }, { decision: "acceptForSession", label: "Always allow" }, { decision: "decline", label: "Deny" }];
-  let requests = [], sent = [], runs = [];
+  let requests = [], sent = [], runs = [], dispatchMode = "ok";
   const srv = http.createServer((req, res) => {
     const u = decodeURIComponent(req.url);
     if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [thread] }));
@@ -281,8 +281,11 @@ test("answer: an approval goes through only with --user-approved; decline --redi
         if (op === 8) return sock.end();
         if (op !== 1) continue;
         const m = JSON.parse(body.toString("utf8")); sent.push(m.payload); requests = requests.map((r) => (r.id === m.payload.requestId ? { ...r, status: "resolved" } : r));
-        if (m.payload.type === "message.dispatch") runs.push({ id: `run-${runs.length + 1}`, userMessageId: m.payload.messageId, status: "running" });
-        const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit: { _tag: "Success", value: {} } }));
+        const isMessage = m.payload.type === "message.dispatch";
+        if (isMessage && dispatchMode === "ok") runs.push({ id: `run-${runs.length + 1}`, userMessageId: m.payload.messageId, status: "running" });
+        if (isMessage && dispatchMode === "held") runs.push({ id: `run-${runs.length + 1}`, userMessageId: m.payload.messageId, status: "queued", queueHeld: true });
+        const exit = isMessage && dispatchMode === "fail" ? { _tag: "Failure", cause: { message: "thread is busy" } } : { _tag: "Success", value: {} };
+        const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit }));
         sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
       }
     });
@@ -324,6 +327,15 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     assert.match(sent[1].text, /Why it asked: git reset --hard discards uncommitted work/);
     assert.match(sent[1].text, /Don't run it again, and don't get around the check/);
     assert.deepEqual(sent[1].dispatchMode, { type: "start_immediately" });
+    assert.doesNotMatch(sent[1].text, /git restore|for example/, "the redirect names no command that could discard work");
+    for (const mode of ["fail", "held"]) {
+      dispatchMode = mode; reset("Redo merges with PR names; gate the result", why);
+      r = await run("answer", "--thread", thread.id, "--decision", "decline", "--redirect");
+      assert.equal(r.code, 1, `${mode}: ${r.out}`); assert.doesNotMatch(r.out, /REDIRECTED:/, mode); assert.equal(sent[0].decision, "decline", mode);
+      const m = r.out.match(/REDIRECT_NOT_DELIVERED: .*Send it with: t3ctl send --thread \S+ --prompt-file (\S+)/);
+      assert.ok(m, `${mode}: ${r.out}`); assert.match(fs.readFileSync(m[1], "utf8"), /Don't run it again/, mode);
+    }
+    dispatchMode = "ok";
     reset("rm -rf build");
     r = await run("answer", "--thread", thread.id, "--decision", "decline");
     assert.equal(r.code, 0, r.out); assert.doesNotMatch(r.out, /REDIRECTED/); assert.deepEqual(sent.map((p) => p.type), ["runtime-request.respond"]);

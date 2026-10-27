@@ -26,8 +26,8 @@
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 74171,
-   "sha256": "1786a06ca35fdb4bbf6eff2dc02b3af55cb566b6b43fcab93db26b6c96e4e902",
+   "bytes": 74774,
+   "sha256": "a3b5d9636e8cf8dfbbae293dbaaeb56d64f77821ca9d920ab1643bd6b660d4d7",
    "targets": [
     "macos",
     "linux",
@@ -257,7 +257,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 27364,
-   "sha256": "3568fdad915180877c33e75343310c2db6eb193ed725fc28afe3ca547f529ba1"
+   "sha256": "2303c0dcf972ad3f67e44abdbd04e2dcc848099283112e7dc6699fbb4e8a035c"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -333,8 +333,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 24610,
-   "sha256": "ba506830471298e51a25c71a22bbfdd64be12c2b47816282a6ef286c321698f1"
+   "bytes": 24814,
+   "sha256": "6da8f7a6ab7c7e20ece08ef73f31a02b78f0b74115f45f63359f3a88fe97f35a"
   },
   {
    "path": "skills/t3-update/SKILL.md",
@@ -361,8 +361,8 @@
    "path": "skills/t3-watch/SKILL.md",
    "dest": "t3-watch/SKILL.md",
    "kind": "skill",
-   "bytes": 5136,
-   "sha256": "3b4799a3233555d759a6fd7847af4e4cf0aba869452c2b065cf441c71328a764"
+   "bytes": 5197,
+   "sha256": "452d1e28793b49e827893b3ae693787cab2d4b144c6c6f098a5a09f94e15f271"
   }
  ]
 }
