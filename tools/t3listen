@@ -136,10 +136,31 @@ async function post(e) { // one attempt; returns { ok, status, body, retry }
 }
 const ref = (e) => String(e.requestId || e.runId || "");
 function markDelivered(e) {
-  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && f.e) { delete f.e; saveState(); } return; }
+  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && (f.e || f.retryLater)) { delete f.e; delete f.retryLater; saveState(); } return; }
   const s = S.sent[e.requestId]; if (!s) return;
+  delete s.e; delete s.retryLater;
   if (e.event === "request.opened") s.delivered = true; else if (e.event === "request.resolved" && s.closing) delete S.sent[e.requestId];
   saveState();
+}
+const MAX_RETRY_QUEUE = 100;
+const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.finished[e.runId] : null);
+function keepForRetry(q, st, item) {
+  if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
+  const s = stateFor(st, item.e); if (!s) return "dropped";
+  s.e = item.e; s.retryLater = true; return "parked";
+}
+function refillFromState(q, st, now) {
+  let moved = 0;
+  for (const s of [...Object.values(st.sent), ...Object.values(st.finished)]) {
+    if (q.length >= MAX_RETRY_QUEUE) break;
+    if (s.retryLater && s.e) { delete s.retryLater; q.push({ e: s.e, rounds: 0, since: now }); moved++; }
+  }
+  return moved;
+}
+function retryLater(item) {
+  const how = keepForRetry(queue, S, item);
+  if (how === "parked") { saveState(); log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is saved and retried when there is room`); }
+  else if (how === "dropped") log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is tried again when the listener restarts`);
 }
 async function deliver(e) {
   cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);
@@ -152,18 +173,19 @@ async function deliver(e) {
     if (!r.retry) break; if (i < 2) await sleep((/rate.?limit/i.test(r.body || "") ? 20000 : 2000) * 3 ** i);
   }
   // keep it queued and retry every 60s: retryable failures (network, 408, 429, 5xx) for up to 24h, other 4xx 10 times
-  if (queue.length < 100) queue.push({ e, rounds: 0, since: Date.now() }); return false;
+  retryLater({ e, rounds: 0, since: Date.now() }); return false;
 }
 setInterval(async () => {
-  if (!queue.length) return; const q = queue; queue = [];
+  const q = queue; queue = [];
   for (const item of q) {
     const { e } = item; item.rounds++; e.sentAt = new Date().toISOString();
     const r = await post(e);
     if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
     log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
-    if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) { if (queue.length < 100) queue.push(item); }
+    if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) retryLater(item);
     else log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
   }
+  if (refillFromState(queue, S, Date.now())) saveState();
 }, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
@@ -428,6 +450,7 @@ async function run() {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
     S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {};
+    for (const s of Object.values(S.sent)) { delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) delete f2.retryLater;
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
@@ -571,5 +594,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume };
+if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

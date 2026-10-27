@@ -337,3 +337,28 @@ test("preview-finish: usage-limit fields come from the ended run; armResume is n
   assert.equal(payload.autoResumeSet, false);
   assert.ok(!hits.some((h) => /dispatch|ws/i.test(h)), hits.join("\n"));
 });
+
+test("retry queue: when it is full, events are saved in state and come back as room frees up, not left until a restart", () => {
+  const S = { sent: { "req-a": { threadId: "t1", delivered: false }, "req-b": { threadId: "t1", closing: true } }, finished: { "run-1": { threadId: "t2", at: 1 } } };
+  const full = Array.from({ length: l.MAX_RETRY_QUEUE }, (_, i) => ({ e: { event: "thread.finished", runId: `old-${i}` }, rounds: 1, since: 0 }));
+  const opened = { e: { event: "request.opened", requestId: "req-a" }, rounds: 0, since: 0 };
+  const resolved = { e: { event: "request.resolved", requestId: "req-b" }, rounds: 0, since: 0 };
+  const finished = { e: { event: "thread.finished", runId: "run-1" }, rounds: 0, since: 0 };
+  const unknown = { e: { event: "thread.finished", runId: "run-unknown" }, rounds: 0, since: 0 };
+  assert.equal(l.keepForRetry(full, S, opened), "parked");
+  assert.equal(l.keepForRetry(full, S, resolved), "parked");
+  assert.equal(l.keepForRetry(full, S, finished), "parked");
+  assert.equal(l.keepForRetry(full, S, unknown), "dropped");
+  assert.equal(full.length, l.MAX_RETRY_QUEUE);
+  assert.equal(S.sent["req-a"].e, opened.e); assert.equal(S.finished["run-1"].retryLater, true);
+  const q = full.slice(0, l.MAX_RETRY_QUEUE - 2);
+  assert.equal(l.refillFromState(q, S, 123), 2);
+  assert.equal(q.length, l.MAX_RETRY_QUEUE);
+  assert.equal(l.refillFromState(q, S, 124), 0, "a full queue takes nothing more");
+  const rest = [];
+  assert.equal(l.refillFromState(rest, S, 125), 1);
+  assert.deepEqual([...q.slice(-2), ...rest].map((x) => x.e.requestId || x.e.runId).sort(), ["req-a", "req-b", "run-1"]);
+  assert.equal(l.refillFromState([], S, 126), 0, "each saved event is queued once");
+  assert.ok([S.sent["req-a"], S.sent["req-b"], S.finished["run-1"]].every((s) => !s.retryLater && s.e), "the event stays saved until it is delivered");
+  assert.equal(l.keepForRetry([], S, opened), "queued");
+});
