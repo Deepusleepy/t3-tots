@@ -23,6 +23,7 @@ Then run `chmod +x t3ctl t3listen` on macOS and Linux (on macOS also `chmod +x t
 Hash each installed file and compare with its manifest `sha256`: macOS `shasum -a 256 <file>`, Linux `sha256sum <file>`, Windows `(Get-FileHash -Algorithm SHA256 <file>).Hash.ToLower()`. Then, from the tools folder:
 - `python3 t3q.py health` (Windows `py -3 t3q.py health`) prints the T3 server state, or `NO_T3_DATA`.
 - `node t3ctl` with no arguments prints usage; `node t3ctl projects` needs the token.
+- Ask the user once whether threads and scheduled tasks you start should ask before commands and edits (`approval-required`) or run without asking (`full-access`), then save it with `node t3ctl config --runtime <mode>`. With nothing saved, `t3ctl new` uses approval-required.
 - `node t3listen --dry-run --once --timeout 5` connects and prints any open questions (exit 2 = none). Don't run `t3listen install` unless the user asked for phone answers and `listen.json` exists.
 
 ## Skills

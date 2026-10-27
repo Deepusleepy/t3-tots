@@ -34,7 +34,7 @@ import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urlli
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.29"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
- "tools/t3ctl": ["t3ctl", "3af55920f86267ad82aa84944725cb44b847a6d84ae82a5809cfe085f63aabd1"],
+ "tools/t3ctl": ["t3ctl", "4b9067a1dcd69a886e751121cee66459979ba4296c7ee685d41515a955260668"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "e230edeebb42f0b9aed481e4e868f2f20f5f76d0e107224d4e6dae05f7b8a655"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
@@ -268,7 +268,7 @@ Files per OS come from `manifest.json` (`targets`; names below are installed nam
 Grok Bot keeps the t3-* skills as live skills; "Update T3 Tots" below keeps them on the same release as the scripts. `python3 /workspace/t3tots_fetch.py skills [tag]` compares them read-only (default tag: latest release). Another agent on a computer (Claude Code, Codex, Cursor and so on) gets them with `node t3ctl skills install --to <its skills folder>`, run from a repo checkout or an unpacked release (see the repo README).
 
 ## README
-Create `README.md` in the tools folder if it's missing (keep the user's edits otherwise). Write it for that computer's OS only: what the folder is (T3 Tots helper scripts from github.com/Deepusleepy/t3-tots), the installed version, token issued yes/no with date and 90-day expiry, how to revoke, and that deleting the folder removes T3 Tots from this computer. On updates, change only the version line.
+Create `README.md` in the tools folder if it's missing (keep the user's edits otherwise). Write it for that computer's OS only: what the folder is (T3 Tots helper scripts from github.com/Deepusleepy/t3-tots), the installed version, token issued yes/no with date and 90-day expiry, the runtime mode for new threads and scheduled tasks (`node t3ctl config`), how to revoke, and that deleting the folder removes T3 Tots from this computer. On updates, change only the version line.
 - macOS/Linux: commands as `./t3ctl` and `python3 t3q.py`; revoke with `~/.t3/bin/t3 auth session list`, then `~/.t3/bin/t3 auth session revoke <id>`; remove by moving the folder to the Trash. Mention `t3ui` only on macOS.
 - Windows: commands as `node t3ctl` and `py -3 t3q.py` (the `.cmd` wrappers drop double quotes); revoke with `%USERPROFILE%\.t3\bin\t3.cmd auth session list`, then `... revoke <id>`; remove by deleting the folder to the Recycle Bin in Explorer. No `chmod`, no `t3ui`, no Mac test threads.
 

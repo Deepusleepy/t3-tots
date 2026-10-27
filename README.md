@@ -75,7 +75,7 @@ The one exception is a standing approval: an exact command you typed, saved with
 
 Approval cards show warnings such as "deletes files" or "force push" to help you decide. A command with no warnings can still be dangerous.
 
-Threads that `t3ctl new` and `t3ctl tasks --upsert` start run in full access unless you pass `--runtime`, so they don't ask for approvals.
+Threads that `t3ctl new` and `t3ctl tasks --upsert` start use the runtime mode you picked at setup, saved with `t3ctl config --runtime <mode>`. `--runtime` overrides it for one thread or task. With no mode saved they run `approval-required`, so they ask before commands and edits. They never fall back to `full-access`.
 
 ## Requirements
 
