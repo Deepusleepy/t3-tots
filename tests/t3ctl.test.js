@@ -221,8 +221,6 @@ test("sensitivePath: acronyms before a sensitive word (HTTPAuth, getHTTPAuth, XM
 
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
-  const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
-  assert.match(src, /pickThread\(\[\.\.\.s\.threads, \.\.\.\(s\.archivedThreads \|\| \[\]\)\], q\)/);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-find-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
@@ -460,21 +458,26 @@ test("new and tasks --upsert: --worktree starts the thread in its own worktree; 
     assert.equal(sent.length, before);
   } finally { t3.close(); }
 });
-test("archive and unarchive: idle threads only, nothing sent when already in that state", async () => {
+test("archive and unarchive: idle threads only, archived threads found through T3's archived list, nothing sent when already in that state", async () => {
   const idle = { id: "thread-arch-idle", title: "Done work", status: "idle", archivedAt: null };
   const busy = { id: "thread-arch-busy", title: "Still going", status: "running", activeRunId: "run-9", archivedAt: null };
   const old = { id: "thread-arch-old1", title: "Old archived", status: "idle", archivedAt: "2026-01-01T00:00:00Z" };
   const sent = [];
   const t3 = await fakeT3({
-    shell: () => ({ projects: [], threads: [idle, busy], archivedThreads: [old] }),
-    onRpc: (tag, payload) => { sent.push(payload); return {}; },
+    shell: () => ({ projects: [], threads: [idle, busy], archivedThreads: [] }),
+    onRpc: (tag, payload) => {
+      if (tag === "orchestration.getArchivedShellSnapshot") return { schemaVersion: 1, snapshotSequence: 1, projects: [], threads: [old] };
+      sent.push(payload); return {};
+    },
   });
   try {
     let r = await t3.run("archive", "--thread", idle.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /archived "Done work"/);
     r = await t3.run("archive", "--thread", busy.id); assert.equal(r.code, 1, r.out); assert.match(r.out, /^THREAD_RUNNING/);
     r = await t3.run("archive", "--thread", old.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /already archived/);
     r = await t3.run("unarchive", "--thread", old.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /unarchived "Old archived"/);
+    r = await t3.run("unarchive", "--thread", "Old archived"); assert.equal(r.code, 0, r.out); assert.match(r.out, /unarchived "Old archived"/);
     r = await t3.run("unarchive", "--thread", idle.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /already not archived/);
-    assert.deepEqual(sent.map((p) => [p.type, p.threadId]), [["thread.archive", idle.id], ["thread.unarchive", old.id]]);
+    r = await t3.run("unarchive", "--thread", "no-such-thread-zz"); assert.equal(r.code, 1, r.out); assert.match(r.out, /NOT_FOUND/);
+    assert.deepEqual(sent.map((p) => [p.type, p.threadId]), [["thread.archive", idle.id], ["thread.unarchive", old.id], ["thread.unarchive", old.id]]);
   } finally { t3.close(); }
 });

@@ -80,7 +80,12 @@ function pickProject(all, q) {
 }
 async function findThread(q) {
   if (!q || q === true) throw new Error("--thread <id|title> is required");
-  q = String(q); const s = await shell(); return pickThread([...s.threads, ...(s.archivedThreads || [])], q);
+  q = String(q); const s = await shell(); const listed = [...s.threads, ...(s.archivedThreads || [])];
+  try { return pickThread(listed, q); } catch (e) {
+    if (!/^NOT_FOUND/.test(e.message)) throw e;
+    let archived; try { archived = await rpc("orchestration.getArchivedShellSnapshot", {}); } catch { throw e; }
+    return pickThread([...listed, ...((archived && archived.threads) || [])], q);
+  }
 }
 // exact id, else an id prefix of 8+ characters, else an exact title, else one title containing the words. Several matches: AMBIGUOUS, never a guess
 function pickThread(all, q) {
