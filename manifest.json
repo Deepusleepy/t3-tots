@@ -256,8 +256,8 @@
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 12662,
-   "sha256": "123d0f80d0ff2bce4e36ca77420132b6b4f938199548970773810006276db8bb"
+   "bytes": 12876,
+   "sha256": "da2d51beb805717f9b52086568195ed55468f8957b8600c139c28341a22bad33"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",

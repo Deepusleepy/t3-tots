@@ -16,7 +16,7 @@ Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and
 | `tools/` | Scripts, installed flat into one folder per computer. |
 | `manifest.json` | Version, dest path, size, SHA-256, and which OS gets each file. |
 | `scripts/`, `tests/` | Checks, manifest builder, skill sync. |
-| `assets/avatar.png` | Official face, 1024x1024 PNG. First setup downloads it from the pinned release. |
+| `assets/avatar.png` | Official face, 1024x1024 PNG. First setup downloads it from the pinned release, or the previous tag when that release is not cut yet. |
 
 | Tool | Where | What |
 |---|---|---|
