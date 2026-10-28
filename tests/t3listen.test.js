@@ -16,10 +16,13 @@ test("pickThread: same rules as t3ctl (8+ character prefix, exact title, AMBIGUO
   assert.throws(() => l.pickThread(ts, "aaaa"), /^Error: (AMBIGUOUS|NOT_FOUND)/);
   assert.throws(() => l.pickThread(ts, "ccc"), /NOT_FOUND: .*8 or more characters/);
   assert.throws(() => l.pickThread(ts, "nothing like it"), /^Error: NOT_FOUND/);
-  for (const q of ["aaaa1111-0000", "cccc3333", "pr review", "OTHER", "snig", "aaaa", "ccc", "nothing like it", "aaaa"]) {
-    const run = (f) => { try { return f(ts, q).id; } catch (e) { return e.message.split(":")[0]; } };
+  for (const q of ["aaaa1111-0000", "cccc3333", "pr review", "OTHER", "snig", "aaaa", "ccc", "nothing like it"]) {
+    const run = (f) => { try { return JSON.stringify(f(ts, q)); } catch (e) { return e.message; } };
     assert.equal(run(l.pickThread), run(t3ctl.pickThread), `t3listen and t3ctl disagree on "${q}"`);
   }
+  // newest updatedAt is listed first; NOT_FOUND names t3q.py. Both come from the shared helper.
+  assert.throws(() => l.pickThread(ts, "snig"), /^Error: AMBIGUOUS: 2 threads match "snig"[\s\S]*aaaa2222-0000  Snig fixes\n {2}aaaa1111-0000  Snig PR review/);
+  assert.throws(() => l.pickThread(ts, "nothing like it"), /Find it with: T3_Q='<words>' python3 t3q.py thread$/);
 });
 test("cleanEvent: questions, option labels, approval prompt, titles and answers are redacted; ids are kept", () => {
   const os = require("os"), home = os.homedir();
@@ -248,6 +251,7 @@ test("preview-finish: NOT_FOUND in the shell list still reads an id-like query f
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const threads = [{ id: "abcdefgh-1", title: "One" }, { id: "abcdefgh-2", title: "Two" }];
   const srv = http.createServer((req, res) => {
@@ -274,6 +278,7 @@ test("preview-finish: archivedThreads are searched; colon ids are id-like; AMBIG
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-arch-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const threads = [{ id: "abcdefgh-1", title: "Live One" }, { id: "abcdefgh-2", title: "Live Two" }];
   const archivedThreads = [{ id: "arch-thread-99", title: "Old archived" }];
@@ -308,6 +313,7 @@ test("preview-finish: usage-limit fields come from the ended run; armResume is n
   assert.ok(!body.includes("armResume("), body);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-limit-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const reset = "2026-01-01T05:00:00Z";
   const thread = { id: "limit-thread-01", title: "Limited", status: "running", activeRunId: "r2", latestRunId: "r2" };
@@ -386,6 +392,7 @@ test("preview-finish: a thread only in T3's archived list is found by its title"
   const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-archived-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const archived = { id: "arch-only-thread-42", title: "Shipped last week" };
   const asked = [];
@@ -418,5 +425,48 @@ test("preview-finish: a thread only in T3's archived list is found by its title"
     let r = await run("Shipped last week"); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/);
     assert.ok(asked.includes("orchestration.getArchivedShellSnapshot"), asked.join());
     r = await run("never existed"); assert.equal(r.code, 1, r.out); assert.match(r.out, /NOT_FOUND/);
+    assert.doesNotMatch(r.out, /couldn't be checked/);
+  } finally { srv.close(); }
+});
+
+test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a weak live match is still used", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-archive-down-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const live = { id: "live-thread-001", title: "Release follow up" };
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [live], archivedThreads: [] }));
+    if (u === "/api/orchestration/threads/" + live.id) return res.end(JSON.stringify({ projection: { thread: live, runs: [] } }));
+    res.statusCode = 404; res.end("{}");
+  });
+  srv.on("upgrade", (req, sock) => {
+    const accept = crypto.createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    sock.on("data", (d) => {
+      if ((d[0] & 15) === 8) return sock.end();
+      if ((d[0] & 15) !== 1) return;
+      let len = d[1] & 127, off = 2; if (len === 126) { len = d.readUInt16BE(2); off = 4; }
+      const mask = d.subarray(off, off + 4), m = JSON.parse(Buffer.from(d.subarray(off + 4, off + 4 + len)).map((b, i) => b ^ mask[i % 4]).toString("utf8"));
+      const exit = m.tag === "orchestration.getArchivedShellSnapshot"
+        ? { _tag: "Failure", cause: { message: "archive rpc down" } }
+        : { _tag: "Success", value: {} };
+      const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit }));
+      sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
+    });
+    sock.on("error", () => {});
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = (q) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", q],
+    { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
+  try {
+    let r = await run("follow"); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/); assert.doesNotMatch(r.out, /couldn't be checked/);
+    r = await run("Shipped last week"); assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /^NOT_FOUND: no thread matches "Shipped last week"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
+    r = await run("missing-id-999"); assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /^NOT_FOUND: no thread matches "missing-id-999"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
   } finally { srv.close(); }
 });

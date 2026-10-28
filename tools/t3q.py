@@ -306,7 +306,7 @@ def usage():
             pmi = r[11] if len(r) > 11 else None
             priced_as = models[pmi] if isinstance(pmi, int) and 0 <= pmi < len(models) else m
             rt = speed_rates(rate(priced_as, prov) or rate(m, prov), spd); cost = 0.0
-            if isinstance(rep, (int, float)): cost = rep
+            if is_num(rep): cost = rep
             elif rt: cost = inp * rt["in"] + cr * rt["cr"] + cw * rt["cw"] + out * rt["out"]
             else: unpriced[m] += inp + cr + cw + out
             day = dt.datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %a")

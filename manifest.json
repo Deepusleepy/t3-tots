@@ -12,8 +12,8 @@
    "path": "tools/t3q.py",
    "dest": "t3q.py",
    "kind": "tool",
-   "bytes": 25510,
-   "sha256": "9f6f1690c3dc5b396b2a1f5893b7a9be338996d033603d439d7ff1e69f2ef3c2",
+   "bytes": 25492,
+   "sha256": "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b",
    "targets": [
     "macos",
     "linux",
@@ -26,8 +26,8 @@
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 77639,
-   "sha256": "377db9cd9a5ba63e1f46e6cc36ffcb96d8e7713a4ad0560ed803b83521f9b711",
+   "bytes": 76114,
+   "sha256": "c9c1d19d33d487ab93fbf6a834b01f1184c669df964eafc4d9beef9c980e1253",
    "targets": [
     "macos",
     "linux",
@@ -52,8 +52,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 57694,
-   "sha256": "34b05a87d880ee33e72de742adda295ab9def32fca8222401cebe7fe21311714",
+   "bytes": 56472,
+   "sha256": "722bea34ea0900bcba26694a51fb74f3e522c712e89f9053edec8cea5afba71d",
    "targets": [
     "macos",
     "linux",
@@ -61,6 +61,20 @@
     "box"
    ],
    "purpose": "pushes T3 questions (open and close) and thread finish, fail and cancel events to your webhook (Node 22+, optional)"
+  },
+  {
+   "path": "tools/thread-match.js",
+   "dest": "thread-match.js",
+   "kind": "tool",
+   "bytes": 3003,
+   "sha256": "377b0e449e464702ca80197c9dacab75bbed0ab17680469c512f780db0851e6b",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "shared thread lookup for t3ctl and t3listen"
   },
   {
    "path": "tools/windows/t3listen.cmd",
@@ -256,8 +270,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 27364,
-   "sha256": "6cdbab1146bbbde11c760bef53cc9acbca0de5a130bd474146ce00971e1bb19d"
+   "bytes": 27498,
+   "sha256": "e1a81150a3c2584acd90f99ca1771c3b5b5766962e2ff001c6b40fab20fd5b83"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",

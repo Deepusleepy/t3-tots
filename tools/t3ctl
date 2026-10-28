@@ -2,6 +2,7 @@
 // t3ctl - tiny client for the local T3 Code server (T3 Tots). Needs Node 22+.
 // Token: the `token` file next to this script (never printed). T3 data: T3CODE_HOME (default ~/.t3) + /userdata.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto");
+const { pickThread, lookupThread } = require("./thread-match"); // same rules as t3listen; see tools/thread-match.js
 const HOME = os.homedir();
 const die = (code, msg) => { console.error(`${code}: ${msg}`); process.exit(1); };
 function t3Dir() { // same for stable and Nightly; T3_HOME may point at the base or the userdata folder
@@ -80,27 +81,8 @@ function pickProject(all, q) {
 }
 async function findThread(q) {
   if (!q || q === true) throw new Error("--thread <id|title> is required");
-  q = String(q); const s = await shell(); const listed = [...s.threads, ...(s.archivedThreads || [])];
-  let hit = null, miss = null;
-  try { hit = pickThread(listed, q); if (strongMatch(hit, q)) return hit; } catch (e) { miss = e; }
-  let archived; try { archived = await rpc("orchestration.getArchivedShellSnapshot", {}); } catch (err) {
-    if (hit) return hit;
-    throw /^NOT_FOUND/.test(miss.message) ? new Error(`${miss.message} (T3's archived threads couldn't be checked: ${String(err.message).slice(0, 160)})`) : miss;
-  }
-  return pickThread([...listed, ...((archived && archived.threads) || [])], q);
-}
-const strongMatch = (t, q) => t.id === q || (q.length >= 8 && String(t.id).startsWith(q)) || norm(t.title) === norm(q);
-// exact id, else an id prefix of 8+ characters, else an exact title, else one title containing the words. Several matches: AMBIGUOUS, never a guess
-function pickThread(all, q) {
-  const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
-  const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };
-  const exact = all.find((t) => t.id === q); if (exact) return exact;
-  if (q.length >= 8) { const pre = all.filter((t) => t.id.startsWith(q)); if (pre.length === 1) return pre[0]; if (pre.length > 1) amb(pre); }
-  const same = all.filter((t) => norm(t.title) === norm(q)); if (same.length === 1) return same[0]; if (same.length > 1) amb(same);
-  const m = all.filter((t) => norm(t.title).includes(norm(q))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  if (!m.length) throw new Error(`NOT_FOUND: no thread matches "${q}"${/^[0-9a-f-]{1,7}$/i.test(q) ? " (an id prefix needs 8 or more characters)" : ""}. Find it with: T3_Q='<words>' python3 t3q.py thread`);
-  if (m.length > 1) amb(m);
-  return m[0];
+  const s = await shell();
+  return lookupThread(q, [...s.threads, ...(s.archivedThreads || [])], async () => ((await rpc("orchestration.getArchivedShellSnapshot", {})) || {}).threads || []);
 }
 const recentSel = (s, pid) => { const t = s.threads.filter((t) => t.modelSelection && (!pid || t.projectId === pid)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]; return t && t.modelSelection; };
 function modelSel(o, fallback, s) {

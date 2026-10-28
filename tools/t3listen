@@ -5,6 +5,7 @@
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
+const { pickThread, idLike, lookupThread } = require("./thread-match"); // same rules as t3ctl; see tools/thread-match.js
 const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), HERE = path.join(DIR, "answered-here.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
 const LABEL = process.env.T3LISTEN_LABEL || "com.t3tots.listen", TASK = process.env.T3LISTEN_LABEL || "T3 Tots listener";
 const argv = process.argv.slice(2), cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "run", flag = (f) => argv.includes(f);
@@ -562,14 +563,20 @@ async function previewFinish() { // print the run-end event the listener would s
   const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
   let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
-  // live + archived: a thread missing from both (or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
+  // live + archived (tools/thread-match.js, same as t3ctl). NOT_FOUND on an id-like query still asks T3 directly.
+  // A failed archived-list read is included in that NOT_FOUND, same wording as t3ctl.
   const listed = [...(sh.threads || []), ...(sh.archivedThreads || [])];
-  let id = q, strong = false; try { const hit = pickThread(listed, q); id = hit.id; strong = hit.id === q || (q.length >= 8 && String(hit.id).startsWith(q)) || normT(hit.title || "") === normT(q); } catch {}
-  if (!strong) {
-    let archived = []; try { archived = ((await wsRpc(ep, "orchestration.getArchivedShellSnapshot", {})) || {}).threads || []; } catch {}
-    try { id = pickThread([...listed, ...archived], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); id = q; }
+  let id = q, missed = null;
+  try { id = (await lookupThread(q, listed, async () => ((await wsRpc(ep, "orchestration.getArchivedShellSnapshot", {})) || {}).threads || [])).id; }
+  catch (err) {
+    missed = err; const [w, ...rest] = err.message.split(": ");
+    if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": "));
+    id = q;
   }
-  const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
+  const p = await threadSnap(ep, id); if (!p) {
+    if (missed && /couldn't be checked/.test(missed.message)) { const [, ...rest] = missed.message.split(": "); die("NOT_FOUND", rest.join(": ")); }
+    die("NOT_FOUND", `no thread matches "${q}"`);
+  }
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip, run } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
@@ -579,22 +586,6 @@ async function previewFinish() { // print the run-end event the listener would s
     if (a) Object.assign(e, a, a.resumeAt ? { resumeAtLocal: localTime(a.resumeAt) } : {});
   }
   cleanEvent(e); e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
-}
-
-// pickThread: the same rules as t3ctl (tests/t3listen.test.js checks they agree): exact id, else an id prefix of 8+ characters,
-// else one exact title, else one title containing the text. Several matches: AMBIGUOUS, never a guess
-const normT = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
-const idLike = (q) => /^[A-Za-z0-9_:-]{8,}$/.test(String(q)); // no whitespace, 8+ chars, colons allowed (thread:project:…, thread:delegated-task:…)
-function pickThread(all, q) {
-  q = String(q); const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
-  const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };
-  const exact = all.find((t) => t.id === q); if (exact) return exact;
-  if (q.length >= 8) { const pre = all.filter((t) => String(t.id).startsWith(q)); if (pre.length === 1) return pre[0]; if (pre.length > 1) amb(pre); }
-  const same = all.filter((t) => normT(t.title || "") === normT(q)); if (same.length === 1) return same[0]; if (same.length > 1) amb(same);
-  const m = all.filter((t) => normT(t.title || "").includes(normT(q)));
-  if (!m.length) throw new Error(`NOT_FOUND: no thread matches "${q}"${/^[0-9a-f-]{1,7}$/i.test(q) ? " (an id prefix needs 8 or more characters)" : ""}`);
-  if (m.length > 1) amb(m);
-  return m[0];
 }
 
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook

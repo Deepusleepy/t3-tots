@@ -23,6 +23,7 @@ Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and
 | `t3q.py` | all | Read-only T3 DB queries. No token. |
 | `t3ctl` | all | Local API client and `skills` installer. `node t3ctl` prints usage. |
 | `t3listen` | all | Optional. Pushes questions and run ends to your webhook. |
+| `thread-match.js` | all | Shared thread lookup used by `t3ctl` and `t3listen`. Not run on its own. |
 | `export.js`, `survey.js` | all | Redacted export and activity survey. |
 | `t3ui` + `ui-*.applescript` | macOS | UI fallback if the local API is down (needs Accessibility). |
 | `cleanup/scan.py` | all | Read-only disk-usage scan. |

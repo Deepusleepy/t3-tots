@@ -194,4 +194,19 @@ class T3qTest(unittest.TestCase):
         self.assertRegex(out, r"m5: 1\.0M tok \S+ \$1\.00")
         self.assertRegex(out, r"unpriced models.*broken 1\.0M")
 
+    def test_usage_does_not_treat_booleans_as_reported_costs(self):
+        # True and False are ints, so isinstance(rep, (int, float)) would bill True as $1 and False as $0
+        make_db(self.dir)
+        rates = {"m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0}}
+        with open(os.path.join(self.dir, "usage-model-rates.json"), "w", encoding="utf-8") as f: json.dump({"document": rates}, f)
+        now = int(dt.datetime.now().timestamp() * 1000); M = 2_000_000
+        rec = lambda key, rep: [now, 0, 0, M, 0, 0, 0, 0, key, rep, 0]
+        cache = {"models": ["m"], "files": {"a.jsonl": {"p": "codex", "r": [
+            rec("k-true", True), rec("k-false", False), rec("k-zero", 0), rec("k-num", 4.25)], "t": []}}}
+        with open(os.path.join(self.dir, "usage-scan-cache-v9.json"), "w", encoding="utf-8") as f: json.dump(cache, f)
+        out, code = run(self.dir, "usage", rc=True)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"ESTIMATES: 8\.0M tokens .* \$8\.25")
+        self.assertRegex(out, r"m: 8\.0M tok \S+ \$8\.25")
+
 if __name__ == "__main__": unittest.main(verbosity=1)

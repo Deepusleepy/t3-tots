@@ -33,10 +33,11 @@ goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urllib.request
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.30"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "9f6f1690c3dc5b396b2a1f5893b7a9be338996d033603d439d7ff1e69f2ef3c2"],
- "tools/t3ctl": ["t3ctl", "377db9cd9a5ba63e1f46e6cc36ffcb96d8e7713a4ad0560ed803b83521f9b711"],
+ "tools/t3q.py": ["t3q.py", "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b"],
+ "tools/t3ctl": ["t3ctl", "c9c1d19d33d487ab93fbf6a834b01f1184c669df964eafc4d9beef9c980e1253"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "34b05a87d880ee33e72de742adda295ab9def32fca8222401cebe7fe21311714"],
+ "tools/t3listen": ["t3listen", "722bea34ea0900bcba26694a51fb74f3e522c712e89f9053edec8cea5afba71d"],
+ "tools/thread-match.js": ["thread-match.js", "377b0e449e464702ca80197c9dacab75bbed0ab17680469c512f780db0851e6b"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
  "tools/survey.js": ["survey.js", "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f"],
@@ -258,7 +259,7 @@ The box can't download from a private repo. Pick the first option that works:
 `check` can't see a private repo's releases from the box. Run `gh release view -R Deepusleepy/t3-tots --json tagName,publishedAt,body` on a computer with `gh` instead.
 
 ## Install on a computer
-Files per OS come from `manifest.json` (`targets`; names below are installed names): every computer gets `t3q.py`, `t3ctl`, `t3listen`, `export.js`, `survey.js`, `cleanup/scan.py`; Windows also `t3ctl.cmd` and `t3listen.cmd`; macOS also `t3ui` + `ui-*.applescript`. `make_report.py` and `report.py` stay on the box.
+Files per OS come from `manifest.json` (`targets`; names below are installed names): every computer gets `t3q.py`, `t3ctl`, `t3listen`, `thread-match.js`, `export.js`, `survey.js`, `cleanup/scan.py`; Windows also `t3ctl.cmd` and `t3listen.cmd`; macOS also `t3ui` + `ui-*.applescript`. `make_report.py` and `report.py` stay on the box.
 1. On the box: `python3 /workspace/t3tots_fetch.py emit <macos|linux|windows> '<tools folder>'` (e.g. `~/t3-tots`, Windows `~\t3-tots`). It prints one command.
 2. Run that command unchanged on the computer (zsh/bash on macOS/Linux, PowerShell on Windows). It downloads from the pinned tag, checks every sha256 there, and only then moves the files into the tools folder (flat, as on the box), including `manifest.json`, and writes `VERSION`. Expect `OK <tag>: <n> files verified in <folder>`.
 3. No internet on the computer or no curl/wget: CopyFromBox each file listed by `python3 /workspace/t3tots_fetch.py hashes <os>` (`manifest.json` included) from `/workspace/t3-tots-tools/<file>` to `<tools folder>/<file>` (CopyFromBox is byte-exact), compare hashes on the computer (macOS `shasum -a 256`, Linux `sha256sum`, Windows `Get-FileHash -Algorithm SHA256`), run `chmod +x t3ctl t3listen` on macOS and Linux (on macOS also `chmod +x t3ui`), and write the tag to `VERSION`.
