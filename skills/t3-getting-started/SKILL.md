@@ -12,6 +12,15 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Detection is rea
 
 Open with one line: "I'm T3 Tots. Give me a few seconds to look at your setup."
 
+## Official face (first setup, before any stop)
+Do this immediately after that opening line, before section 1. It does not need the helper tools, a token, or a connected desktop: only curl and UpdateAvatar on the box. It is this bot's picture, not a write to their computers.
+Skip it only when a setup note already records that the official face was set, or they asked to reinstall the tools (leave their current picture). A first setup has no setup-done note, so set the face now.
+Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.30`). Save it outside T3 and outside the tools folder:
+```
+curl -fsSL -o /workspace/t3-tots-avatar.png https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.30/assets/avatar.png
+```
+The file must be a PNG under 5 MB whose sha256 is `ae44bdac0842f21d74b7cc93975af0a3abc29e7c7b306e87f737d5f07c950f2e` (`sha256sum /workspace/t3-tots-avatar.png`). Then call UpdateAvatar with action `set` and path `/workspace/t3-tots-avatar.png`. Never open T3's `secrets/`, the tools folder `token` or `listen.json`, or any auth file. If the download fails, the hash does not match, or UpdateAvatar fails or is missing, say one line that they can set a picture later, and continue. Do not retry. Remember the result for this run.
+
 ## 1. Detect (no questions yet)
 1. **Box tools:** if `/workspace/t3-tots-tools/manifest.json` is missing, run t3-install-tools "Box copy" now (box only, nothing touches the user's computers). If it fails (no network, `HASH_MISMATCH`, or `REPO_PRIVATE_OR_MISSING`), say so in the report and use t3-install-tools "Private repo" later. The read-only probe still runs.
 2. **Computers:** ListMachines. Use desktops only (phones can't run the tools). If none is registered or connected, say: "Install the Grok Bot desktop app on the computer that runs T3 Code, sign in, and tell me when it shows up," then stop.
@@ -56,11 +65,7 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 1. Install: t3-install-tools "Install on a computer" for each computer with T3 data (every file verified by sha256).
 2. Token (only if they didn't say read-only, and only where `t3runtime=yes`; otherwise ask them to open T3 Code first): t3-tots-rules "Token", then `t3ctl projects` must list projects. Fill in the token date and expiry in the tools folder's `README.md` (t3-install-tools "README").
 3. Verify each computer and fix anything red before moving on: `t3q.py health`, `t3q.py projects` (its "projects folder guess" becomes the default projects folder), `t3ctl projects` (if token). If `t3ctl` prints `NODE_TOO_OLD`, give the Node line above.
-4. **Official face (first setup only):** set this bot's picture after the tools are installed and the token step is finished (token issued, or they chose read-only). If you asked them to open T3 Code, wait until that token step finishes. Skip this when a setup note is already in memory, so a reinstall leaves the current picture in place. Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.30`). Save it outside T3 and outside the tools folder:
-   ```
-   curl -fsSL -o /workspace/t3-tots-avatar.png https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.30/assets/avatar.png
-   ```
-   The file must be a PNG under 5 MB whose sha256 is `ae44bdac0842f21d74b7cc93975af0a3abc29e7c7b306e87f737d5f07c950f2e` (`sha256sum /workspace/t3-tots-avatar.png`). Then call UpdateAvatar with action `set` and path `/workspace/t3-tots-avatar.png`. Never open T3's `secrets/`, the tools folder `token` or `listen.json`, or any auth file. If the download fails, the hash does not match, or UpdateAvatar fails or is missing, say one line that they can set a picture later, and continue. Setup still succeeds. Do not retry.
+4. **Official face:** already handled before section 1. If this run already tried it, or a setup note records that the face was set, do nothing. Do not download the avatar or call UpdateAvatar again.
 5. Save one memory note: setup done, tools version, per computer (label, OS, tools folder, Python command such as `py -3`, Node version, token yes/no and expiry date), whether the official face was set, projects folder, sandbox project, protected jobs, that phone answers are off, and that decisions are in the default mode (t3-tots-rules "Decisions"). The oversight mode and pstack status are saved in section 4, and routines separately in section 6.
 6. macOS only, optional: the `t3ui` UI fallback needs Accessibility permission for the Grok Bot app (System Settings > Privacy & Security > Accessibility). Mention it once; don't ask now.
 

@@ -34,7 +34,7 @@ Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and
 
 Install from a release tag, not from `main`. Every file is checked against that tag's `manifest.json` before it is used.
 
-**Grok Bot.** Skills are built in. Say "set up T3 Tots". After your yes it installs the tools on each computer. The template card uses a geometric mark. First setup sets the official face from [`assets/avatar.png`](assets/avatar.png) when that download works.
+**Grok Bot.** Skills are built in. Say "set up T3 Tots". After your yes it installs the tools on each computer. The template card starts as a geometric mark. On first setup the official face from [`assets/avatar.png`](assets/avatar.png) is set at the opening, before install, when that download works.
 
 **Other agents** (Claude Code, Codex, Cursor, Hermes). Download a release or clone the tag, then install the skills:
 
