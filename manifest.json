@@ -23,11 +23,25 @@
    "purpose": "read-only T3 database queries"
   },
   {
+   "path": "tools/thread-match.js",
+   "dest": "thread-match.js",
+   "kind": "tool",
+   "bytes": 3083,
+   "sha256": "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "shared thread lookup for t3ctl and t3listen"
+  },
+  {
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 76114,
-   "sha256": "c9c1d19d33d487ab93fbf6a834b01f1184c669df964eafc4d9beef9c980e1253",
+   "bytes": 76338,
+   "sha256": "a87ed1a77c37f8e91c199d483a1d1e92a370f4c2ae049695aa0ef6b0da213842",
    "targets": [
     "macos",
     "linux",
@@ -52,8 +66,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 56472,
-   "sha256": "722bea34ea0900bcba26694a51fb74f3e522c712e89f9053edec8cea5afba71d",
+   "bytes": 56699,
+   "sha256": "9703a2a897059aa27ad6b17a72b823de9413e1dd72a7e07c130091e26dfdd7b2",
    "targets": [
     "macos",
     "linux",
@@ -61,20 +75,6 @@
     "box"
    ],
    "purpose": "pushes T3 questions (open and close) and thread finish, fail and cancel events to your webhook (Node 22+, optional)"
-  },
-  {
-   "path": "tools/thread-match.js",
-   "dest": "thread-match.js",
-   "kind": "tool",
-   "bytes": 3003,
-   "sha256": "377b0e449e464702ca80197c9dacab75bbed0ab17680469c512f780db0851e6b",
-   "targets": [
-    "macos",
-    "linux",
-    "windows",
-    "box"
-   ],
-   "purpose": "shared thread lookup for t3ctl and t3listen"
   },
   {
    "path": "tools/windows/t3listen.cmd",
@@ -256,8 +256,8 @@
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 12876,
-   "sha256": "da2d51beb805717f9b52086568195ed55468f8957b8600c139c28341a22bad33"
+   "bytes": 12826,
+   "sha256": "a63209df90d9f4cabcdb07d80a6211db5b6bc43cf1acecea4f224c69dee277f0"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -271,7 +271,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 27498,
-   "sha256": "e1a81150a3c2584acd90f99ca1771c3b5b5766962e2ff001c6b40fab20fd5b83"
+   "sha256": "c2196ab883b93b14f6fec8f115553f926c1069127ecfc56c4eb99aa0181debe1"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -347,8 +347,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 25468,
-   "sha256": "c93d36f4e5314ce86ede7b1b77c720eca6f4a506619118d737c29061dfe3c6f5"
+   "bytes": 25879,
+   "sha256": "10d1fc8c5856e2427676a20be7e1d72fd3447ab1a803cde732e178bbd2cd126f"
   },
   {
    "path": "skills/t3-update/SKILL.md",

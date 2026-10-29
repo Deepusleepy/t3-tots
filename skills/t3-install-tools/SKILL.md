@@ -34,10 +34,10 @@ import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urlli
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.30"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b"],
- "tools/t3ctl": ["t3ctl", "c9c1d19d33d487ab93fbf6a834b01f1184c669df964eafc4d9beef9c980e1253"],
+ "tools/t3ctl": ["t3ctl", "a87ed1a77c37f8e91c199d483a1d1e92a370f4c2ae049695aa0ef6b0da213842"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "722bea34ea0900bcba26694a51fb74f3e522c712e89f9053edec8cea5afba71d"],
- "tools/thread-match.js": ["thread-match.js", "377b0e449e464702ca80197c9dacab75bbed0ab17680469c512f780db0851e6b"],
+ "tools/t3listen": ["t3listen", "9703a2a897059aa27ad6b17a72b823de9413e1dd72a7e07c130091e26dfdd7b2"],
+ "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
  "tools/survey.js": ["survey.js", "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f"],

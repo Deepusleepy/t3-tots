@@ -35,6 +35,7 @@ async function lookupThread(q, listed, loadArchived) {
     if (hit) return hit;
     throw archiveUnchecked(miss, err);
   }
-  return pickThread([...listed, ...(archived || [])], q);
+  const seen = new Set(listed.map((t) => t.id));
+  return pickThread([...listed, ...(archived || []).filter((t) => !seen.has(t.id))], q);
 }
 module.exports = { norm, idLike, strongMatch, pickThread, archiveUnchecked, lookupThread };

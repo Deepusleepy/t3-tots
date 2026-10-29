@@ -21,7 +21,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 | t3-project-tracker | Its tracker file |
 | t3-save-learnings | `AGENTS.md` or `CLAUDE.md`, after a yes to the diff |
 | t3-cleanup | Only the items the user picked, after a confirm |
-| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes |
+| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes. t3-getting-started also sets this bot's own picture once, at the start of a first setup |
 
 A saved sync list or update level is approval for a later "sync everything" or "update <level>" only for items already in that list, and only after this turn's diff is shown. Anything new still needs a yes.
 
@@ -101,7 +101,7 @@ macOS zsh: wrap commands in a function, `f(){ ...; }; f`, and use quoted heredoc
 An `$env:` setting stays for the rest of the session, so clear it after use: `$env:T3_Q='x'; py -3 t3q.py thread; Remove-Item Env:T3_Q`.
 
 ## Tools on each computer
-The tools folder is the one saved in memory at setup. If memory has none, use `~/t3-tots` (Windows `%USERPROFILE%\t3-tots`) if it exists, else ask, and save the answer to memory. A new install defaults to `~/t3-tots`. Every script works from wherever it lives and reads the `token` file next to it.
+The tools folder is the one saved in memory at setup. If memory has none, use `~/t3-tots` (Windows `%USERPROFILE%\t3-tots`) if it exists, else ask, and save the answer to memory. A new install defaults to `~/t3-tots`. Every script works from wherever it lives and reads the `token` file next to it. `t3ctl` and `t3listen` also need `thread-match.js` next to them.
 
 Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows use `py -3`, else `python`, and never the bare `python3` Store alias. Run Node scripts as `node <file>`. On Windows always run `node t3ctl` and `node t3listen`, never the `.cmd` wrappers, which drop double quotes. A value that starts with `--` goes in as `--key=value`, for example `--text=--force`. Minimum versions: Python 3.8 (3.9 for report.py), Node 22 for `t3ctl` and `t3listen`, Node 18 for `export.js` and `survey.js`.
 
@@ -173,7 +173,8 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
 | `NO_USAGE_CACHE` | Ask the user to open T3's Usage view once |
 | `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread". From `t3ctl` or `t3listen preview-finish`, several threads, projects or open approvals match: it lists them; ask which, or pass the id (or the project folder, or `--request <full id>`) |
-| `NOT_FOUND` | No thread matches. List the closest ones and ask |
+| `NOT_FOUND` | No thread matches. List the closest ones and ask. If it ends with "T3's archived threads couldn't be checked", the search skipped archived threads, so retry once before saying the thread doesn't exist |
+| `TOOLS_INCOMPLETE` | A helper file is missing from the tools folder. Reinstall with t3-install-tools |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |

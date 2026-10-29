@@ -20,3 +20,22 @@ test("lookupThread: exact archived title wins, and a failed archive read is name
   await assert.rejects(() => tm.lookupThread("missing", listed, async () => []),
     (err) => err.message.startsWith("NOT_FOUND:") && !/couldn't be checked/.test(err.message));
 });
+
+test("t3ctl and t3listen without thread-match.js next to them print TOOLS_INCOMPLETE, not a stack trace", () => {
+  const fs = require("fs"), os = require("os"), { spawnSync } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3tots-partial-"));
+  try {
+    for (const tool of ["t3ctl", "t3listen"]) {
+      fs.copyFileSync(path.join(__dirname, "..", "tools", tool), path.join(tmp, tool));
+      const r = spawnSync(process.execPath, [path.join(tmp, tool), "help"], { encoding: "utf8" });
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, new RegExp(`^TOOLS_INCOMPLETE: thread-match.js must be next to ${tool}\.`));
+      assert.doesNotMatch(r.stderr, /Require stack/);
+    }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("lookupThread: a thread in both the shell list and T3's archived list is one match, not AMBIGUOUS", async () => {
+  const arch = { id: "arch-1", title: "Old archived thread", updatedAt: "2026-09-01" };
+  assert.equal((await tm.lookupThread("archived", [live, arch], async () => [{ ...arch }])).id, "arch-1");
+});

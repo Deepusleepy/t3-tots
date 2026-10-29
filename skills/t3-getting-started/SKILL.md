@@ -14,7 +14,7 @@ Open with one line: "I'm T3 Tots. Give me a few seconds to look at your setup."
 
 ## Official face (first setup, before any stop)
 Do this immediately after that opening line, before section 1. It does not need the helper tools, a token, or a connected desktop: only curl and UpdateAvatar on the box. It is this bot's picture, not a write to their computers.
-Skip it only when a setup note already records that the official face was set, or they asked to reinstall the tools (leave their current picture). A first setup has no setup-done note, so set the face now.
+Skip it when any setup note is already in memory, or they asked to reinstall the tools, so an existing owner keeps their current picture. A first setup has no setup note, so set the face now.
 Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.30`). Try that URL first. If it fails (404 until that tag is cut), download the same file from `v1.4.29`. Save it outside T3 and outside the tools folder:
 ```
 f=/workspace/t3-tots-avatar.png
@@ -67,7 +67,7 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 1. Install: t3-install-tools "Install on a computer" for each computer with T3 data (every file verified by sha256).
 2. Token (only if they didn't say read-only, and only where `t3runtime=yes`; otherwise ask them to open T3 Code first): t3-tots-rules "Token", then `t3ctl projects` must list projects. Fill in the token date and expiry in the tools folder's `README.md` (t3-install-tools "README").
 3. Verify each computer and fix anything red before moving on: `t3q.py health`, `t3q.py projects` (its "projects folder guess" becomes the default projects folder), `t3ctl projects` (if token). If `t3ctl` prints `NODE_TOO_OLD`, give the Node line above.
-4. **Official face:** already handled before section 1. If this run already tried it, or a setup note records that the face was set, do nothing. Do not download the avatar or call UpdateAvatar again.
+4. **Official face:** already handled before section 1. If this run already tried or skipped it, do nothing. Do not download the avatar or call UpdateAvatar again.
 5. Save one memory note: setup done, tools version, per computer (label, OS, tools folder, Python command such as `py -3`, Node version, token yes/no and expiry date), whether the official face was set, projects folder, sandbox project, protected jobs, that phone answers are off, and that decisions are in the default mode (t3-tots-rules "Decisions"). The oversight mode and pstack status are saved in section 4, and routines separately in section 6.
 6. macOS only, optional: the `t3ui` UI fallback needs Accessibility permission for the Grok Bot app (System Settings > Privacy & Security > Accessibility). Mention it once; don't ask now.
 

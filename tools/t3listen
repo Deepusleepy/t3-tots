@@ -5,7 +5,10 @@
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
-const { pickThread, idLike, lookupThread } = require("./thread-match"); // same rules as t3ctl; see tools/thread-match.js
+const { pickThread, idLike, lookupThread } = (() => { try { return require("./thread-match"); } catch (e) { // same rules as t3ctl; see tools/thread-match.js
+  if (e.code !== "MODULE_NOT_FOUND") throw e;
+  console.error("TOOLS_INCOMPLETE: thread-match.js must be next to t3listen. Reinstall the tools (t3-install-tools)."); process.exit(1);
+} })();
 const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), HERE = path.join(DIR, "answered-here.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
 const LABEL = process.env.T3LISTEN_LABEL || "com.t3tots.listen", TASK = process.env.T3LISTEN_LABEL || "T3 Tots listener";
 const argv = process.argv.slice(2), cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "run", flag = (f) => argv.includes(f);

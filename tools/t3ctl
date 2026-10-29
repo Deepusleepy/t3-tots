@@ -2,7 +2,10 @@
 // t3ctl - tiny client for the local T3 Code server (T3 Tots). Needs Node 22+.
 // Token: the `token` file next to this script (never printed). T3 data: T3CODE_HOME (default ~/.t3) + /userdata.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto");
-const { pickThread, lookupThread } = require("./thread-match"); // same rules as t3listen; see tools/thread-match.js
+const { pickThread, lookupThread } = (() => { try { return require("./thread-match"); } catch (e) { // same rules as t3listen; see tools/thread-match.js
+  if (e.code !== "MODULE_NOT_FOUND") throw e;
+  console.error("TOOLS_INCOMPLETE: thread-match.js must be next to t3ctl. Reinstall the tools (t3-install-tools)."); process.exit(1);
+} })();
 const HOME = os.homedir();
 const die = (code, msg) => { console.error(`${code}: ${msg}`); process.exit(1); };
 function t3Dir() { // same for stable and Nightly; T3_HOME may point at the base or the userdata folder
