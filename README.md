@@ -2,7 +2,7 @@
 
 Grok Bot / chat companion for [T3 Code](https://github.com/pingdotgg/t3code), with skills and helper tools. Thread status, waiting items, new threads, answers, reports, watches, and updates.
 
-T3 Tots is unofficial. `t3ctl` and `t3listen` use T3 Code's internal local websocket API, which isn't public or stable, and `t3q.py` reads its database read-only. A T3 Code update can break them. T3 Tots will move to the official API when T3 ships one.
+T3 Tots is unofficial. `t3ctl` and `t3listen` use T3 Code's internal local websocket API, which isn't public or stable, and `t3q.py` reads its database read-only. A T3 Code update can break them. T3 Code now has an official [MCP server for outside agents](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md) and a `t3 thread` command. They don't cover everything T3 Tots does yet, such as permission approvals, live events to a webhook, resuming a stuck queue and usage-limit recovery. T3 Tots moves features onto the official interfaces as they gain coverage.
 
 [MIT](LICENSE). No accounts or telemetry. The only outbound send is optional `t3listen` to a webhook you set up.
 
@@ -16,13 +16,14 @@ Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and
 | `tools/` | Scripts, installed flat into one folder per computer. |
 | `manifest.json` | Version, dest path, size, SHA-256, and which OS gets each file. |
 | `scripts/`, `tests/` | Checks, manifest builder, skill sync. |
-| `assets/avatar.png` | Official face, 1024x1024 PNG. First setup downloads it from the pinned release. |
+| `assets/avatar.png` | Official face, 1024x1024 PNG. First setup downloads it from the pinned release, or the previous tag when that release is not cut yet. |
 
 | Tool | Where | What |
 |---|---|---|
 | `t3q.py` | all | Read-only T3 DB queries. No token. |
 | `t3ctl` | all | Local API client and `skills` installer. `node t3ctl` prints usage. |
 | `t3listen` | all | Optional. Pushes questions and run ends to your webhook. |
+| `thread-match.js` | all | Shared thread lookup used by `t3ctl` and `t3listen`. Not run on its own. |
 | `export.js`, `survey.js` | all | Redacted export and activity survey. |
 | `t3ui` + `ui-*.applescript` | macOS | UI fallback if the local API is down (needs Accessibility). |
 | `cleanup/scan.py` | all | Read-only disk-usage scan. |
@@ -33,7 +34,7 @@ Start with [t3-getting-started](skills/t3-getting-started/SKILL.md). Install and
 
 Install from a release tag, not from `main`. Every file is checked against that tag's `manifest.json` before it is used.
 
-**Grok Bot.** Skills are built in. Say "set up T3 Tots". After your yes it installs the tools on each computer. The template card uses a geometric mark. First setup sets the official face from [`assets/avatar.png`](assets/avatar.png) when that download works.
+**Grok Bot.** Skills are built in. Say "set up T3 Tots". After your yes it installs the tools on each computer. The template card starts as a geometric mark. On first setup the official face from [`assets/avatar.png`](assets/avatar.png) is set at the opening, before install, when that download works.
 
 **Other agents** (Claude Code, Codex, Cursor, Hermes). Download a release or clone the tag, then install the skills:
 

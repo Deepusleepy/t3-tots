@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.29",
+ "version": "v1.4.30",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.29/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.30/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -12,8 +12,8 @@
    "path": "tools/t3q.py",
    "dest": "t3q.py",
    "kind": "tool",
-   "bytes": 24437,
-   "sha256": "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365",
+   "bytes": 25492,
+   "sha256": "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b",
    "targets": [
     "macos",
     "linux",
@@ -23,11 +23,25 @@
    "purpose": "read-only T3 database queries"
   },
   {
+   "path": "tools/thread-match.js",
+   "dest": "thread-match.js",
+   "kind": "tool",
+   "bytes": 3083,
+   "sha256": "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113",
+   "targets": [
+    "macos",
+    "linux",
+    "windows",
+    "box"
+   ],
+   "purpose": "shared thread lookup for t3ctl and t3listen"
+  },
+  {
    "path": "tools/t3ctl",
    "dest": "t3ctl",
    "kind": "tool",
-   "bytes": 74774,
-   "sha256": "a3b5d9636e8cf8dfbbae293dbaaeb56d64f77821ca9d920ab1643bd6b660d4d7",
+   "bytes": 76338,
+   "sha256": "a87ed1a77c37f8e91c199d483a1d1e92a370f4c2ae049695aa0ef6b0da213842",
    "targets": [
     "macos",
     "linux",
@@ -52,8 +66,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 55452,
-   "sha256": "c2741d36c04dc45d2668c5721ff2c38bfb26e7b3f3acf7369fd7efd8b7eba57d",
+   "bytes": 56699,
+   "sha256": "9703a2a897059aa27ad6b17a72b823de9413e1dd72a7e07c130091e26dfdd7b2",
    "targets": [
     "macos",
     "linux",
@@ -78,8 +92,8 @@
    "path": "tools/export.js",
    "dest": "export.js",
    "kind": "tool",
-   "bytes": 7124,
-   "sha256": "c25e93bc3515d554de7086adec3b79b32f58f6b869b220b015899b4d6253a3eb",
+   "bytes": 7373,
+   "sha256": "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0",
    "targets": [
     "macos",
     "linux",
@@ -92,8 +106,8 @@
    "path": "tools/survey.js",
    "dest": "survey.js",
    "kind": "tool",
-   "bytes": 4943,
-   "sha256": "206fff36b57e111fd061417f2c21eb7ee09fa5dfe1537843a81242d47e5d6052",
+   "bytes": 5192,
+   "sha256": "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f",
    "targets": [
     "macos",
     "linux",
@@ -235,15 +249,15 @@
    "path": "skills/t3-get-output/SKILL.md",
    "dest": "t3-get-output/SKILL.md",
    "kind": "skill",
-   "bytes": 2476,
-   "sha256": "6bfa5f440831799a5126860c52b67981940123bb0a78c8666a41770e18265bd1"
+   "bytes": 2826,
+   "sha256": "38ee7fe4d60f1f0a5402d5c63746afec7c57a722dd72d4671d0885612b6b6c3b"
   },
   {
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 12319,
-   "sha256": "24cf8133c48889d3c60d643b54bf962603184a9e3883b533f78f07ec72147cfd"
+   "bytes": 13180,
+   "sha256": "ab8133227256ac0526fcf0b5fb25b78912e8f90d817ddcda18b76b615c1d42b6"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -256,8 +270,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 27364,
-   "sha256": "2303c0dcf972ad3f67e44abdbd04e2dcc848099283112e7dc6699fbb4e8a035c"
+   "bytes": 29059,
+   "sha256": "9444e5a23b1b2079311d2468cdecae59e987f0266052eef0c54dce4c7de24b0f"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -277,8 +291,8 @@
    "path": "skills/t3-pm-thread/SKILL.md",
    "dest": "t3-pm-thread/SKILL.md",
    "kind": "skill",
-   "bytes": 4652,
-   "sha256": "078115a55159dccdec665ea7df6b42dabbe96f5b8f74bd2ccba6c5357fc88dba"
+   "bytes": 4770,
+   "sha256": "e5cdcd0c98d9e7f7c4a903c8d38137202e5f58cfa7fb47de6dd6bb821edd636d"
   },
   {
    "path": "skills/t3-project-report/SKILL.md",
@@ -326,15 +340,15 @@
    "path": "skills/t3-thread-actions/SKILL.md",
    "dest": "t3-thread-actions/SKILL.md",
    "kind": "skill",
-   "bytes": 2323,
-   "sha256": "5785738fdf7f581c1709cf6c8db31cebd0a904703f484f6422f3e95707e728ac"
+   "bytes": 2834,
+   "sha256": "3759f43b9d4d8483f85f01ab19b3b901dc22484c629a20bc9f756693bce7adf4"
   },
   {
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 24814,
-   "sha256": "6da8f7a6ab7c7e20ece08ef73f31a02b78f0b74115f45f63359f3a88fe97f35a"
+   "bytes": 26151,
+   "sha256": "4470312cd13e350b9e7fb5a6d11a4b2ab56ba724778526619d25b1ff71f8b121"
   },
   {
    "path": "skills/t3-update/SKILL.md",
@@ -347,8 +361,8 @@
    "path": "skills/t3-usage/SKILL.md",
    "dest": "t3-usage/SKILL.md",
    "kind": "skill",
-   "bytes": 1161,
-   "sha256": "052273b5e4931c516eb2ab4134609441d08cfbf92558c6a903b1d0f2bd448d2a"
+   "bytes": 1368,
+   "sha256": "d7f29d8745585ff382a8124773d21fe47feeefbfbd63458cba9a3f02df3f5ace"
   },
   {
    "path": "skills/t3-waiting/SKILL.md",

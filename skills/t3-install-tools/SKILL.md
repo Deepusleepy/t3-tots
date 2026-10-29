@@ -1,10 +1,10 @@
 ---
 name: t3-install-tools
 description: >-
-  Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
+  Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", the T3 Tots weekly update routine, during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
 ---
 
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.29` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.30` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
@@ -31,15 +31,16 @@ Installs tools only. Live Grok Bot skills are applied by the main agent with Upd
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.29"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.30"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "ab0af56893860552d5b7163d25a0463d1b167ee31cbea0462aa6371098306365"],
- "tools/t3ctl": ["t3ctl", "a3b5d9636e8cf8dfbbae293dbaaeb56d64f77821ca9d920ab1643bd6b660d4d7"],
+ "tools/t3q.py": ["t3q.py", "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b"],
+ "tools/t3ctl": ["t3ctl", "a87ed1a77c37f8e91c199d483a1d1e92a370f4c2ae049695aa0ef6b0da213842"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "c2741d36c04dc45d2668c5721ff2c38bfb26e7b3f3acf7369fd7efd8b7eba57d"],
+ "tools/t3listen": ["t3listen", "9703a2a897059aa27ad6b17a72b823de9413e1dd72a7e07c130091e26dfdd7b2"],
+ "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "c25e93bc3515d554de7086adec3b79b32f58f6b869b220b015899b4d6253a3eb"],
- "tools/survey.js": ["survey.js", "206fff36b57e111fd061417f2c21eb7ee09fa5dfe1537843a81242d47e5d6052"],
+ "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
+ "tools/survey.js": ["survey.js", "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f"],
  "tools/t3ui": ["t3ui", "221951527b7250375dc97ec63fababa09e693b3af0e5ae1132d42aee67f2b23f"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],
@@ -258,7 +259,7 @@ The box can't download from a private repo. Pick the first option that works:
 `check` can't see a private repo's releases from the box. Run `gh release view -R Deepusleepy/t3-tots --json tagName,publishedAt,body` on a computer with `gh` instead.
 
 ## Install on a computer
-Files per OS come from `manifest.json` (`targets`; names below are installed names): every computer gets `t3q.py`, `t3ctl`, `t3listen`, `export.js`, `survey.js`, `cleanup/scan.py`; Windows also `t3ctl.cmd` and `t3listen.cmd`; macOS also `t3ui` + `ui-*.applescript`. `make_report.py` and `report.py` stay on the box.
+Files per OS come from `manifest.json` (`targets`; names below are installed names): every computer gets `t3q.py`, `t3ctl`, `t3listen`, `thread-match.js`, `export.js`, `survey.js`, `cleanup/scan.py`; Windows also `t3ctl.cmd` and `t3listen.cmd`; macOS also `t3ui` + `ui-*.applescript`. `make_report.py` and `report.py` stay on the box.
 1. On the box: `python3 /workspace/t3tots_fetch.py emit <macos|linux|windows> '<tools folder>'` (e.g. `~/t3-tots`, Windows `~\t3-tots`). It prints one command.
 2. Run that command unchanged on the computer (zsh/bash on macOS/Linux, PowerShell on Windows). It downloads from the pinned tag, checks every sha256 there, and only then moves the files into the tools folder (flat, as on the box), including `manifest.json`, and writes `VERSION`. Expect `OK <tag>: <n> files verified in <folder>`.
 3. No internet on the computer or no curl/wget: CopyFromBox each file listed by `python3 /workspace/t3tots_fetch.py hashes <os>` (`manifest.json` included) from `/workspace/t3-tots-tools/<file>` to `<tools folder>/<file>` (CopyFromBox is byte-exact), compare hashes on the computer (macOS `shasum -a 256`, Linux `sha256sum`, Windows `Get-FileHash -Algorithm SHA256`), run `chmod +x t3ctl t3listen` on macOS and Linux (on macOS also `chmod +x t3ui`), and write the tag to `VERSION`.
@@ -276,7 +277,7 @@ Create `README.md` in the tools folder if it's missing (keep the user's edits ot
 Hash its files (step 3 commands) and compare with `python3 /workspace/t3tots_fetch.py hashes <os>`; any difference or missing file = offer to reinstall (steps 1 and 2) after the user's yes. Never "fix" a script by hand on a user's computer.
 
 ## Update T3 Tots (scripts and skills)
-Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots") or when a script prints `T3_SCHEMA_CHANGED`. "Update T3" or "update gh" means T3 Code or dev tools: that's t3-update. One check and one yes cover the box, every T3 computer and the live skills.
+Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots") or when a script prints `T3_SCHEMA_CHANGED`. The T3 Tots weekly update routine runs it without asking ("Weekly update run"). "Update T3" or "update gh" means T3 Code or dev tools: that's t3-update. One check and one yes cover the box, every T3 computer and the live skills.
 1. **Check** (read-only, no approval). Save the fetcher from "Box copy" if `/workspace/t3tots_fetch.py` is missing or differs, then run `python3 /workspace/t3tots_fetch.py check`. It prints installed vs latest tag, the changed tool files, the release notes, then one skills line (`new`, `changed (+a/-b lines, description)`, `unchanged`, `not in release`) and one line per skill that isn't unchanged. Only `t3-*` skills are compared; frontmatter is compared by name and description text, so reflowed YAML doesn't count as a change. If the user asks what changed in one skill, run `skills <tag> --diff <id>` and summarize it.
 2. **Show and ask once.** One short message: installed and latest tag, 2 to 4 lines of the notes, changed scripts, new and changed skills, and any live t3-* skill the release no longer has. Nothing changed in scripts or skills: say it's up to date and stop. Scripts current but skills differ (for example a skill edited by hand): still offer the skills. Ask "Update to <tag>?". The user can answer "yes, but skip <skill>"; leave that skill out.
 3. **On yes**, in this order:
@@ -289,3 +290,16 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
    g. Update the T3 Tots version in memory. Finish in one line: tag, where the scripts were installed, skills updated and created, skills kept or skipped, and where t3listen restarted.
 4. **Rollback**: the same steps with the previous tag (`update <previous tag>`, then `skills <previous tag> --write` and apply). Older tags stay on GitHub.
 5. **Private repo**: `check` can't see releases, so get the tag with `gh release view` (see "Private repo"), unpack that release on the box, and pass `--from <folder>` to `update` and `skills <tag>`.
+
+## Weekly update run
+The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this. Turning it on is the user's yes for each later run, so don't ask.
+1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, send nothing and stop, even when a skill differs from the release (a hand edit stays until the user asks).
+2. If a newer tag exists, run step 3 a to e and g for it. Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, don't restart it; it runs the new version from its next login.
+3. Send one short message: the old and new tag, 2 to 4 lines of the notes, what was updated where, and anything left for the user (offline computers, listeners not restarted yet, skills the release no longer has).
+4. `HASH_MISMATCH`, `REPO_PRIVATE_OR_MISSING` or a failed step installs nothing more. Say what was and wasn't updated, once per tag and error, and note it in memory so later runs stay quiet until the tag or the error changes.
+
+It updates only T3 Tots scripts and t3-* skills. Never update T3 Code, Node, gh or other tools (t3-update), and never change this bot's picture, description or publish settings.
+
+Routine prompt, verbatim:
+
+> T3 Tots weekly update. Follow t3-install-tools "Weekly update run" and t3-tots-rules. Send nothing when T3 Tots is already on the latest release.

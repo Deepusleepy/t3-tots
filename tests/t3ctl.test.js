@@ -221,10 +221,9 @@ test("sensitivePath: acronyms before a sensitive word (HTTPAuth, getHTTPAuth, XM
 
 test("findThread: archivedThreads are searched like search/preview-finish", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
-  const src = fs.readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
-  assert.match(src, /pickThread\(\[\.\.\.s\.threads, \.\.\.\(s\.archivedThreads \|\| \[\]\)\], q\)/);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-find-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const threads = [{ id: "live-thread-01", title: "Live One", status: "idle" }];
   const archivedThreads = [{ id: "arch-thread-99", title: "Old archived", status: "completed" }];
@@ -256,6 +255,7 @@ test("answer: an approval goes through only with --user-approved; decline --redi
   const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-answer-"));
   fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   const thread = { id: "thread-approve-01", title: "Approve me", status: "idle" };
   const options = [{ decision: "accept", label: "Allow" }, { decision: "acceptForSession", label: "Always allow" }, { decision: "decline", label: "Deny" }];
@@ -355,4 +355,225 @@ test("tools updates never overwrite the data files t3ctl keeps next to itself", 
   for (const data of ["token", "listen.json", "answered-here.json", "started-here.json"]) assert.ok(!dests.has(data), data);
   const fetcher = fs.readFileSync(path.join(__dirname, "..", "skills", "t3-install-tools", "SKILL.md"), "utf8");
   for (const del of fetcher.match(/rm -rf "[^"]+"|Remove-Item -Recurse -Force \$\w+/g)) assert.match(del, /\$T\b/, `installer deletes only its staging folder: ${del}`);
+});
+
+async function fakeT3({ shell, projection = () => ({}), onRpc = () => ({}) }) {
+  const fs = require("fs"), os = require("os"), http = require("http"), crypto = require("crypto"), { execFile } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-fake-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3ctl"), path.join(tmp, "t3ctl"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify(shell()));
+    if (u.startsWith("/api/orchestration/threads/")) return res.end(JSON.stringify({ projection: projection(u.slice("/api/orchestration/threads/".length)) }));
+    res.statusCode = 404; res.end("{}");
+  });
+  srv.on("upgrade", (req, sock) => {
+    const accept = crypto.createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    let buf = Buffer.alloc(0);
+    sock.on("data", (d) => {
+      buf = Buffer.concat([buf, d]);
+      while (buf.length >= 2) {
+        let len = buf[1] & 127, off = 2; if (len === 126) { len = buf.readUInt16BE(2); off = 4; }
+        if (buf.length < off + 4 + len) return;
+        const op = buf[0] & 15, mask = buf.subarray(off, off + 4), body = Buffer.from(buf.subarray(off + 4, off + 4 + len)).map((b, i) => b ^ mask[i % 4]);
+        buf = buf.subarray(off + 4 + len);
+        if (op === 8) return sock.end();
+        if (op !== 1) continue;
+        const m = JSON.parse(body.toString("utf8"));
+        const value = onRpc(m.tag, m.payload);
+        const exit = value && value.rpcFailure ? { _tag: "Failure", cause: { message: value.rpcFailure } } : { _tag: "Success", value };
+        const out = Buffer.from(JSON.stringify({ _tag: "Exit", requestId: m.id, exit }));
+        sock.write(Buffer.concat([Buffer.from(out.length < 126 ? [0x81, out.length] : [0x81, 126, out.length >> 8, out.length & 255]), out]));
+      }
+    });
+    sock.on("error", () => {});
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = (...a) => new Promise((r) => execFile(process.execPath, [path.join(tmp, "t3ctl"), ...a], { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } },
+    (err, out, errOut) => r({ code: err ? err.code : 0, out: out + errOut })));
+  return { tmp, run, close: () => srv.close() };
+}
+test("files: a file reached through a linked folder that points outside the project is not copied", async () => {
+  const fs = require("fs"), os = require("os");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-files-"));
+  const root = path.join(base, "project"), outside = path.join(base, "outside");
+  fs.mkdirSync(root); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "private.txt"), "not part of the project");
+  fs.writeFileSync(path.join(root, "result.txt"), "made by the thread");
+  fs.symlinkSync(outside, path.join(root, "linked"), "junction");
+  const project = { id: "proj-files-1", title: "Files", workspaceRoot: root };
+  const thread = { id: "thread-files-01", title: "Files thread", projectId: project.id, status: "idle" };
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [project], threads: [thread] }),
+    projection: () => ({ thread, runs: [{ id: "run-1", startedAt: "2026-01-01T00:00:00Z", completedAt: "2026-01-01T00:01:00Z" }], checkpoints: [],
+      turnItems: [{ runId: "run-1", type: "file_change", fileName: path.join(root, "result.txt") }, { runId: "run-1", type: "file_change", fileName: path.join(root, "linked", "private.txt") }] }),
+  });
+  try {
+    const r = await t3.run("files", "--thread", thread.id);
+    assert.equal(r.code, 0, r.out);
+    const line = (name) => r.out.split("\n").find((l) => l.includes(name)) || "";
+    assert.match(line("private.txt"), /not copied: outside the project/, r.out);
+    assert.match(line("result.txt"), /->/, r.out);
+    assert.ok(!fs.existsSync(path.join(t3.tmp, "out", "linked", "private.txt")), "the outside file was copied");
+  } finally { t3.close(); }
+});
+test("insideProject: real paths decide; the root itself and sibling folders with a shared prefix are outside", () => {
+  const fs = require("fs"), os = require("os");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-inside-"));
+  const root = path.join(base, "app"), sibling = path.join(base, "app-secrets");
+  fs.mkdirSync(path.join(root, "src"), { recursive: true }); fs.mkdirSync(sibling);
+  fs.writeFileSync(path.join(root, "src", "a.txt"), "x"); fs.writeFileSync(path.join(sibling, "b.txt"), "x");
+  assert.ok(t.insideProject(path.join(root, "src", "a.txt"), root));
+  assert.ok(!t.insideProject(path.join(sibling, "b.txt"), root));
+  assert.ok(!t.insideProject(root, root));
+  assert.ok(!t.insideProject(path.join(root, "..", "app-secrets", "b.txt"), root));
+  assert.ok(!t.insideProject(path.join(root, "src", "a.txt"), ""));
+});
+test("modelSel: --effort without --model changes the inherited model's effort instead of being dropped", () => {
+  const codex = { instanceId: "codex", model: "gpt-6.1-sol", options: [{ id: "reasoningEffort", value: "low" }, { id: "serviceTier", value: "default" }] };
+  assert.deepEqual(t.modelSel({ effort: "xhigh" }, codex, null), { instanceId: "codex", model: "gpt-6.1-sol", options: [{ id: "serviceTier", value: "default" }, { id: "reasoningEffort", value: "xhigh" }] });
+  assert.deepEqual(t.modelSel({ effort: "high" }, { instanceId: "claudeAgent", model: "claude-opus-5-5" }, null), { instanceId: "claudeAgent", model: "claude-opus-5-5", options: [{ id: "effort", value: "high" }] });
+  assert.deepEqual(t.modelSel({}, codex, null), codex);
+  const s = { threads: [{ modelSelection: { instanceId: "codex", model: "gpt-6.1-sol", options: [{ id: "reasoningEffort", value: "low" }] } }] };
+  assert.deepEqual(t.modelSel({ model: "gpt-6.1-sol", effort: "max" }, null, s), { instanceId: "codex", model: "gpt-6.1-sol", options: [{ id: "reasoningEffort", value: "max" }] });
+});
+test("new and tasks --upsert: --worktree starts the thread in its own worktree; without it, the project folder", async () => {
+  const project = { id: "proj-wt-1", title: "Worktrees", workspaceRoot: "/work/wt", defaultModelSelection: { instanceId: "codex", model: "gpt-6.1-sol" } };
+  const sent = [];
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [project], threads: [] }),
+    onRpc: (tag, payload) => { sent.push({ tag, payload }); return tag === "orchestration.launchThread" ? { threadId: "thread-wt-1" } : { task: { id: "task-1" } }; },
+  });
+  const strategies = (tag) => sent.filter((x) => x.tag === tag).map((x) => x.payload.workspaceStrategy);
+  try {
+    let r = await t3.run("new", "--project", project.id, "--prompt", "hi"); assert.equal(r.code, 0, r.out);
+    r = await t3.run("new", "--project", project.id, "--prompt", "hi", "--worktree", "main"); assert.equal(r.code, 0, r.out);
+    r = await t3.run("new", "--project", project.id, "--prompt", "hi", "--effort", "xhigh"); assert.equal(r.code, 0, r.out);
+    r = await t3.run("tasks", "--upsert", "--project", project.id, "--title", "Nightly", "--prompt", "hi", "--every", "1h", "--worktree", "develop"); assert.equal(r.code, 0, r.out);
+    assert.deepEqual(strategies("orchestration.launchThread"), [{ type: "root" }, { type: "worktree", baseRef: "main" }, { type: "root" }]);
+    assert.deepEqual(strategies("scheduledTasks.upsert"), [{ type: "worktree", baseRef: "develop" }]);
+    assert.deepEqual(sent[2].payload.modelSelection, { instanceId: "codex", model: "gpt-6.1-sol", options: [{ id: "reasoningEffort", value: "xhigh" }] });
+    const before = sent.length;
+    r = await t3.run("new", "--project", project.id, "--prompt", "hi", "--worktree"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE/);
+    r = await t3.run("new", "--project", project.id, "--prompt", "hi", "--worktree=  "); assert.equal(r.code, 1, r.out); assert.match(r.out, /--worktree needs the base branch/);
+    assert.equal(sent.length, before);
+  } finally { t3.close(); }
+});
+test("archive and unarchive: idle threads only, archived threads found through T3's archived list, nothing sent when already in that state", async () => {
+  const idle = { id: "thread-arch-idle", title: "Done work", status: "idle", archivedAt: null };
+  const busy = { id: "thread-arch-busy", title: "Still going", status: "running", activeRunId: "run-9", archivedAt: null };
+  const old = { id: "thread-arch-old1", title: "Old archived", status: "idle", archivedAt: "2026-01-01T00:00:00Z" };
+  const sent = [];
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [], threads: [idle, busy], archivedThreads: [] }),
+    onRpc: (tag, payload) => {
+      if (tag === "orchestration.getArchivedShellSnapshot") return { schemaVersion: 1, snapshotSequence: 1, projects: [], threads: [old] };
+      sent.push(payload); return {};
+    },
+  });
+  try {
+    let r = await t3.run("archive", "--thread", idle.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /archived "Done work"/);
+    r = await t3.run("archive", "--thread", busy.id); assert.equal(r.code, 1, r.out); assert.match(r.out, /^THREAD_RUNNING/);
+    r = await t3.run("archive", "--thread", old.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /already archived/);
+    r = await t3.run("unarchive", "--thread", old.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /unarchived "Old archived"/);
+    r = await t3.run("unarchive", "--thread", "Old archived"); assert.equal(r.code, 0, r.out); assert.match(r.out, /unarchived "Old archived"/);
+    r = await t3.run("unarchive", "--thread", idle.id); assert.equal(r.code, 0, r.out); assert.match(r.out, /already not archived/);
+    r = await t3.run("unarchive", "--thread", "no-such-thread-zz"); assert.equal(r.code, 1, r.out); assert.match(r.out, /NOT_FOUND/);
+    assert.deepEqual(sent.map((p) => [p.type, p.threadId]), [["thread.archive", idle.id], ["thread.unarchive", old.id], ["thread.unarchive", old.id]]);
+  } finally { t3.close(); }
+});
+
+test("files: a file that only changed during the run is listed but copied only when picked with --include", async () => {
+  const fs = require("fs"), os = require("os");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-include-"));
+  fs.writeFileSync(path.join(root, "made.txt"), "the thread wrote this");
+  fs.writeFileSync(path.join(root, "other.txt"), "another session wrote this");
+  const project = { id: "proj-include-1", title: "Include", workspaceRoot: root };
+  const thread = { id: "thread-include-01", title: "Include thread", projectId: project.id, status: "idle" };
+  const started = new Date(Date.now() - 60000).toISOString(), done = new Date(Date.now() + 60000).toISOString();
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [project], threads: [thread] }),
+    projection: () => ({ thread, runs: [{ id: "run-1", startedAt: started, completedAt: done }], checkpoints: [],
+      turnItems: [{ runId: "run-1", type: "file_change", fileName: path.join(root, "made.txt") }] }),
+  });
+  const line = (out, name) => out.split("\n").find((l) => l.includes(name)) || "";
+  const copied = (name) => fs.existsSync(path.join(t3.tmp, "out", name));
+  try {
+    let r = await t3.run("files", "--thread", thread.id);
+    assert.equal(r.code, 0, r.out);
+    assert.match(line(r.out, "made.txt"), /->/);
+    assert.match(line(r.out, "other.txt"), /not copied: changed during the run, but nothing shows this thread made it/);
+    assert.ok(copied("made.txt") && !copied("other.txt"));
+    r = await t3.run("files", "--thread", thread.id, "--include", "other.txt");
+    assert.equal(r.code, 0, r.out); assert.match(line(r.out, "other.txt"), /->/); assert.ok(copied("other.txt"));
+    fs.rmSync(path.join(t3.tmp, "out"), { recursive: true });
+    r = await t3.run("files", "--thread", thread.id, `--include=${path.join(root, "other.txt")}`);
+    assert.equal(r.code, 0, r.out); assert.ok(copied("other.txt"), r.out);
+  } finally { t3.close(); }
+});
+
+test("findThread: an archived thread with the exact title wins over an active thread that only contains the words", async () => {
+  const live = { id: "thread-live-follow", title: "Release follow up", status: "idle", archivedAt: null, updatedAt: "2026-10-02T00:00:00Z" };
+  const old = { id: "thread-arch-release", title: "Release", status: "idle", archivedAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" };
+  const notes = { id: "thread-arch-notes", title: "Release notes", status: "idle", archivedAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z" };
+  const sent = [];
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [], threads: [live], archivedThreads: [] }),
+    onRpc: (tag, payload) => (tag === "orchestration.getArchivedShellSnapshot" ? { threads: [old, notes] } : (sent.push(payload), {})),
+  });
+  try {
+    let r = await t3.run("unarchive", "--thread", "Release"); assert.equal(r.code, 0, r.out); assert.match(r.out, /unarchived "Release"/);
+    r = await t3.run("archive", "--thread", "Release follow up"); assert.equal(r.code, 0, r.out); assert.match(r.out, /archived "Release follow up"/);
+    r = await t3.run("archive", "--thread", "follow"); assert.equal(r.code, 0, r.out); assert.match(r.out, /archived "Release follow up"/);
+    r = await t3.run("unarchive", "--thread", "Rel"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/);
+    assert.deepEqual(sent.map((p) => [p.type, p.threadId]), [["thread.unarchive", old.id], ["thread.archive", live.id], ["thread.archive", live.id]]);
+  } finally { t3.close(); }
+});
+test("modelSel: --effort uses each provider's own effort option name", () => {
+  for (const [instanceId, key] of [["muse", "reasoningEffort"], ["grok", "reasoningEffort"], ["codex", "reasoningEffort"], ["opencode", "variant"], ["claudeAgent", "effort"]])
+    assert.deepEqual(t.modelSel({ effort: "high" }, { instanceId, model: "m" }, null).options, [{ id: key, value: "high" }], instanceId);
+});
+
+test("files: a hard link inside the project is held back until the user picks it, since its content may live elsewhere", async () => {
+  const fs = require("fs"), os = require("os");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "t3ctl-hardlink-"));
+  const root = path.join(base, "app"), outside = path.join(base, "outside");
+  fs.mkdirSync(root); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "notes.txt"), "OUTSIDE-NOTES");
+  fs.linkSync(path.join(outside, "notes.txt"), path.join(root, "linked-notes.txt"));
+  fs.writeFileSync(path.join(root, "made.txt"), "made");
+  const project = { id: "proj-hardlink-1", title: "Hard link", workspaceRoot: root };
+  const thread = { id: "thread-hardlink-01", title: "Hard link thread", projectId: project.id, status: "idle" };
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [project], threads: [thread] }),
+    projection: () => ({ thread, runs: [{ id: "run-1", startedAt: "2026-01-01T00:00:00Z", completedAt: "2026-01-01T00:01:00Z" }], checkpoints: [],
+      turnItems: ["linked-notes.txt", "made.txt"].map((n) => ({ runId: "run-1", type: "file_change", fileName: path.join(root, n) })) }),
+  });
+  const copied = (name) => fs.existsSync(path.join(t3.tmp, "out", name));
+  try {
+    let r = await t3.run("files", "--thread", thread.id); assert.equal(r.code, 0, r.out);
+    assert.match(r.out.split("\n").find((x) => x.includes("linked-notes.txt")) || "", /not copied: hard link/);
+    assert.ok(copied("made.txt") && !copied("linked-notes.txt"));
+    r = await t3.run("files", "--thread", thread.id, "--include", "linked-notes.txt"); assert.equal(r.code, 0, r.out);
+    assert.ok(copied("linked-notes.txt"), r.out);
+  } finally { t3.close(); }
+});
+test("findThread: when T3's archived list can't be read, NOT_FOUND says the archive wasn't checked", async () => {
+  const t3 = await fakeT3({
+    shell: () => ({ projects: [], threads: [{ id: "thread-live-001", title: "Live", status: "idle" }], archivedThreads: [] }),
+    onRpc: (tag) => (tag === "orchestration.getArchivedShellSnapshot" ? { rpcFailure: "archive rpc down" } : {}),
+  });
+  try {
+    const r = await t3.run("unarchive", "--thread", "Release");
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /^NOT_FOUND: no thread matches "Release".*T3's archived threads couldn't be checked: .*archive rpc down/s);
+  } finally { t3.close(); }
+});
+test("modelSel: --effort ignores empty option slots and trims the value", () => {
+  assert.deepEqual(t.modelSel({ effort: " high " }, { instanceId: "codex", model: "gpt-6.1-sol", options: [null, { id: "reasoningEffort", value: "low" }] }, null).options,
+    [{ id: "reasoningEffort", value: "high" }]);
 });

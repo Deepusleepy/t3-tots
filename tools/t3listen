@@ -5,6 +5,10 @@
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
+const { pickThread, idLike, lookupThread } = (() => { try { return require("./thread-match"); } catch (e) { // same rules as t3ctl; see tools/thread-match.js
+  if (e.code !== "MODULE_NOT_FOUND") throw e;
+  console.error("TOOLS_INCOMPLETE: thread-match.js must be next to t3listen. Reinstall the tools (t3-install-tools)."); process.exit(1);
+} })();
 const HOME = os.homedir(), DIR = __dirname, CONF = path.join(DIR, "listen.json"), HERE = path.join(DIR, "answered-here.json"), STATE = path.join(DIR, "listen-state.json"), LOG = path.join(DIR, "listen.log"), PID = path.join(DIR, "listen.pid");
 const LABEL = process.env.T3LISTEN_LABEL || "com.t3tots.listen", TASK = process.env.T3LISTEN_LABEL || "T3 Tots listener";
 const argv = process.argv.slice(2), cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "run", flag = (f) => argv.includes(f);
@@ -77,7 +81,7 @@ const SKIP_KINDS = new Set(["dynamic_tool_call", "auth_refresh"]);
 // short context for the chat: the thread's last assistant text before the question (else the last user prompt), redacted and trimmed
 // SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks)
 const SECRET_KEYS = String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+`;
-const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|(?:api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S{8,})`, "gi");
+const RED = new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|\\b(?:(?:api|secret|access|private|client)[_-]?(?:key|secret)s?|tokens?|secrets?|passwds?|passwords?)["']?\\s*[:=]\\s*(?:"(?:[^"\\\\\\n]|\\\\.){4,}"|'(?:[^'\\\\\\n]|\\\\.){4,}'|\\S{6,})|\\bauthorization\\s*[:=]\\s*(?:(?:bearer|basic|token)\\s+)?[A-Za-z0-9._~+/=-]{12,}|\\bbearer\\s+[A-Za-z0-9._~+/=-]{16,})`, "gi");
 const clean = (t) => { t = String(t).replace(RED, "[redacted]"); return HOME && HOME.length > 1 ? t.split(HOME).join("~") : t; };
 // every text field of an event (questions, option labels, approval prompt, title, answers, errors) is redacted before it is sent, logged or previewed; ids are kept
 function cleanEvent(v, k = "") {
@@ -136,10 +140,34 @@ async function post(e) { // one attempt; returns { ok, status, body, retry }
 }
 const ref = (e) => String(e.requestId || e.runId || "");
 function markDelivered(e) {
-  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && f.e) { delete f.e; saveState(); } return; }
+  if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && (f.e || f.parked)) { delete f.e; delete f.parked; saveState(); } return; }
   const s = S.sent[e.requestId]; if (!s) return;
+  if (s.parked) { delete s.parked[e.event]; if (!Object.keys(s.parked).length) delete s.parked; }
   if (e.event === "request.opened") s.delivered = true; else if (e.event === "request.resolved" && s.closing) delete S.sent[e.requestId];
   saveState();
+}
+const MAX_RETRY_QUEUE = 100;
+const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.finished[e.runId] : null);
+function keepForRetry(q, st, item) {
+  if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
+  const s = stateFor(st, item.e); if (!s) return "dropped";
+  (s.parked = s.parked || {})[item.e.event] = { e: item.e, rounds: item.rounds || 0, since: item.since }; return "parked";
+}
+function refillFromState(q, st, now) {
+  let moved = 0;
+  for (const s of [...Object.values(st.sent), ...Object.values(st.finished)]) {
+    for (const [name, p] of Object.entries(s.parked || {})) {
+      if (q.length >= MAX_RETRY_QUEUE) return moved;
+      q.push({ e: p.e, rounds: p.rounds || 0, since: p.since || now }); delete s.parked[name]; moved++;
+    }
+    if (s.parked && !Object.keys(s.parked).length) delete s.parked;
+  }
+  return moved;
+}
+function retryLater(item) {
+  const how = keepForRetry(queue, S, item);
+  if (how === "parked") { saveState(); log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is saved and retried when there is room`); }
+  else if (how === "dropped") log(`retry queue is full and ${item.e.event} ${ref(item.e).slice(-12)} has no saved state, so it is dropped`);
 }
 async function deliver(e) {
   cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);
@@ -152,18 +180,19 @@ async function deliver(e) {
     if (!r.retry) break; if (i < 2) await sleep((/rate.?limit/i.test(r.body || "") ? 20000 : 2000) * 3 ** i);
   }
   // keep it queued and retry every 60s: retryable failures (network, 408, 429, 5xx) for up to 24h, other 4xx 10 times
-  if (queue.length < 100) queue.push({ e, rounds: 0, since: Date.now() }); return false;
+  retryLater({ e, rounds: 0, since: Date.now() }); return false;
 }
 setInterval(async () => {
-  if (!queue.length) return; const q = queue; queue = [];
+  const q = queue; queue = [];
   for (const item of q) {
     const { e } = item; item.rounds++; e.sentAt = new Date().toISOString();
     const r = await post(e);
     if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
     log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
-    if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) { if (queue.length < 100) queue.push(item); }
+    if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) retryLater(item);
     else log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
   }
+  if (refillFromState(queue, S, Date.now())) saveState();
 }, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
@@ -428,6 +457,7 @@ async function run() {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
     S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {};
+    for (const s of Object.values(S.sent)) { delete s.parked; delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) { delete f2.parked; delete f2.retryLater; }
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
@@ -536,9 +566,20 @@ async function previewFinish() { // print the run-end event the listener would s
   const ep = endpoint(); if (!ep) die("NO_T3", "T3 Code isn't running here");
   let sh = {}; try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H }); sh = r.ok ? await r.json() : {}; } catch {}
   for (const pr of sh.projects || []) meta.projects.set(pr.id, pr.title); // so the preview names the project
-  // live + archived: a thread missing from both (or agent-made) can still be read by its id: NOT_FOUND on an id-like query asks T3 directly
-  let id = q; try { id = pickThread([...(sh.threads || []), ...(sh.archivedThreads || [])], q).id; } catch (err) { const [w, ...rest] = err.message.split(": "); if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": ")); }
-  const p = await threadSnap(ep, id); if (!p) die("NOT_FOUND", `no thread matches "${q}"`);
+  // live + archived (tools/thread-match.js, same as t3ctl). NOT_FOUND on an id-like query still asks T3 directly.
+  // A failed archived-list read is included in that NOT_FOUND, same wording as t3ctl.
+  const listed = [...(sh.threads || []), ...(sh.archivedThreads || [])];
+  let id = q, missed = null;
+  try { id = (await lookupThread(q, listed, async () => ((await wsRpc(ep, "orchestration.getArchivedShellSnapshot", {})) || {}).threads || [])).id; }
+  catch (err) {
+    missed = err; const [w, ...rest] = err.message.split(": ");
+    if (!(w === "NOT_FOUND" && idLike(q))) die(w, rest.join(": "));
+    id = q;
+  }
+  const p = await threadSnap(ep, id); if (!p) {
+    if (missed && /couldn't be checked/.test(missed.message)) { const [, ...rest] = missed.message.split(": "); die("NOT_FOUND", rest.join(": ")); }
+    die("NOT_FOUND", `no thread matches "${q}"`);
+  }
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip, run } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
@@ -550,26 +591,10 @@ async function previewFinish() { // print the run-end event the listener would s
   cleanEvent(e); e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
 }
 
-// pickThread: the same rules as t3ctl (tests/t3listen.test.js checks they agree): exact id, else an id prefix of 8+ characters,
-// else one exact title, else one title containing the text. Several matches: AMBIGUOUS, never a guess
-const normT = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
-const idLike = (q) => /^[A-Za-z0-9_:-]{8,}$/.test(String(q)); // no whitespace, 8+ chars, colons allowed (thread:project:…, thread:delegated-task:…)
-function pickThread(all, q) {
-  q = String(q); const list = (m) => m.slice(0, 8).map((t) => `${t.id}  ${t.title}`).join("\n  ");
-  const amb = (m) => { throw new Error(`AMBIGUOUS: ${m.length} threads match "${q}". Pass the full id:\n  ${list(m)}`); };
-  const exact = all.find((t) => t.id === q); if (exact) return exact;
-  if (q.length >= 8) { const pre = all.filter((t) => String(t.id).startsWith(q)); if (pre.length === 1) return pre[0]; if (pre.length > 1) amb(pre); }
-  const same = all.filter((t) => normT(t.title || "") === normT(q)); if (same.length === 1) return same[0]; if (same.length > 1) amb(same);
-  const m = all.filter((t) => normT(t.title || "").includes(normT(q)));
-  if (!m.length) throw new Error(`NOT_FOUND: no thread matches "${q}"${/^[0-9a-f-]{1,7}$/i.test(q) ? " (an id prefix needs 8 or more characters)" : ""}`);
-  if (m.length > 1) amb(m);
-  return m[0];
-}
-
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
 t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume };
+if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

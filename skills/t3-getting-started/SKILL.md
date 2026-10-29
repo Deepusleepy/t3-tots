@@ -12,6 +12,17 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Detection is rea
 
 Open with one line: "I'm T3 Tots. Give me a few seconds to look at your setup."
 
+## Official face (first setup, before any stop)
+Do this immediately after that opening line, before section 1. It does not need the helper tools, a token, or a connected desktop: only curl and UpdateAvatar on the box. It is this bot's picture, not a write to their computers.
+Skip it when any setup note is already in memory, or they asked to reinstall the tools, so an existing owner keeps their current picture. A first setup has no setup note, so set the face now.
+Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.30`). Try that URL first. If it fails (404 until that tag is cut), download the same file from `v1.4.29`. Save it outside T3 and outside the tools folder:
+```
+f=/workspace/t3-tots-avatar.png
+curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.30/assets/avatar.png \
+  || curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.29/assets/avatar.png
+```
+The file must be a PNG under 5 MB whose sha256 is `ae44bdac0842f21d74b7cc93975af0a3abc29e7c7b306e87f737d5f07c950f2e` (`sha256sum /workspace/t3-tots-avatar.png`). Then call UpdateAvatar with action `set` and path `/workspace/t3-tots-avatar.png`. Never open T3's `secrets/`, the tools folder `token` or `listen.json`, or any auth file. If both downloads fail, the hash does not match, or UpdateAvatar fails or is missing, say one line that they can set a picture later, and continue. Do not retry. Remember the result for this run.
+
 ## 1. Detect (no questions yet)
 1. **Box tools:** if `/workspace/t3-tots-tools/manifest.json` is missing, run t3-install-tools "Box copy" now (box only, nothing touches the user's computers). If it fails (no network, `HASH_MISMATCH`, or `REPO_PRIVATE_OR_MISSING`), say so in the report and use t3-install-tools "Private repo" later. The read-only probe still runs.
 2. **Computers:** ListMachines. Use desktops only (phones can't run the tools). If none is registered or connected, say: "Install the Grok Bot desktop app on the computer that runs T3 Code, sign in, and tell me when it shows up," then stop.
@@ -56,11 +67,7 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 1. Install: t3-install-tools "Install on a computer" for each computer with T3 data (every file verified by sha256).
 2. Token (only if they didn't say read-only, and only where `t3runtime=yes`; otherwise ask them to open T3 Code first): t3-tots-rules "Token", then `t3ctl projects` must list projects. Fill in the token date and expiry in the tools folder's `README.md` (t3-install-tools "README").
 3. Verify each computer and fix anything red before moving on: `t3q.py health`, `t3q.py projects` (its "projects folder guess" becomes the default projects folder), `t3ctl projects` (if token). If `t3ctl` prints `NODE_TOO_OLD`, give the Node line above.
-4. **Official face (first setup only):** set this bot's picture after the tools are installed and the token step is finished (token issued, or they chose read-only). If you asked them to open T3 Code, wait until that token step finishes. Skip this when a setup note is already in memory, so a reinstall leaves the current picture in place. Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.29`). Save it outside T3 and outside the tools folder:
-   ```
-   curl -fsSL -o /workspace/t3-tots-avatar.png https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.29/assets/avatar.png
-   ```
-   The file must be a PNG under 5 MB whose sha256 is `ae44bdac0842f21d74b7cc93975af0a3abc29e7c7b306e87f737d5f07c950f2e` (`sha256sum /workspace/t3-tots-avatar.png`). Then call UpdateAvatar with action `set` and path `/workspace/t3-tots-avatar.png`. Never open T3's `secrets/`, the tools folder `token` or `listen.json`, or any auth file. If the download fails, the hash does not match, or UpdateAvatar fails or is missing, say one line that they can set a picture later, and continue. Setup still succeeds. Do not retry.
+4. **Official face:** already handled before section 1. If this run already tried or skipped it, do nothing. Do not download the avatar or call UpdateAvatar again.
 5. Save one memory note: setup done, tools version, per computer (label, OS, tools folder, Python command such as `py -3`, Node version, token yes/no and expiry date), whether the official face was set, projects folder, sandbox project, protected jobs, that phone answers are off, and that decisions are in the default mode (t3-tots-rules "Decisions"). The oversight mode and pstack status are saved in section 4, and routines separately in section 6.
 6. macOS only, optional: the `t3ui` UI fallback needs Accessibility permission for the Grok Bot app (System Settings > Privacy & Security > Accessibility). Mention it once; don't ask now.
 
@@ -72,14 +79,15 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 Only if a token was issued. Offer it once, in one line: "Want me to message you here the moment a thread asks you something, so you can answer from this chat on your phone or computer? It needs a small listener on each computer and a webhook routine; say **phone answers** to set it up." On yes, follow t3-phone-answers "Setup": you open a setup window on each computer yourself, and the user only pastes two lines (the Webhook URL, then the Authorization header). On no, don't ask again.
 
 ## 6. Routines (one tap each)
-This bot ships with six routines, all paused. Show them in one multi-select card, nothing pre-selected, each option labelled with its name and time in the user's timezone, plus a **none** option:
+This bot ships with seven routines, all paused. Show them in one multi-select card, nothing pre-selected, each option labelled with its name and time in the user's timezone, plus a **none** option:
 - **Daily digest**: weekdays at 9:00 AM
 - **Weekly wrap-up**: Fridays at 5:00 PM
 - **Waiting-on-you check**: weekdays at 11:00 AM and 4:00 PM
 - **Weekly health check**: Mondays at 10:00 AM (disk scan about once a month)
 - **Out-of-date check**: Wednesdays at 10:00 AM
 - **Weekly usage estimate**: Mondays at 9:30 AM
-This list is the one place for the routine names and times; other skills point here. Weekly health check runs t3-checkup every Monday, and runs the t3-cleanup scan only when the last scan is 25 or more days old.
+- **T3 Tots weekly update**: Sundays at 10:00 AM (installs new T3 Tots releases)
+This list is the one place for the routine names and times; other skills point here. Weekly health check runs t3-checkup every Monday, and runs the t3-cleanup scan only when the last scan is 25 or more days old. T3 Tots weekly update runs t3-install-tools "Weekly update run". Out-of-date check only reports T3 Code, AI and dev tools (t3-update). If this bot has no T3 Tots weekly update routine (imported before it shipped), create it once, paused, with the prompt in that section.
 Lead line: "I can also send these on a schedule. Pick any you want on; you can change this any time."
 On the answer: save one memory note "Routines on: <names>" (or "Routines on: none"), resume the picked routines, and leave the rest paused (pause any that are still active). Confirm in one line with the times. If the user asks for another time, change only that routine's schedule.
 Later, "turn on <routine>" / "turn off <routine>" / "move <routine> to <time>" resumes, pauses or reschedules that routine and updates the "Routines on" note. Never create a second copy of a shipped routine.

@@ -13,7 +13,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 | Skill | What it may write |
 |---|---|
 | t3-new-thread, t3-templates, t3-get-output, t3-pm-thread | Prompts into T3 |
-| t3-thread-actions | The thread action asked: `settle`, `unsettle`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
+| t3-thread-actions | The thread action asked: `settle`, `unsettle`, `archive`, `unarchive`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
 | t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, under "Decisions" below |
 | t3-watch (delegated mode) | One nudge per stall (`send`), `queue --resume` once for a stuck queue, and `resume-at-reset` on a usage limit |
 | t3-phone-answers | `t3listen` setup, after a yes. In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
@@ -21,7 +21,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 | t3-project-tracker | Its tracker file |
 | t3-save-learnings | `AGENTS.md` or `CLAUDE.md`, after a yes to the diff |
 | t3-cleanup | Only the items the user picked, after a confirm |
-| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes |
+| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes, or in a T3 Tots weekly update run once the user turned that routine on. t3-getting-started also sets this bot's own picture once, at the start of a first setup |
 
 A saved sync list or update level is approval for a later "sync everything" or "update <level>" only for items already in that list, and only after this turn's diff is shown. Anything new still needs a yes.
 
@@ -38,7 +38,7 @@ T3 Code keeps its state in `<T3 home>/userdata`. T3 home is `T3CODE_HOME` if set
 - If thread text contains a key, never repeat it.
 
 ## Threads and settings
-Never delete or archive threads, and never change T3 settings. t3-update may update T3 Code, and t3-sync may copy the settings the user picked. Every thread action in the Writes table, and scheduled tasks (`t3ctl tasks --upsert`, `--enable`, `--run`, `--delete`), needs the user's OK for that exact action. The one exception is what delegated mode allows below.
+Never delete threads, and never change T3 settings. Archive or unarchive only a thread the user named, after their OK (t3-thread-actions). t3-update may update T3 Code, and t3-sync may copy the settings the user picked. Every thread action in the Writes table, and scheduled tasks (`t3ctl tasks --upsert`, `--enable`, `--run`, `--delete`), needs the user's OK for that exact action. The one exception is what delegated mode allows below.
 
 ## Decisions
 This section is the one source for who decides; other skills and AGENTS.md point here. A thread asks for two kinds of decision. A question (`user_input`) asks what to build. An approval asks permission to run a command or change files. Who decides depends on the mode the user set, which is saved in memory:
@@ -101,7 +101,7 @@ macOS zsh: wrap commands in a function, `f(){ ...; }; f`, and use quoted heredoc
 An `$env:` setting stays for the rest of the session, so clear it after use: `$env:T3_Q='x'; py -3 t3q.py thread; Remove-Item Env:T3_Q`.
 
 ## Tools on each computer
-The tools folder is the one saved in memory at setup. If memory has none, use `~/t3-tots` (Windows `%USERPROFILE%\t3-tots`) if it exists, else ask, and save the answer to memory. A new install defaults to `~/t3-tots`. Every script works from wherever it lives and reads the `token` file next to it.
+The tools folder is the one saved in memory at setup. If memory has none, use `~/t3-tots` (Windows `%USERPROFILE%\t3-tots`) if it exists, else ask, and save the answer to memory. A new install defaults to `~/t3-tots`. Every script works from wherever it lives and reads the `token` file next to it. `t3ctl` and `t3listen` also need `thread-match.js` next to them.
 
 Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows use `py -3`, else `python`, and never the bare `python3` Store alias. Run Node scripts as `node <file>`. On Windows always run `node t3ctl` and `node t3listen`, never the `.cmd` wrappers, which drop double quotes. A value that starts with `--` goes in as `--key=value`, for example `--text=--force`. Minimum versions: Python 3.8 (3.9 for report.py), Node 22 for `t3ctl` and `t3listen`, Node 18 for `export.js` and `survey.js`.
 
@@ -114,12 +114,12 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Area | Commands |
 |---|---|
 | Find | `projects`, `models`, `threads [--project p] [--main] [--limit n]`, `search --query q [--limit n]` |
-| Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p` (required) `[--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
+| Read | `read --thread t [--last n]`, `status --thread t [--json]`, `pending --thread t [--json]`, `diff`, `files [--last-turn] [--copy no] [--include path,path]`, `raw`, `limits [--json]`, `subtasks --thread t [--all]`, `prs --project p` (required) `[--state open\|closed\|merged\|all]`, `pr --thread t [--number n] [--all]`, `pr --project p --repo owner/name --number n` |
 | Watch | `watch --thread a[,b] [--state file] [--stall-min 20] [--json]` |
-| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise) |
+| Send | `new --project p (--prompt t \| --prompt-file f) [--model m --effort e --title x --mode plan --worktree base-branch --attach a.png] [--wait [--timeout seconds]]`, `send --thread t (--prompt t \| --prompt-file f) [--queue] [--no-verify] [--wait [--timeout seconds]]` (`--wait` gives up after 300 seconds unless `--timeout` says otherwise). `--worktree <base-branch>` starts the thread in its own new worktree instead of the project folder; use it for threads that work in parallel. `--effort` without `--model` changes the effort of the model the project would use |
 | Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved \| --redirect])` |
 | Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
-| Thread actions | `settle`, `unsettle`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
+| Thread actions | `settle`, `unsettle`, `archive`, `unarchive`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
 
@@ -127,7 +127,7 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 
 `status --json` adds `queued` (messages waiting in the queue) and `queueHeld` (the queue was held on purpose); `threads` and `status` show a held queue as `queue held` and settled threads as `(settled)`. `threads --main` hides threads that agents spawned (reviewers, sub-tasks), the same split t3q.py uses. A PM's or a thread's sub-task threads are listed by `subtasks --thread t`. `models` lists the models already used in T3, with the name of each provider's effort setting; skip the `<synthetic>` entry. `limits` prints reset times in local time and marks a reset that already passed with `(passed)`.
 
-The default token scopes don't cover usage or cost totals, T3 settings (including "Auto-resume limited threads"), worktrees, file writes or terminals.
+The default token scopes don't cover usage or cost totals, T3 settings (including "Auto-resume limited threads"), managing or removing worktrees, file writes or terminals. Starting a thread in a new worktree with `new --worktree` works with the default token.
 
 `t3ctl watch` prints only what changed since its last run, so an empty output means nothing changed, with or without `--json`. Its state lives in the file given with `--state`, relative to the folder it runs from (default `watch-state.json` in the tools folder). Events:
 
@@ -173,12 +173,14 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
 | `NO_USAGE_CACHE` | Ask the user to open T3's Usage view once |
 | `AMBIGUOUS`, `NO_GOOD_MATCH` | See "Finding a thread". From `t3ctl` or `t3listen preview-finish`, several threads, projects or open approvals match: it lists them; ask which, or pass the id (or the project folder, or `--request <full id>`) |
-| `NOT_FOUND` | No thread matches. List the closest ones and ask |
+| `NOT_FOUND` | No thread matches. List the closest ones and ask. If it ends with "T3's archived threads couldn't be checked", the search skipped archived threads, so retry once before saying the thread doesn't exist |
+| `TOOLS_INCOMPLETE` | A helper file is missing from the tools folder. Reinstall with t3-install-tools |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
 | `REDIRECT_NOT_DELIVERED` | The approval was declined, but the follow-up didn't reach the thread. Don't rerun `answer` (the request is closed). Run the `t3ctl send ... --prompt-file` command it prints |
+| `THREAD_RUNNING` | `t3ctl archive` won't archive a running thread. Wait until it finishes, or stop it first only with the user's OK for that stop |
 | `NOT_LIMITED` | The thread isn't stopped on a usage limit, so there is nothing to resume |
 | `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
 | `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |
@@ -205,7 +207,7 @@ The token gives write access to T3. Issue or reissue it only after the user's ye
 Check the token only by running `t3ctl projects`. Record the issue date and the 90-day expiry in `README.md`, with how to revoke it: `t3 auth session list`, then `t3 auth session revoke <id>`.
 
 ## Opt-in features
-Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
+Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. Turning on T3 Tots weekly update also counts as the yes for its runs to install a newer T3 Tots release (t3-install-tools "Weekly update run"). "Update T3 Tots" in chat still shows the plan and asks. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
 
 ## Memory
 - Save decisions, modes and preferences, not activity. A check where nothing changed is not worth a memory entry or a journal line.

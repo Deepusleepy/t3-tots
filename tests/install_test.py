@@ -40,14 +40,34 @@ class Fetcher(unittest.TestCase):
         started = (ROOT / "skills" / "t3-getting-started" / "SKILL.md").read_text(encoding="utf-8")
         self.assertTrue(started.isascii(), "t3-getting-started must stay ASCII (no em dashes)")
         url = f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{pin}/assets/avatar.png"
-        self.assertIn(url, started, "t3-getting-started must download the pinned-release avatar")
+        fallback = "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.29/assets/avatar.png"
+        self.assertIn(url, started, "t3-getting-started must try the pinned-release avatar first")
+        self.assertIn(fallback, started)
+        if url != fallback:
+            self.assertLess(started.index(url), started.index(fallback), "a 404 on the pinned tag falls back to v1.4.29")
         self.assertIn("UpdateAvatar", started)
         self.assertIn("action `set`", started)
+        face = started.index("## Official face")
+        self.assertLess(face, started.index("If none is registered or connected"), "official face runs before the no-computer stop")
+        on_yes = started.index("## 3. On yes")
+        self.assertLess(face, on_yes)
+        self.assertNotIn("assets/avatar.png", started[on_yes:], "On yes must not download the avatar again")
         avatar = (ROOT / "assets" / "avatar.png").read_bytes()
         self.assertLess(len(avatar), 5 * 1024 * 1024)
         self.assertTrue(avatar.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(avatar[16:24], (1024).to_bytes(4, "big") + (1024).to_bytes(4, "big"))
         self.assertIn(hashlib.sha256(avatar).hexdigest(), started)
+
+    def test_shipped_routine_count_matches_the_list(self):
+        started = (ROOT / "skills" / "t3-getting-started" / "SKILL.md").read_text(encoding="utf-8")
+        section = started[started.index("## 6. Routines"):started.index("## 7.")]
+        said = re.search(r"ships with (\w+) routines", section).group(1)
+        listed = re.findall(r"^- \*\*([^*]+)\*\*:", section, re.M)
+        words = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+        self.assertEqual(said, words[len(listed) - 1], f"section 6 says {said} routines but lists {len(listed)}: {listed}")
+        self.assertIn("T3 Tots weekly update", listed)
+        install = (ROOT / "skills" / "t3-install-tools" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Weekly update run", install, "the T3 Tots weekly update routine needs its section in t3-install-tools")
 
     def test_box_install_is_flat_and_verified(self):
         r = run(self.f, "box", "--from", str(ROOT), dst=self.dst)

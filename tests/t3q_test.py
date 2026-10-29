@@ -156,4 +156,57 @@ class T3qTest(unittest.TestCase):
             self.assertIn("T3_DB_BUSY", out); self.assertEqual(code, 1)
         finally: lock.execute("rollback"); lock.close()
 
+    def test_usage_prices_fast_and_ultrafast_tiers_and_the_pricing_model_like_t3(self):
+        make_db(self.dir)
+        rates = {"m1": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0, "input_cost_per_token_priority": 2e-6, "output_cost_per_token_priority": 0,
+                        "input_cost_per_token_ultrafast": 6e-6, "output_cost_per_token_ultrafast": 0},
+                 "m2": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0, "provider_specific_entry": {"fast": 3}}}
+        with open(os.path.join(self.dir, "usage-model-rates.json"), "w", encoding="utf-8") as f: json.dump({"document": rates}, f)
+        now = int(dt.datetime.now().timestamp() * 1000); M = 1_000_000
+        rec = lambda key, model, speed, rate_model=None: [now, model, 0, M, 0, 0, 0, 0, key, None, speed] + ([rate_model] if rate_model is not None else [])
+        cache = {"models": ["m1", "display-only", "m2"], "files": {"a.jsonl": {"p": "codex", "r": [
+            rec("k1", 0, 0), rec("k2", 0, 1), rec("k3", 0, 2), rec("k4", 1, 0, rate_model=0), rec("k5", 2, 1)], "t": []}}}
+        with open(os.path.join(self.dir, "usage-scan-cache-v9.json"), "w", encoding="utf-8") as f: json.dump(cache, f)
+        out = run(self.dir, "usage")
+        self.assertRegex(out, r"ESTIMATES: 5\.0M tokens .* \$13\.00")
+        self.assertRegex(out, r"m1: 3\.0M tok \S+ \$9\.00")
+        self.assertRegex(out, r"display-only: 1\.0M tok \S+ \$1\.00")
+        self.assertRegex(out, r"m2: 1\.0M tok \S+ \$3\.00")
+        self.assertNotIn("unpriced", out)
+        self.assertIn("T3's Usage view has the exact figures", out)
+
+    def test_usage_skips_half_priced_entries_and_odd_values_and_falls_back_to_the_shown_model(self):
+        make_db(self.dir)
+        rates = {"m3": {"input_cost_per_token": 5e-6}, "codex/m3": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0},
+                 "m4": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0, "provider_specific_entry": {"fast": True}, "input_cost_per_token_priority": 2e-6, "output_cost_per_token_priority": 0},
+                 "m5": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0, "provider_specific_entry": [3]},
+                 "broken": [1, 2]}
+        with open(os.path.join(self.dir, "usage-model-rates.json"), "w", encoding="utf-8") as f: json.dump({"document": rates}, f)
+        now = int(dt.datetime.now().timestamp() * 1000); M = 1_000_000
+        rec = lambda key, model, speed, rate_model=None: [now, model, 0, M, 0, 0, 0, 0, key, None, speed, rate_model]
+        cache = {"models": ["m3", "m4", "m5", "no-rate-model", "broken"], "files": {"a.jsonl": {"p": "codex", "r": [
+            rec("k1", 0, 0), rec("k2", 1, 1), rec("k3", 2, 1), rec("k4", 0, 0, rate_model=3), rec("k5", 4, 0)], "t": []}}}
+        with open(os.path.join(self.dir, "usage-scan-cache-v9.json"), "w", encoding="utf-8") as f: json.dump(cache, f)
+        out, code = run(self.dir, "usage", rc=True)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"m3: 2\.0M tok \S+ \$2\.00")
+        self.assertRegex(out, r"m4: 1\.0M tok \S+ \$2\.00")
+        self.assertRegex(out, r"m5: 1\.0M tok \S+ \$1\.00")
+        self.assertRegex(out, r"unpriced models.*broken 1\.0M")
+
+    def test_usage_does_not_treat_booleans_as_reported_costs(self):
+        # True and False are ints, so isinstance(rep, (int, float)) would bill True as $1 and False as $0
+        make_db(self.dir)
+        rates = {"m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 0}}
+        with open(os.path.join(self.dir, "usage-model-rates.json"), "w", encoding="utf-8") as f: json.dump({"document": rates}, f)
+        now = int(dt.datetime.now().timestamp() * 1000); M = 2_000_000
+        rec = lambda key, rep: [now, 0, 0, M, 0, 0, 0, 0, key, rep, 0]
+        cache = {"models": ["m"], "files": {"a.jsonl": {"p": "codex", "r": [
+            rec("k-true", True), rec("k-false", False), rec("k-zero", 0), rec("k-num", 4.25)], "t": []}}}
+        with open(os.path.join(self.dir, "usage-scan-cache-v9.json"), "w", encoding="utf-8") as f: json.dump(cache, f)
+        out, code = run(self.dir, "usage", rc=True)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"ESTIMATES: 8\.0M tokens .* \$8\.25")
+        self.assertRegex(out, r"m: 8\.0M tok \S+ \$8\.25")
+
 if __name__ == "__main__": unittest.main(verbosity=1)

@@ -12,7 +12,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use t
 ## Roles
 - The user decides what to build and approves anything risky or public.
 - The PM thread plans, pushes back on weak ideas, splits the work, starts worker and reviewer threads, and checks their results.
-- Worker threads do one task each, on their own branch.
+- Worker threads do one task each, each in its own worktree and branch, so parallel workers never share a checkout.
 - Reviewer threads read a worker's diff and report findings. They don't edit code.
 - You watch every thread, pass the user's decisions in, and decide routine things under t3-tots-rules "Decisions". You don't make design choices for the PM.
 
@@ -29,7 +29,7 @@ Context: <constraints, decisions so far, links, what already exists>.
 Open questions: <gaps the user hasn't decided>.
 How to work:
 - Start with a plan of small tasks, each with a "done when" check. Push back where the plan or the ask looks wrong.
-- Start one worker thread per task, each on its own branch, and give it the task, the context it needs and its check.
+- Start one worker thread per task, each in its own new worktree on its own branch (never the shared project folder), and give it the task, the context it needs and its check.
 - For each worker result, start reviewers on <reviewer models>. Reviewers report findings and don't edit. Post each reviewer's summary as a comment on the worker's PR. Fix and re-review until no high-severity findings remain, at most <N> rounds.
 - PR rules: <the user's PR rules>.
 - Verify before calling a task done: run the tests and the app, and show the output.

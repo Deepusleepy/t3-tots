@@ -17,6 +17,7 @@ REPO = "Deepusleepy/t3-tots"
 ALL = ["macos", "linux", "windows", "box"]
 TOOLS = [  # repo path, installed path, targets, purpose
     ("tools/t3q.py", "t3q.py", ALL, "read-only T3 database queries"),
+    ("tools/thread-match.js", "thread-match.js", ALL, "shared thread lookup for t3ctl and t3listen"),
     ("tools/t3ctl", "t3ctl", ALL, "T3 local API client and skills installer (Node 22+)"),
     ("tools/windows/t3ctl.cmd", "t3ctl.cmd", ["windows", "box"], "Windows wrapper for t3ctl"),
     ("tools/t3listen", "t3listen", ALL, "pushes T3 questions (open and close) and thread finish, fail and cancel events to your webhook (Node 22+, optional)"),
