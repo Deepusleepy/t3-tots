@@ -294,8 +294,8 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
 ## Weekly update run
 The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this. Turning it on is the user's yes for each later run, so don't ask.
 1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, send nothing and stop, even when a skill differs from the release (a hand edit stays until the user asks).
-2. If a newer tag exists, run step 3 a to e and g for it. Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, leave that listener on the old version.
-3. Send one short message: the old and new tag, 2 to 4 lines of the notes, what was updated where, and anything left for the user (offline computers, listeners not restarted, skills the release no longer has).
+2. If a newer tag exists, run step 3 a to e and g for it. Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, don't restart it; it runs the new version from its next login.
+3. Send one short message: the old and new tag, 2 to 4 lines of the notes, what was updated where, and anything left for the user (offline computers, listeners not restarted yet, skills the release no longer has).
 4. `HASH_MISMATCH`, `REPO_PRIVATE_OR_MISSING` or a failed step installs nothing more. Say what was and wasn't updated, once per tag and error, and note it in memory so later runs stay quiet until the tag or the error changes.
 
 It updates only T3 Tots scripts and t3-* skills. Never update T3 Code, Node, gh or other tools (t3-update), and never change this bot's picture, description or publish settings.
