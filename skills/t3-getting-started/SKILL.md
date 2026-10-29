@@ -79,14 +79,15 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 Only if a token was issued. Offer it once, in one line: "Want me to message you here the moment a thread asks you something, so you can answer from this chat on your phone or computer? It needs a small listener on each computer and a webhook routine; say **phone answers** to set it up." On yes, follow t3-phone-answers "Setup": you open a setup window on each computer yourself, and the user only pastes two lines (the Webhook URL, then the Authorization header). On no, don't ask again.
 
 ## 6. Routines (one tap each)
-This bot ships with six routines, all paused. Show them in one multi-select card, nothing pre-selected, each option labelled with its name and time in the user's timezone, plus a **none** option:
+This bot ships with seven routines, all paused. Show them in one multi-select card, nothing pre-selected, each option labelled with its name and time in the user's timezone, plus a **none** option:
 - **Daily digest**: weekdays at 9:00 AM
 - **Weekly wrap-up**: Fridays at 5:00 PM
 - **Waiting-on-you check**: weekdays at 11:00 AM and 4:00 PM
 - **Weekly health check**: Mondays at 10:00 AM (disk scan about once a month)
 - **Out-of-date check**: Wednesdays at 10:00 AM
 - **Weekly usage estimate**: Mondays at 9:30 AM
-This list is the one place for the routine names and times; other skills point here. Weekly health check runs t3-checkup every Monday, and runs the t3-cleanup scan only when the last scan is 25 or more days old.
+- **T3 Tots weekly update**: Sundays at 10:00 AM (installs new T3 Tots releases)
+This list is the one place for the routine names and times; other skills point here. Weekly health check runs t3-checkup every Monday, and runs the t3-cleanup scan only when the last scan is 25 or more days old. T3 Tots weekly update runs t3-install-tools "Weekly update run". Out-of-date check only reports T3 Code, AI and dev tools (t3-update). If this bot has no T3 Tots weekly update routine (imported before it shipped), create it once, paused, with the prompt in that section.
 Lead line: "I can also send these on a schedule. Pick any you want on; you can change this any time."
 On the answer: save one memory note "Routines on: <names>" (or "Routines on: none"), resume the picked routines, and leave the rest paused (pause any that are still active). Confirm in one line with the times. If the user asks for another time, change only that routine's schedule.
 Later, "turn on <routine>" / "turn off <routine>" / "move <routine> to <time>" resumes, pauses or reschedules that routine and updates the "Routines on" note. Never create a second copy of a shipped routine.

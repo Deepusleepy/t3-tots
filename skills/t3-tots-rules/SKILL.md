@@ -21,7 +21,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 | t3-project-tracker | Its tracker file |
 | t3-save-learnings | `AGENTS.md` or `CLAUDE.md`, after a yes to the diff |
 | t3-cleanup | Only the items the user picked, after a confirm |
-| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes. t3-getting-started also sets this bot's own picture once, at the start of a first setup |
+| t3-getting-started, t3-install-tools | The tools folder, after the setup or update yes, or in a T3 Tots weekly update run once the user turned that routine on. t3-getting-started also sets this bot's own picture once, at the start of a first setup |
 
 A saved sync list or update level is approval for a later "sync everything" or "update <level>" only for items already in that list, and only after this turn's diff is shown. Anything new still needs a yes.
 
@@ -207,7 +207,7 @@ The token gives write access to T3. Issue or reissue it only after the user's ye
 Check the token only by running `t3ctl projects`. Record the issue date and the 90-day expiry in `README.md`, with how to revoke it: `t3 auth session list`, then `t3 auth session revoke <id>`.
 
 ## Opt-in features
-Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
+Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. Turning on T3 Tots weekly update also counts as the yes for its runs to install a newer T3 Tots release (t3-install-tools "Weekly update run"). "Update T3 Tots" in chat still shows the plan and asks. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
 
 ## Memory
 - Save decisions, modes and preferences, not activity. A check where nothing changed is not worth a memory entry or a journal line.

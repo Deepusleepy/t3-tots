@@ -58,6 +58,17 @@ class Fetcher(unittest.TestCase):
         self.assertEqual(avatar[16:24], (1024).to_bytes(4, "big") + (1024).to_bytes(4, "big"))
         self.assertIn(hashlib.sha256(avatar).hexdigest(), started)
 
+    def test_shipped_routine_count_matches_the_list(self):
+        started = (ROOT / "skills" / "t3-getting-started" / "SKILL.md").read_text(encoding="utf-8")
+        section = started[started.index("## 6. Routines"):started.index("## 7.")]
+        said = re.search(r"ships with (\w+) routines", section).group(1)
+        listed = re.findall(r"^- \*\*([^*]+)\*\*:", section, re.M)
+        words = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+        self.assertEqual(said, words[len(listed) - 1], f"section 6 says {said} routines but lists {len(listed)}: {listed}")
+        self.assertIn("T3 Tots weekly update", listed)
+        install = (ROOT / "skills" / "t3-install-tools" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Weekly update run", install, "the T3 Tots weekly update routine needs its section in t3-install-tools")
+
     def test_box_install_is_flat_and_verified(self):
         r = run(self.f, "box", "--from", str(ROOT), dst=self.dst)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
