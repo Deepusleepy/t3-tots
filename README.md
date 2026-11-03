@@ -66,6 +66,43 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
+### Filters (optional)
+
+Each POST can start work on the receiving side. If most finishes need nothing from you, add a `filters` section to `listen.json` so only the run ends that need action are sent. Without `filters` every event is sent as before. `thread.failed`, `request.opened` and `test` are never filtered.
+
+| Key | Value | Effect |
+|---|---|---|
+| `resolved` | `false` | Don't send `request.resolved`. |
+| `finished`, `cancelled` | `false` | Don't send that event at all. |
+| `finished`, `cancelled` | `{ "postWhen": [...], "skipWhen": [...] }` | Send it only when the run's last reply matches a `postWhen` pattern (when any are listed) and no `skipWhen` pattern. |
+| `negations` | list of words | Words that make a `notNegated` match not count. Default: `no`, `not`, `nothing`, `none`, `never`, `neither`, `nor`, `without`, `unless`, `n't`. |
+
+A pattern is a JavaScript regex string, or an object:
+
+- `pattern`: the regex.
+- `flags`: regex flags, for example `"i"`. `m` is always added, so `^` and `$` match at each line.
+- `lines`: which part of the reply to test. `all` (default, the whole reply), `first`, `last`, or `edge` (the first and the last line, each on its own).
+- `notNegated`: `true` means a match counts only when its clause (text between `.` `!` `?` `;` `,` or line breaks) has no negation word before it. "Nothing needs a decision from you" doesn't match a "needs a decision" pattern.
+
+Filters see the whole last reply, not only the 600 characters in `lastReply`. A filtered run end is logged in `listen.log` and marked as reported, so a restart doesn't send it later. `node t3listen preview-finish --thread <id>` says when filters would hold an event back, and `node t3listen status` lists which filters are on. A bad pattern stops the listener at startup with `BAD_LISTEN_CONFIG` and names the setting.
+
+Example: send finishes only when the reply has a `STUCK` or `BLOCKED` status line, opens or closes with stuck, blocked or error, names a usage limit or HTTP 429 on its first or last line, or says something needs a decision. Skip cancels whose reply has an uppercase `WAITING` line that names a watch or wake-up still running. Drop `request.resolved`.
+
+```json
+"filters": {
+ "resolved": false,
+ "finished": { "postWhen": [
+  "^[\\s>*_`#-]*(STUCK|BLOCKED)\\b(?!-)",
+  { "pattern": "^[\\s>*_`#-]*(stuck|blocked|error)\\b(?!-)", "flags": "i", "lines": "edge" },
+  { "pattern": "usage.?limit|(?<![#\\d])\\b429\\b|too many requests", "flags": "i", "lines": "edge", "notNegated": true },
+  { "pattern": "\\b(needs?|requires?) (a |an |your )?decisions?\\b|\\bdecision (is )?needed\\b", "flags": "i", "notNegated": true }
+ ] },
+ "cancelled": { "skipWhen": [
+  "\\bWAITING\\b[^\\n]*\\b([Ww]atch|[Ww]akes?\\b|[Ww]ake-?up|[Mm]onitor|[Pp]oll)"
+ ] }
+}
+```
+
 ## Delegated mode and approvals
 
 Delegated mode starts only when you hand over control, for example "I'm away, keep it moving". The agent then answers routine questions, nudges stalled threads, and resumes threads after a usage limit.

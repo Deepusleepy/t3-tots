@@ -470,3 +470,92 @@ test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a w
     assert.match(r.out, /^NOT_FOUND: no thread matches "missing-id-999"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
   } finally { srv.close(); }
 });
+
+const EXAMPLE_FILTERS = {
+ "resolved": false,
+ "finished": { "postWhen": [
+  "^[\\s>*_`#-]*(STUCK|BLOCKED)\\b(?!-)",
+  { "pattern": "^[\\s>*_`#-]*(stuck|blocked|error)\\b(?!-)", "flags": "i", "lines": "edge" },
+  { "pattern": "usage.?limit|(?<![#\\d])\\b429\\b|too many requests", "flags": "i", "lines": "edge", "notNegated": true },
+  { "pattern": "\\b(needs?|requires?) (a |an |your )?decisions?\\b|\\bdecision (is )?needed\\b", "flags": "i", "notNegated": true }
+ ] },
+ "cancelled": { "skipWhen": [
+  "\\bWAITING\\b[^\\n]*\\b([Ww]atch|[Ww]akes?\\b|[Ww]ake-?up|[Mm]onitor|[Pp]oll)"
+ ] }
+};
+test("filters: none set means every event is sent as before", () => {
+  assert.equal(l.compileFilters(undefined), null); assert.equal(l.compileFilters(null), null);
+  for (const ev of ["thread.finished", "thread.cancelled", "thread.failed", "request.resolved", "request.opened"]) assert.equal(l.filterSkip(null, ev, "anything"), null, ev);
+  const F = l.compileFilters({}); for (const ev of ["thread.finished", "thread.cancelled", "request.resolved"]) assert.equal(l.filterSkip(F, ev, "Done."), null, ev);
+  assert.equal(l.filtersLine(undefined), "off"); assert.equal(l.filtersLine({ finished: true }), "off");
+});
+test("filters: the README example keeps only finishes that need action and cancels without a live watch", () => {
+  const F = l.compileFilters(EXAMPLE_FILTERS), fin = (t) => l.filterSkip(F, "thread.finished", t), can = (t) => l.filterSkip(F, "thread.cancelled", t);
+  assert.match(l.filterSkip(F, "request.resolved"), /filters\.resolved is false/);
+  assert.equal(l.filterSkip(F, "thread.failed", "All good."), null, "failures are never filtered");
+  assert.equal(l.filterSkip(F, "request.opened", ""), null, "questions are never filtered");
+  assert.match(fin("Done. Tests pass and the PR is open."), /no filters\.finished\.postWhen/);
+  assert.equal(fin("Summary of the work.\nSTUCK: the migration needs a running database"), null, "an uppercase STUCK line anywhere");
+  assert.match(fin("Fixed the stuck job runner.\nAll green."), /no filters/, "lowercase stuck in the middle of a line is not a status");
+  assert.equal(fin("blocked on review access\nmore details"), null, "stuck/blocked/error opening the first or last line");
+  assert.equal(fin("Partial work.\nError: build fails on node 18"), null);
+  assert.match(fin("Done.\nNote: BLOCKED-ON-NOTHING tag removed"), /no filters/, "BLOCKED- is a tag, not a status");
+  assert.equal(fin("Stopped early.\nHit the usage limit at 14:02"), null);
+  assert.match(fin("Stopped early.\nNo usage limit was hit"), /no filters/, "a negated usage limit is not one");
+  assert.match(fin("See issue #429 for context.\nDone"), /no filters/, "#429 is an issue number");
+  assert.equal(fin("Ready.\nThis needs a decision: keep v1 or move to v2?"), null);
+  assert.match(fin("Ready. Nothing needs a decision from you."), /no filters/, "negated in the same clause");
+  assert.equal(fin("Nothing else changed, but the schema change needs your decision."), null, "the negation is in another clause");
+  assert.match(can("Stopped.\nWAITING: the CI watch reports back when the run ends"), /skipWhen\[0\]/);
+  assert.equal(can("Stopped by the user."), null);
+  assert.equal(can("waiting for the watch"), null, "WAITING must be uppercase");
+  assert.equal(l.filtersLine(EXAMPLE_FILTERS), "on (resolved off, finished, cancelled)");
+});
+test("filters: false turns an event off; bad settings are named", () => {
+  const F = l.compileFilters({ finished: false, negations: [] });
+  assert.match(l.filterSkip(F, "thread.finished", "STUCK"), /filters\.finished is false/); assert.equal(l.filterSkip(F, "thread.cancelled", "x"), null);
+  for (const [bad, re] of [["x", /must be an object/], [{ resolved: {} }, /resolved must be true or false/], [{ finished: [] }, /finished must be/],
+    [{ finished: { postWhen: "STUCK" } }, /postWhen must be a list/], [{ cancelled: { skipWhen: ["("] } }, /cancelled\.skipWhen\[0\] is not a valid pattern/],
+    [{ finished: { postWhen: [{ pattern: "x", lines: "middle" }] } }, /lines must be/], [{ finished: { postWhen: [{}] } }, /needs a pattern/], [{ negations: "no" }, /negations must be/]])
+    assert.throws(() => l.compileFilters(bad), re, JSON.stringify(bad));
+  const G = l.compileFilters({ finished: { postWhen: [{ pattern: "decision", notNegated: true }] }, negations: ["hardly"] });
+  assert.equal(l.filterSkip(G, "thread.finished", "no decision yet"), null, "custom negations replace the default list");
+  assert.match(l.filterSkip(G, "thread.finished", "hardly a decision"), /no filters/);
+});
+test("filters: a filtered run end is marked reported (catch-up skips it) and the full reply is never sent or saved", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const body = src.slice(src.indexOf("async function reportEnd"), src.indexOf("async function checkFinish"));
+  assert.ok(body.includes("filterSkip(C.filters, e.event, replyText)"), body);
+  assert.ok(/if \(why\) \{ S\.finished\[e\.runId\] = \{ threadId: t\.id, at: Date\.now\(\) \}; saveState\(\)/.test(body), body);
+  assert.ok(!/e\.replyText|replyText:/.test(body), "replyText stays out of the event");
+});
+test("preview-finish: filters see the whole last reply, not the 600-character lastReply", async () => {
+  const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-filters-"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
+  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
+  fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
+  fs.writeFileSync(path.join(tmp, "listen.json"), JSON.stringify({ url: "http://127.0.0.1:9/", headers: {}, machine: "m", filters: EXAMPLE_FILTERS }));
+  const thread = { id: "filter-thread-01", title: "Long reply", status: "idle" };
+  let reply = "";
+  const srv = http.createServer((req, res) => {
+    const u = decodeURIComponent(req.url);
+    if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects: [], threads: [thread] }));
+    if (u === "/api/orchestration/threads/" + thread.id) return res.end(JSON.stringify({ projection: { thread,
+      turnItems: [{ type: "assistant_message", runId: "r1", text: reply }], runs: [{ id: "r1", status: "completed", startedAt: "2026-01-01T04:00:00Z", completedAt: "2026-01-01T04:05:00Z" }] } }));
+    res.statusCode = 404; res.end("{}");
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
+  const run = () => new Promise((done) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", thread.id],
+    { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => done({ code: err ? err.code : 0, out: out + errOut })));
+  try {
+    reply = "Worked through the list.\n" + "x".repeat(900) + "\nBLOCKED: needs the staging database password";
+    let r = await run(); assert.equal(r.code, 0, r.out);
+    assert.ok(!/would not report/.test(r.out), r.out);
+    assert.ok(!JSON.parse(r.out.slice(r.out.indexOf("{"))).lastReply.includes("BLOCKED"), "the status line is past lastReply's 600 characters");
+    reply = "All done, tests pass.";
+    r = await run(); assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /^would not report \(listen\.json filters\): last reply matches no filters\.finished\.postWhen pattern/);
+  } finally { srv.close(); }
+});

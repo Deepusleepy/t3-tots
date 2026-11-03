@@ -66,8 +66,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 56699,
-   "sha256": "9703a2a897059aa27ad6b17a72b823de9413e1dd72a7e07c130091e26dfdd7b2",
+   "bytes": 62024,
+   "sha256": "eb87ab9fc9ac7bc4126290171f9658b02fc0e63edceef267d29ed315cf0cc2f7",
    "targets": [
     "macos",
     "linux",
@@ -284,8 +284,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 11635,
-   "sha256": "2c825173dd47ad11f1504a02de484ef2b200c7e669f44b28a817e68abebd017f"
+   "bytes": 11877,
+   "sha256": "98b6da5dfaf3e7018e1556f08a5c7ca21da39e342c467eab9188eb4fe6aa9b97"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
