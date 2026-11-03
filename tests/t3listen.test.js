@@ -71,7 +71,8 @@ test("reportEnd redacts the event before it is first saved to listen-state.json"
 });
 test("restart catch-up: any thread in the window (busy too), not only END[t.status]; buildEnd still skips", () => {
   const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
-  const start = src.indexOf("const since = S.lastAlive");
+  const start = src.indexOf("const since = catchUpSince(S.lastAlive");
+  assert.ok(start > 0, "catch-up starts from catchUpSince");
   const end = src.indexOf("afterSnapshotListen(", start);
   const block = src.slice(start, end);
   assert.ok(block.includes("catchUpThreads("), block);
@@ -469,4 +470,57 @@ test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a w
     r = await run("missing-id-999"); assert.equal(r.code, 1, r.out);
     assert.match(r.out, /^NOT_FOUND: no thread matches "missing-id-999"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
   } finally { srv.close(); }
+});
+
+test("reliability settings: off unless listen.json sets them; bad values fall back to the defaults", () => {
+  assert.deepEqual(l.reliability({}), { catchUpMinutes: null, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.deepEqual(l.reliability({ catchUpMinutes: 2, failureWaveSeconds: 20, failureWaveMaxSeconds: 90, repeatFailureHours: 6 }),
+    { catchUpMinutes: 2, failureWaveMs: 20000, failureWaveMaxMs: 90000, repeatFailureMs: 6 * 3600e3 });
+  assert.deepEqual(l.reliability({ catchUpMinutes: "x", failureWaveSeconds: -1, repeatFailureHours: null }), l.reliability({}));
+  assert.equal(l.reliability({ catchUpMinutes: 0 }).catchUpMinutes, 0, "0 is a real limit: nothing from before the start");
+});
+test("catchUpSince: back to the last connection by default; catchUpMinutes caps it; no lastAlive means no catch-up", () => {
+  const start = Date.parse("2026-11-03T12:00:00Z"), lastAlive = Date.parse("2026-11-03T08:00:00Z");
+  assert.equal(l.catchUpSince(lastAlive, start, null), lastAlive - 120000);
+  assert.equal(l.catchUpSince(lastAlive, start, 2), start - 120000);
+  assert.equal(l.catchUpSince(lastAlive, start, 0), start);
+  assert.equal(l.catchUpSince(lastAlive, start, 600), lastAlive - 120000, "a cap wider than the outage changes nothing");
+  assert.equal(l.catchUpSince(0, start, 2), 0);
+});
+test("repeatCheck: the same thread and error inside the window is held; the next sent one counts what was held", () => {
+  const h = 3600e3, t0 = Date.parse("2026-11-03T10:00:00Z");
+  const fail = (runId, error) => ({ event: "thread.failed", threadId: "t1", runId, error });
+  let r = l.repeatCheck(undefined, fail("r1", "Provider error 503 (req 9f8e7d6c5b4a)"), t0, 6 * h);
+  assert.equal(r.hold, false); assert.equal(r.repeats, undefined);
+  r = l.repeatCheck(r.rec, fail("r2", "provider error 502 (req 0a1b2c3d4e5f)"), t0 + h, 6 * h);
+  assert.equal(r.hold, true, "numbers and ids don't make an error different"); assert.equal(r.rec.held, 1);
+  r = l.repeatCheck(r.rec, fail("r3", "Provider error 500 (req 77aa88bb99cc)"), t0 + 2 * h, 6 * h);
+  assert.equal(r.hold, true); assert.equal(r.rec.held, 2);
+  assert.equal(l.repeatCheck(r.rec, fail("r1", "Provider error 503 (req 9f8e7d6c5b4a)"), t0 + 3 * h, 6 * h).hold, false, "the same run resent after a restart is not a repeat");
+  const other = l.repeatCheck(r.rec, fail("r4", "context window exceeded"), t0 + 3 * h, 6 * h);
+  assert.equal(other.hold, false); assert.deepEqual(other.repeats, { repeatsSuppressed: 2, repeatsSince: new Date(t0).toISOString() });
+  const later = l.repeatCheck(r.rec, fail("r5", "Provider error 503 (req 1)"), t0 + 7 * h, 6 * h);
+  assert.equal(later.hold, false, "after the window the same error is sent again"); assert.equal(later.repeats.repeatsSuppressed, 2);
+});
+test("failure waves: the wait restarts with each failure but never past the cap; a batch lists every failure", () => {
+  const t0 = 1e12;
+  assert.equal(l.waveDelay(t0, t0, 20000, 120000), 20000);
+  assert.equal(l.waveDelay(t0, t0 + 110000, 20000, 120000), 10000);
+  assert.equal(l.waveDelay(t0, t0 + 130000, 20000, 120000), 0);
+  const f = (n, at) => ({ event: "thread.failed", kind: "thread-failed", machine: "m", threadId: `t${n}`, title: `Thread ${n}`, project: "p", runId: `r${n}`, status: "failed",
+    error: "boom", completedAt: at, text: "x", eventId: "e", sentAt: "s", usageLimit: n === 2 ? true : undefined });
+  const b = l.batchEvent([f(1, "2026-11-03T10:00:05Z"), f(2, "2026-11-03T10:00:01Z"), f(3, "2026-11-03T10:00:09Z")], "m");
+  assert.equal(b.event, "thread.failed.batch"); assert.equal(b.kind, "thread-failed-batch"); assert.equal(b.count, 3);
+  assert.equal(b.firstAt, "2026-11-03T10:00:01Z"); assert.equal(b.lastAt, "2026-11-03T10:00:09Z");
+  assert.deepEqual(b.failures.map((x) => x.runId), ["r1", "r2", "r3"]);
+  for (const x of b.failures) for (const k of ["event", "kind", "machine", "text", "eventId", "sentAt"]) assert.ok(!(k in x), `${k} is per post, not per failure`);
+  const text = l.summary(b);
+  assert.match(text, /^T3 failure wave on m: 3 threads failed between /);
+  assert.match(text, /- "Thread 2" \(p\): boom \(usage limit, not auto-resumed\)/);
+  assert.match(l.summary({ ...f(4, "2026-11-03T10:00:00Z"), completedAtLocal: "now", repeatsSuppressed: 3, repeatsSince: "2026-11-03T04:00:00Z" }), /3 more failure\(s\) of this thread with the same error were held back since/);
+});
+test("failure waves and repeats are off by default: a failure is delivered as before", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  const body = src.slice(src.indexOf("function holdFailure"), src.indexOf("async function flushWave"));
+  assert.ok(body.indexOf("C.repeatFailureMs > 0") < body.indexOf("C.failureWaveMs > 0") && body.includes("return false"), body);
 });

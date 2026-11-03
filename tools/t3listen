@@ -28,13 +28,21 @@ const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8"))
 // ---------- config ----------
 // minutes after which an old request is skipped at startup; missing or unreadable means the documented 1440 (a day), 0 turns it off
 const staleMinutes = (v) => (v === undefined || v === null || v === "" || !Number.isFinite(+v) || +v < 0 ? 1440 : +v);
+// optional number settings: missing, unreadable or negative means the default d (null = no limit)
+const numOr = (v, d) => (v === undefined || v === null || v === "" || !Number.isFinite(+v) || +v < 0 ? d : +v);
+// reliability settings, all off unless listen.json sets them (see README "Phone answers"):
+// catchUpMinutes: after a restart, report run ends from at most this many minutes before the start (missing = back to the last connection)
+// failureWaveSeconds / failureWaveMaxSeconds: hold a thread.failed this long for more failures; two or more post as one thread.failed.batch
+// repeatFailureHours: hold back a thread's failure with the same error as its last post within this many hours
+const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, null), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
+  failureWaveMaxMs: numOr(c.failureWaveMaxSeconds, 120) * 1000, repeatFailureMs: numOr(c.repeatFailureHours, 0) * 3600e3 });
 function loadConfig() {
   const c = readJSON(CONF, null);
-  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: staleMinutes(optv("--skip-stale")) };
+  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: staleMinutes(optv("--skip-stale")), ...reliability({}) };
     die("NO_LISTEN_CONFIG", `no listen.json next to t3listen. Create it with: node "${path.join(DIR, "t3listen")}" setup  (or use --dry-run)`); }
   if (!DRY && !/^https:\/\//.test(c.url || "") && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(c.url || "")) die("BAD_LISTEN_CONFIG", "listen.json url must start with https:// (http only for localhost)");
   return { url: c.url, headers: c.headers || {}, machine: c.machine || os.hostname().replace(/\.local$/, ""), approvals: c.approvals === true || flag("--approvals"),
-    skipStaleMinutes: staleMinutes(c.skipStaleMinutes) };
+    skipStaleMinutes: staleMinutes(c.skipStaleMinutes), ...reliability(c) };
 }
 function lockDown(f) {
   if (process.platform !== "win32") { fs.chmodSync(f, 0o600); return; }
@@ -111,9 +119,10 @@ function requestInfo(p, r) {
   return o;
 }
 function summary(e) {
+  if (e.failures) return `T3 failure wave on ${e.machine}: ${e.count} threads failed between ${e.firstAtLocal} and ${e.lastAtLocal}\n` + e.failures.map((f) => `- "${f.title}"${f.project ? ` (${f.project})` : ""}: ${f.error || f.status}${f.usageLimit ? (f.autoResumeSet ? " (usage limit, auto-resume set)" : " (usage limit, not auto-resumed)") : ""}${f.repeatsSuppressed ? ` (${f.repeatsSuppressed} earlier same failure(s) held back)` : ""}`).join("\n");
   const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
   if (END_WORD[e.event]) { const d = e.durationSec, dur = d == null ? "" : ` after ${d >= 3600 ? `${Math.floor(d / 3600)}h ${Math.round((d % 3600) / 60)}m` : d >= 60 ? `${Math.round(d / 60)}m` : `${d}s`}`;
-    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.usageLimit ? (e.autoResumeSet ? `\nUsage limit: auto-resume is set for ${e.resumeAtLocal || localTime(e.resumeAt)}.` : `\nUsage limit: not auto-resumed (${e.autoResumeNote || "unknown"}).`) : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
+    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.repeatsSuppressed ? `\n${e.repeatsSuppressed} more failure(s) of this thread with the same error were held back since ${localTime(e.repeatsSince)}.` : ""}${e.usageLimit ? (e.autoResumeSet ? `\nUsage limit: auto-resume is set for ${e.resumeAtLocal || localTime(e.resumeAt)}.` : `\nUsage limit: not auto-resumed (${e.autoResumeNote || "unknown"}).`) : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
   if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed${e.answeredHere ? " (answered from chat)" : ""}: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
   if (e.questions) return `T3 question in ${where}:\n${e.context ? `Context: ${e.context}\n` : ""}` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
   return `T3 approval in ${where}: ${e.approval.requestKind}${e.approval.prompt ? " - " + e.approval.prompt : ""}\n` + e.approval.options.map((x) => `  - ${x.label}`).join("\n");
@@ -140,6 +149,7 @@ async function post(e) { // one attempt; returns { ok, status, body, retry }
 }
 const ref = (e) => String(e.requestId || e.runId || "");
 function markDelivered(e) {
+  if (e.failures) { for (const f of e.failures) markDelivered({ event: "thread.failed", runId: f.runId }); return; } // a batch marks each run it carried
   if (e.runId && !e.requestId) { const f = S.finished[e.runId]; if (f && (f.e || f.parked)) { delete f.e; delete f.parked; saveState(); } return; }
   const s = S.sent[e.requestId]; if (!s) return;
   if (s.parked) { delete s.parked[e.event]; if (!Object.keys(s.parked).length) delete s.parked; }
@@ -169,8 +179,47 @@ function retryLater(item) {
   if (how === "parked") { saveState(); log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is saved and retried when there is room`); }
   else if (how === "dropped") log(`retry queue is full and ${item.e.event} ${ref(item.e).slice(-12)} has no saved state, so it is dropped`);
 }
-async function deliver(e) {
-  cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e)}`).digest("hex").slice(0, 16);
+// ---------- failure waves and repeats (off unless listen.json sets them) ----------
+// failureWaveSeconds: a thread.failed waits that long for more failures (the wait restarts with each one, up to failureWaveMaxSeconds
+// after the first). One failure alone is sent as a plain thread.failed; two or more are sent once as thread.failed.batch.
+// repeatFailureHours: a thread that fails again with the same error as its last sent failure within that window is held back
+// (counted in listen-state.json "failRepeat"); the next failure that is sent carries repeatsSuppressed and repeatsSince.
+const failureKey = (e) => String(e.error || (e.usageLimit ? "usage limit" : e.status || "")).toLowerCase().replace(/[0-9a-f]{8,}|\d+/g, "#").replace(/\s+/g, " ").trim().slice(0, 200);
+function repeatCheck(rec, e, now, windowMs) { // -> { hold, rec }: rec is the new failRepeat entry for this thread
+  const err = failureKey(e);
+  if (rec && rec.runId === e.runId) return { hold: false, rec }; // the same run again (resent after a restart), not a repeat
+  if (rec && rec.err === err && now - rec.at < windowMs) return { hold: true, rec: { ...rec, held: (rec.held || 0) + 1 } };
+  return { hold: false, rec: { err, at: now, runId: e.runId }, ...(rec && rec.held ? { repeats: { repeatsSuppressed: rec.held, repeatsSince: new Date(rec.at).toISOString() } } : {}) };
+}
+const waveDelay = (opened, now, quietMs, maxMs) => Math.max(0, Math.min(quietMs, opened + maxMs - now));
+const BATCH_DROP = new Set(["event", "kind", "machine", "text", "sentAt", "eventId"]);
+function batchEvent(items, machine) { // thread.failed events -> one thread.failed.batch
+  const at = items.map((e) => e.completedAt).sort();
+  return { event: "thread.failed.batch", kind: "thread-failed-batch", machine, title: `${items.length} threads`, count: items.length,
+    firstAt: at[0], lastAt: at.at(-1), firstAtLocal: localTime(at[0]), lastAtLocal: localTime(at.at(-1)),
+    failures: items.map((e) => Object.fromEntries(Object.entries(e).filter(([k]) => !BATCH_DROP.has(k)))) };
+}
+let wave = null;
+function holdFailure(e) { // -> true when the failure was held back or queued in a wave (it is sent later or not at all)
+  const now = Date.now();
+  if (C.repeatFailureMs > 0) {
+    const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs); S.failRepeat[e.threadId] = r.rec; saveState();
+    if (r.hold) { log(`held back thread.failed "${e.title}" ${ref(e).slice(-12)}: same error as its last sent failure (${r.rec.held} held)`); markDelivered(e); return true; }
+    if (r.repeats) Object.assign(e, r.repeats);
+  }
+  if (!(C.failureWaveMs > 0)) return false;
+  if (!wave) wave = { items: [], opened: now, timer: null };
+  wave.items.push(e); clearTimeout(wave.timer);
+  wave.timer = setTimeout(() => flushWave().catch((err) => log("error:", err.message)), waveDelay(wave.opened, now, C.failureWaveMs, C.failureWaveMaxMs));
+  return true;
+}
+async function flushWave() {
+  const w = wave; wave = null; if (!w || !w.items.length) return;
+  return deliver(w.items.length === 1 ? w.items[0] : batchEvent(w.items, C.machine), { now: true });
+}
+async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran)
+  if (e.event === "thread.failed" && !opts.now && holdFailure(e)) return true;
+  cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",")}`).digest("hex").slice(0, 16);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
     const r = await post(e);
@@ -196,7 +245,7 @@ setInterval(async () => {
 }, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
-let S = { sent: {}, finished: {} };
+let S = { sent: {}, finished: {}, failRepeat: {} };
 const saveState = () => { if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S)); fs.renameSync(t, STATE); };
 const known = new Map(); // threadId -> pendingRuntimeRequest.id last seen (null = none)
 const meta = { projects: new Map(), threads: new Map() };
@@ -377,7 +426,8 @@ async function checkFinish(ep, t, prev) {
   if (!prev.activeRunId && isBusy(t)) return; // still starting
   await reportEnd(ep, t, prev.activeRunId, { live: true });
 }
-function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k]; }
+function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k];
+  for (const [k, r] of Object.entries(S.failRepeat)) if (!(r.at > Date.now() - C.repeatFailureMs)) delete S.failRepeat[k]; }
 // lastAlive is a connected-session watermark. Do not advance it while the socket is down, or catch-up
 // `since` shrinks to ~2 min and finishes from a longer outage are skipped.
 let listening = false, liveGen = 0;
@@ -387,6 +437,11 @@ const tickLastAlive = (open, lastAlive, now = Date.now()) => open ? now : lastAl
 // onclose increments liveGen and sets listening=false; a late in-flight snapshot must not undo that.
 const afterSnapshotListen = ({ socketOpen, gen, liveGen: g, lastAlive, now = Date.now() }) =>
   (socketOpen && gen === g) ? { listening: true, lastAlive: now } : { listening: false, lastAlive };
+// catchUpSince: report run ends after this time on restart. lastAlive minus 2 minutes, never earlier than catchUpMinutes before
+// the start when listen.json sets it; 0 = first run with this feature, nothing to catch up on
+const catchUpSince = (lastAlive, start, catchUpMinutes) => { const s = lastAlive ? lastAlive - 120000 : 0;
+  return s && catchUpMinutes !== null && catchUpMinutes !== undefined ? Math.max(s, start - catchUpMinutes * 60000) : s; };
+const START = Date.now();
 const catchUpThreads = (threads, since) => (threads || []).filter((t) => Date.parse(t.updatedAt || 0) > since); // busy too: failed always fires
 setInterval(() => {
   if (DRY || !C) return;
@@ -428,7 +483,7 @@ async function onItem(ep, v, full, ctx = {}) {
     if (!DRY) {
       pruneFinished();
       for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); // not delivered before the restart
-      const since = S.lastAlive ? S.lastAlive - 120000 : 0; // first run with this feature: nothing to catch up on
+      const since = catchUpSince(S.lastAlive, START, C.catchUpMinutes); // 0 on the first run with this feature: nothing to catch up on
       // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
       // look at busy threads too so a failed end from downtime is still reported (failed always fires)
       if (since) for (const t of catchUpThreads(v.snapshot.threads, since)) await reportEnd(ep, t, null, { since });
@@ -456,7 +511,7 @@ async function run() {
   if (!DRY) {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
-    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {};
+    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {}; S.failRepeat = S.failRepeat || {};
     for (const s of Object.values(S.sent)) { delete s.parked; delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) { delete f2.parked; delete f2.retryLater; }
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
@@ -596,5 +651,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume };
+if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, catchUpSince, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, reliability, failureKey, repeatCheck, waveDelay, batchEvent };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
