@@ -694,3 +694,15 @@ test("filters, live: a T3 that puts no run ids on its items still judges the new
     assert.ok(!/no reply/.test(f.out), "the newest reply counts as the newest run's own reply");
   } finally { await f.close(); }
 });
+test("state, live: a save Windows refuses while another process has listen-state.json open is retried, so the event isn't lost", async () => {
+  const f = await startFake();
+  try {
+    f.setThread(busy("W", "w1"), { runs: [{ id: "w1", status: "running", startedAt: now() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    const fs = require("fs"), fd = fs.openSync(path.join(f.dir, "listen-state.json"), "r");
+    setTimeout(() => fs.closeSync(fd), 300);
+    f.update(idle("W", "w1"), { runs: [{ id: "w1", status: "completed", startedAt: now(), completedAt: now() }], turnItems: [{ type: "assistant_message", runId: "w1", text: "Done." }] });
+    await f.waitFor(() => f.posts.length === 1, 8000, "the finish");
+    assert.equal(f.posts[0].runId, "w1"); assert.ok(!/EPERM|error:/.test(f.out), f.out);
+  } finally { await f.close(); }
+});

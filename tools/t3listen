@@ -265,7 +265,14 @@ setInterval(async () => {
 
 // ---------- state: which requests the phone has been told about ----------
 let S = { sent: {}, finished: {} };
-const saveState = () => { if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S)); fs.renameSync(t, STATE); };
+const RENAME_BUSY = ["EBUSY", "EPERM", "EACCES"]; // Windows won't replace a file another process has open (status, a backup, antivirus)
+function saveState() {
+  if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S));
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(t, STATE); return; }
+    catch (e) { if (i >= 40 || !RENAME_BUSY.includes(e.code)) throw e; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25); }
+  }
+}
 const known = new Map(); // threadId -> pendingRuntimeRequest.id last seen (null = none)
 const meta = { projects: new Map(), threads: new Map() };
 const wanted = (r) => r.status === "pending" && !SKIP_KINDS.has(r.kind) && (r.kind === "user_input" || C.approvals) && (r.responseCapability || {}).type !== "not_resumable";
