@@ -33,39 +33,51 @@ const staleMinutes = (v) => (v === undefined || v === null || v === "" || !Numbe
 // sends it only when the run's last reply matches a postWhen pattern (if any are listed) and no skipWhen pattern. A pattern is a
 // regex string, or { "pattern", "flags", "lines": "all"|"first"|"last"|"edge", "notNegated": true }. Patterns always get the m
 // flag (^ and $ match at each line). notNegated: a match counts only when its clause has no negation word before it
-// ("Nothing needs a decision"; a word with an apostrophe such as n't also matches inside "doesn't"). thread.failed, request.opened and test are never filtered.
+// ("Nothing needs a decision"; a word with an apostrophe such as n't also matches inside "doesn't"; curly apostrophes count as '). A clause ends at
+// . ! ? or ; followed by a space or the line end, at a comma, or at a line break, so "v1.4" and "usage.limit" stay whole. Filters judge only the
+// ended run's own reply; a run that left none is sent. Keys the filters don't know are ignored and listed (log, status), so a newer listen.json
+// never stops an older listener. thread.failed, request.opened and test are never filtered.
 const NEGATIONS = ["no", "not", "nothing", "none", "never", "neither", "nor", "without", "unless", "n't"];
 const FILTERED = { "request.resolved": "resolved", "thread.finished": "finished", "thread.cancelled": "cancelled" };
-function compileFilters(f) { // -> null (no filters) or the compiled rules; throws on a bad setting
+const FILTER_KEYS = ["resolved", "finished", "cancelled", "negations"], RULE_KEYS = ["postWhen", "skipWhen"], PATTERN_KEYS = ["pattern", "flags", "lines", "notNegated"];
+function compileFilters(f) { // -> null (no filters) or the compiled rules, with ignored: the unknown keys; throws on a bad setting
   if (f === undefined || f === null) return null;
-  const bad = (m) => { throw new Error(`filters${m}`); };
+  const bad = (m) => { throw new Error(`filters${m}`); }, ignored = [];
+  const unknownKeys = (o, known, where) => { for (const k of Object.keys(o)) if (!known.includes(k)) ignored.push(`filters${where}.${k}`); };
   if (typeof f !== "object" || Array.isArray(f)) bad(" must be an object");
+  unknownKeys(f, FILTER_KEYS, "");
   if (f.negations !== undefined && !(Array.isArray(f.negations) && f.negations.every((w) => typeof w === "string" && w.trim()))) bad(".negations must be a list of words");
   const words = (f.negations || NEGATIONS).map((w) => w.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const negRe = words.length ? new RegExp(words.map((w) => (/^\w/.test(w) && !w.includes("'") ? `\\b${w}` : w) + (/\w$/.test(w) ? "\\b" : "")).join("|"), "i") : null;
   const pattern = (p, where) => {
     const o = typeof p === "string" ? { pattern: p } : p;
     if (!o || typeof o !== "object" || typeof o.pattern !== "string" || !o.pattern) bad(`${where} needs a pattern`);
+    if (typeof p !== "string") unknownKeys(o, PATTERN_KEYS, where);
     const lines = o.lines || "all"; if (!["all", "first", "last", "edge"].includes(lines)) bad(`${where}.lines must be all, first, last or edge`);
+    if (o.notNegated !== undefined && typeof o.notNegated !== "boolean") bad(`${where}.notNegated must be true or false`);
     try { return { re: new RegExp(o.pattern, [...new Set(String(o.flags || "").replace(/[gy]/g, "") + "m")].join("")), lines, notNegated: o.notNegated === true }; }
     catch (err) { bad(`${where} is not a valid pattern: ${err.message}`); }
   };
   const rule = (name) => {
     const v = f[name]; if (v === undefined || v === true) return null; if (v === false) return { off: true };
     if (name === "resolved" || typeof v !== "object" || Array.isArray(v)) bad(`.${name} must be ${name === "resolved" ? "true or false" : "true, false or { postWhen, skipWhen }"}`);
+    unknownKeys(v, RULE_KEYS, `.${name}`);
     const list = (k) => { if (v[k] === undefined) return []; if (!Array.isArray(v[k])) bad(`.${name}.${k} must be a list`); return v[k].map((p, i) => pattern(p, `.${name}.${k}[${i}]`)); };
     return { postWhen: list("postWhen"), skipWhen: list("skipWhen") };
   };
-  return { negRe, resolved: rule("resolved"), finished: rule("finished"), cancelled: rule("cancelled") };
+  return { negRe, resolved: rule("resolved"), finished: rule("finished"), cancelled: rule("cancelled"), ignored };
 }
 function patternHits(p, text, negRe) {
   const ls = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parts = p.lines === "all" ? [ls.join("\n")] : p.lines === "first" ? ls.slice(0, 1) : p.lines === "last" ? ls.slice(-1) : [...new Set([ls[0], ls.at(-1)])].filter((x) => x !== undefined);
-  return parts.some((part) => (p.notNegated && negRe ? part.split(/[.!?;,\n]+/) : [part]).some((c) => { const m = c.match(p.re); return !!m && !(p.notNegated && negRe && negRe.test(c.slice(0, m.index))); }));
+  return parts.some((part) => (p.notNegated && negRe ? part.split(/[.!?;](?=\s|$)|,|\n/) : [part]).some((c) => { const m = c.match(p.re); return !!m && !(p.notNegated && negRe && negRe.test(c.slice(0, m.index))); }));
 }
-function filterSkip(F, event, text) { // -> why the event is not sent, or null to send it
+const filterChecksReply = (F, event) => { const r = F && FILTERED[event] && F[FILTERED[event]]; return !!(r && !r.off && (r.postWhen.length || r.skipWhen.length)); };
+function filterSkip(F, event, text) { // -> why the event is not sent, or null to send it. text null: the run left no reply, so only false holds it back
   const name = FILTERED[event], r = F && name && F[name]; if (!r) return null;
   if (r.off) return `filters.${name} is false`;
+  if (text === null || text === undefined) return null;
+  text = String(text).replace(/[\u2018\u2019\u02BC]/g, "'");
   const i = r.skipWhen.findIndex((p) => patternHits(p, text, F.negRe)); if (i >= 0) return `last reply matches filters.${name}.skipWhen[${i}]`;
   if (r.postWhen.length && !r.postWhen.some((p) => patternHits(p, text, F.negRe))) return `last reply matches no filters.${name}.postWhen pattern`;
   return null;
@@ -306,7 +318,8 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   if (opts.since && endedAt(run) < opts.since) return { skip: "ended before the listener's last run" };
   const items = p.turnItems || [], txt = (x) => x.text ?? x.content ?? (x.message && x.message.text);
   const said = items.filter((x) => x.type === "assistant_message" && typeof txt(x) === "string" && txt(x).trim());
-  const reply = said.filter((x) => x.runId === run.id).at(-1) || said.at(-1);
+  const own = said.filter((x) => x.runId === run.id).at(-1), reply = own || said.at(-1);
+  const filterReply = own || (!items.some((x) => x.runId) && (ended.at(-1) || {}).id === run.id ? said.at(-1) : null); // T3 without run ids on items: the newest run's reply is the newest reply
   const errItem = items.filter((x) => x.type === "error" && x.runId === run.id).at(-1);
   const errText = errItem ? (txt(errItem) || errItem.message || errItem.title) : t.lastError ? (t.lastError.message || "error") : null;
   const done = run.completedAt || new Date().toISOString(), m = meta.threads.get(t.id) || {};
@@ -314,7 +327,7 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
     delegated, runId: run.id, status: run.status, threadStatus: t.status || null, startedAt: run.startedAt, completedAt: done, completedAtLocal: localTime(done),
     durationSec: run.startedAt ? Math.max(0, Math.round((Date.parse(done) - Date.parse(run.startedAt)) / 1000)) : null,
     lastReply: reply ? trim(txt(reply), 600) : null, ...(event === "thread.failed" && errText ? { error: trim(String(errText), 300) } : {}) };
-  return { e, run, replyText: reply ? String(txt(reply)) : "" }; // replyText: the whole reply, for listen.json filters only (never sent or saved)
+  return { e, run, replyText: filterReply ? String(txt(filterReply)) : null }; // replyText: the run's whole own reply, for listen.json filters only (never sent or saved)
 }
 // ---------- usage-limit auto-resume ----------
 // When a run fails on a usage limit in a watched project (autoresume.json "projects", none by default) or in a thread
@@ -412,6 +425,7 @@ async function reportEnd(ep, t, runId, opts = {}) {
   if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, run); if (a) Object.assign(e, { usageLimit: true }, a); }
   cleanEvent(e); // before it is saved: listen-state.json never holds a raw title, project or reply
   const why = filterSkip(C.filters, e.event, replyText);
+  if (!why && replyText === null && filterChecksReply(C.filters, e.event)) log(`${e.event} "${clean(e.title)}" ${e.runId.slice(-12)} is sent: the run left no reply for filters.${FILTERED[e.event]} to check`);
   if (why) { S.finished[e.runId] = { threadId: t.id, at: Date.now() }; saveState(); log(`not sent: ${e.event} "${clean(e.title)}" ${e.runId.slice(-12)} (${why})`); return; } // marked reported, so catch-up skips it too
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
 }
@@ -506,6 +520,7 @@ async function run() {
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
+  if (C.filters && C.filters.ignored.length) log(`listen.json: ${C.filters.ignored.join(", ")} ${C.filters.ignored.length > 1 ? "are not settings" : "is not a setting"} this listener knows; ignored`);
   if (ONCE) { const t0 = Date.now(), limit = (+(optv("--timeout")) || 600) * 1000; setInterval(() => { if (delivered > 0) process.exit(0); if (Date.now() - t0 > limit) { log("--once: nothing happened before the timeout"); process.exit(2); } }, 500); }
   let delay = 2000, warned = "";
   for (;;) {
@@ -588,9 +603,13 @@ function serviceArgs() { // what the autostart entry runs, to tell whether it wa
 }
 // approvals are sent when listen.json has "approvals": true OR the service runs with --approvals
 const approvalsLine = (file, flag) => (file || flag ? `on (${[file && "listen.json", flag && "installed with --approvals"].filter(Boolean).join(" and ")})` : "off");
-// which listen.json filters are set, for status (patterns are not printed)
-const filtersLine = (f) => { const on = f && typeof f === "object" ? ["resolved", "finished", "cancelled"].filter((k) => f[k] !== undefined && f[k] !== true) : [];
-  return on.length ? `on (${on.map((k) => (f[k] === false ? `${k} off` : k)).join(", ")})` : "off"; };
+// what the filters in listen.json hold back at the listener's next start, for status (patterns are not printed)
+function filtersLine(raw) {
+  let F; try { F = compileFilters(raw); } catch (err) { return `invalid, the listener won't start: listen.json ${err.message}`; }
+  if (!F) return "off";
+  const on = ["resolved", "finished", "cancelled"].filter((k) => F[k] && (F[k].off || F[k].postWhen.length || F[k].skipWhen.length));
+  return `${on.length ? `on (${on.map((k) => (F[k].off ? `${k} off` : k)).join(", ")})` : "off"}${F.ignored.length ? `; ignored: ${F.ignored.join(", ")}` : ""}`;
+}
 function status() {
   let inst = "not installed", running = false, pid = null;
   if (process.platform === "darwin") { if (fs.existsSync(plistPath())) inst = "LaunchAgent"; const r = tryRun("launchctl", ["print", `gui/${process.getuid()}/${LABEL}`]); const m = r.ok && r.out.match(/\bpid = (\d+)/); if (m) { running = true; pid = +m[1]; } }
@@ -632,6 +651,7 @@ async function previewFinish() { // print the run-end event the listener would s
   const { e, skip, run, replyText } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
   const why = filterSkip(C.filters, e.event, replyText); if (why) console.log(`would not report (listen.json filters): ${why}`);
+  else if (replyText === null && filterChecksReply(C.filters, e.event)) console.log(`would report: the run left no reply for filters.${FILTERED[e.event]} to check`);
   // usage-limit fields from the ended run; never arm (preview writes nothing)
   if (e.event === "thread.failed" && !e.delegated) {
     const a = usageLimitFields(t, run);

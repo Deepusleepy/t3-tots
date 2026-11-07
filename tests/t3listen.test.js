@@ -471,11 +471,11 @@ test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a w
   } finally { srv.close(); }
 });
 
+const { startFake, copyTools, sleep } = require("./fake-t3");
 const EXAMPLE_FILTERS = {
- "resolved": false,
  "finished": { "postWhen": [
-  "^[\\s>*_`#-]*(STUCK|BLOCKED)\\b(?!-)",
-  { "pattern": "^[\\s>*_`#-]*(stuck|blocked|error)\\b(?!-)", "flags": "i", "lines": "edge" },
+  "^[ \\t>*_`#-]*(STUCK|BLOCKED)\\b(?!-)",
+  { "pattern": "^[ \\t>*_`#-]*(stuck|blocked|error)\\b(?!-)", "flags": "i", "lines": "edge" },
   { "pattern": "usage.?limit|(?<![#\\d])\\b429\\b|too many requests", "flags": "i", "lines": "edge", "notNegated": true },
   { "pattern": "\\b(needs?|requires?) (a |an |your )?decisions?\\b|\\bdecision (is )?needed\\b", "flags": "i", "notNegated": true }
  ] },
@@ -483,6 +483,10 @@ const EXAMPLE_FILTERS = {
   "\\bWAITING\\b[^\\n]*\\b([Ww]atch|[Ww]akes?\\b|[Ww]ake-?up|[Mm]onitor|[Pp]oll)"
  ] }
 };
+test("filters: the README example is the one these tests check", () => {
+  const md = require("fs").readFileSync(path.join(__dirname, "..", "README.md"), "utf8"), sec = md.slice(md.indexOf("### Filters"));
+  assert.deepEqual(JSON.parse(`{${sec.match(/```json\n([\s\S]*?)```/)[1]}}`).filters, EXAMPLE_FILTERS);
+});
 test("filters: none set means every event is sent as before", () => {
   assert.equal(l.compileFilters(undefined), null); assert.equal(l.compileFilters(null), null);
   for (const ev of ["thread.finished", "thread.cancelled", "thread.failed", "request.resolved", "request.opened"]) assert.equal(l.filterSkip(null, ev, "anything"), null, ev);
@@ -491,7 +495,7 @@ test("filters: none set means every event is sent as before", () => {
 });
 test("filters: the README example keeps only finishes that need action and cancels without a live watch", () => {
   const F = l.compileFilters(EXAMPLE_FILTERS), fin = (t) => l.filterSkip(F, "thread.finished", t), can = (t) => l.filterSkip(F, "thread.cancelled", t);
-  assert.match(l.filterSkip(F, "request.resolved"), /filters\.resolved is false/);
+  assert.equal(l.filterSkip(F, "request.resolved"), null, "the example keeps request.resolved");
   assert.equal(l.filterSkip(F, "thread.failed", "All good."), null, "failures are never filtered");
   assert.equal(l.filterSkip(F, "request.opened", ""), null, "questions are never filtered");
   assert.match(fin("Done. Tests pass and the PR is open."), /no filters\.finished\.postWhen/);
@@ -509,31 +513,104 @@ test("filters: the README example keeps only finishes that need action and cance
   assert.match(can("Stopped.\nWAITING: the CI watch reports back when the run ends"), /skipWhen\[0\]/);
   assert.equal(can("Stopped by the user."), null);
   assert.equal(can("waiting for the watch"), null, "WAITING must be uppercase");
-  assert.equal(l.filtersLine(EXAMPLE_FILTERS), "on (resolved off, finished, cancelled)");
+  assert.equal(l.filtersLine(EXAMPLE_FILTERS), "on (finished, cancelled)");
 });
 test("filters: false turns an event off; bad settings are named", () => {
   const F = l.compileFilters({ finished: false, negations: [] });
   assert.match(l.filterSkip(F, "thread.finished", "STUCK"), /filters\.finished is false/); assert.equal(l.filterSkip(F, "thread.cancelled", "x"), null);
+  assert.match(l.filterSkip(F, "thread.finished", null), /filters\.finished is false/, "false holds the event back even when the run said nothing");
+  assert.match(l.filterSkip(l.compileFilters({ resolved: false }), "request.resolved"), /filters\.resolved is false/);
   for (const [bad, re] of [["x", /must be an object/], [{ resolved: {} }, /resolved must be true or false/], [{ finished: [] }, /finished must be/],
     [{ finished: { postWhen: "STUCK" } }, /postWhen must be a list/], [{ cancelled: { skipWhen: ["("] } }, /cancelled\.skipWhen\[0\] is not a valid pattern/],
-    [{ finished: { postWhen: [{ pattern: "x", lines: "middle" }] } }, /lines must be/], [{ finished: { postWhen: [{}] } }, /needs a pattern/], [{ negations: "no" }, /negations must be/]])
+    [{ finished: { postWhen: [{ pattern: "x", lines: "middle" }] } }, /lines must be/], [{ finished: { postWhen: [{}] } }, /needs a pattern/], [{ negations: "no" }, /negations must be/],
+    [{ finished: { postWhen: [{ pattern: "x", notNegated: "true" }] } }, /postWhen\[0\]\.notNegated must be true or false/]])
     assert.throws(() => l.compileFilters(bad), re, JSON.stringify(bad));
   const G = l.compileFilters({ finished: { postWhen: [{ pattern: "decision", notNegated: true }] }, negations: ["hardly"] });
   assert.equal(l.filterSkip(G, "thread.finished", "no decision yet"), null, "custom negations replace the default list");
   assert.match(l.filterSkip(G, "thread.finished", "hardly a decision"), /no filters/);
 });
-test("filters: a filtered run end is marked reported (catch-up skips it) and the full reply is never sent or saved", () => {
-  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
-  const body = src.slice(src.indexOf("async function reportEnd"), src.indexOf("async function checkFinish"));
-  assert.ok(body.includes("filterSkip(C.filters, e.event, replyText)"), body);
-  assert.ok(/if \(why\) \{ S\.finished\[e\.runId\] = \{ threadId: t\.id, at: Date\.now\(\) \}; saveState\(\)/.test(body), body);
-  assert.ok(!/e\.replyText|replyText:/.test(body), "replyText stays out of the event");
+test("filters: curly apostrophes negate like straight ones; a dot inside a word or number doesn't end a clause", () => {
+  const F = l.compileFilters({ finished: { postWhen: [{ pattern: "needs? (a |your )?decision", flags: "i", notNegated: true }, { pattern: "usage.?limit", flags: "i", notNegated: true }] } });
+  const fin = (t) => l.filterSkip(F, "thread.finished", t);
+  assert.match(fin("This doesn't need a decision."), /no filters/);
+  assert.match(fin("This doesn’t need a decision."), /no filters/, "right single quotation mark");
+  assert.match(fin("This doesnʼt need a decision."), /no filters/, "modifier letter apostrophe");
+  assert.equal(fin("Hit the usage.limit on v1.4 today"), null, "usage.limit and v1.4 stay in one clause");
+  assert.equal(fin("No tests broke. It needs your decision."), null, "a sentence end still ends a clause");
+  assert.equal(fin("Nothing else changed,but it needs your decision"), null, "a comma ends a clause even without a space");
+});
+test("filters: unknown keys are ignored and listed, never fatal; status tells what the listener will do", () => {
+  const F = l.compileFilters({ finshed: false, finished: { postWhen: ["STUCK"], postwhen: ["x"] }, cancelled: { skipWhen: [{ pattern: "WAITING", flag: "i" }] } });
+  assert.deepEqual(F.ignored, ["filters.finshed", "filters.finished.postwhen", "filters.cancelled.skipWhen[0].flag"]);
+  assert.match(l.filterSkip(F, "thread.finished", "Done"), /no filters\.finished\.postWhen/);
+  assert.equal(l.filtersLine({ finshed: false, finished: { postWhen: ["STUCK"] } }), "on (finished); ignored: filters.finshed");
+  assert.equal(l.filtersLine({ finished: {} }), "off", "a rule with no patterns holds nothing back");
+  assert.match(l.filtersLine({ finished: { postWhen: ["("] } }), /^invalid, the listener won't start: listen\.json filters\.finished\.postWhen\[0\] is not a valid pattern/);
+  assert.match(l.filtersLine("on"), /^invalid, the listener won't start: listen\.json filters must be an object/);
+});
+const now = () => new Date().toISOString();
+const busy = (id, runId) => ({ id, title: `Thread ${id}`, status: "running", activeRunId: runId, latestRunId: runId });
+const idle = (id, runId) => ({ id, title: `Thread ${id}`, status: "idle", activeRunId: null, latestRunId: runId });
+test("filters, live: a held-back finish is not posted, is saved as reported, and catch-up after a restart doesn't post it", async () => {
+  const f = await startFake({ filters: { finished: { postWhen: ["^BLOCKED"] }, finshed: false } });
+  try {
+    const r1 = { id: "r1", status: "running", startedAt: now() };
+    f.setThread(busy("A", "r1"), { runs: [r1], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    assert.match(f.out, /listen\.json: filters\.finshed is not a setting/, "an unknown key is logged, and the listener runs");
+    f.update(idle("A", "r1"), { runs: [{ ...r1, status: "completed", completedAt: now() }], turnItems: [{ type: "assistant_message", runId: "r1", text: "All done, tests pass." }] });
+    await f.waitFor(() => /not sent: thread\.finished "Thread A"/.test(f.out), 8000, "the filter decision");
+    assert.deepEqual(f.posts, []);
+    assert.deepEqual(Object.keys(f.state().finished), ["r1"]); assert.equal(f.state().finished.r1.e, undefined, "nothing is kept to resend");
+    assert.ok(!JSON.stringify(f.state()).includes("tests pass"), "the reply is never saved");
+    await f.stop(); f.start();
+    await f.waitFor(() => f.count(/watching 1 threads/) === 2, 8000, "the restart's snapshot");
+    await sleep(200);
+    assert.deepEqual(f.posts, [], "catch-up after the restart sends nothing for the held-back finish");
+  } finally { await f.close(); }
+});
+test("filters, live: resolved false drops request.resolved and forgets the question", async () => {
+  const f = await startFake({ filters: { resolved: false } });
+  try {
+    const req = { id: "req-1", kind: "user_input", status: "pending", createdAt: now(), responseCapability: { type: "resumable" } };
+    const item = { type: "user_input_request", requestId: "req-1", questions: [{ id: "q", header: "Pick", question: "Which one?", options: [{ label: "Blue" }] }] };
+    f.setThread({ ...busy("Q", "r1"), pendingRuntimeRequest: { id: "req-1" } }, { runs: [], turnItems: [item], runtimeRequests: [req] });
+    f.start(); await f.waitFor(() => f.posts.length === 1, 8000, "request.opened");
+    assert.equal(f.posts[0].event, "request.opened");
+    f.update({ ...busy("Q", "r1"), pendingRuntimeRequest: null }, { runs: [], turnItems: [item], runtimeRequests: [{ ...req, status: "resolved", resolvedAt: now(), answers: { q: "Blue" } }] });
+    await f.waitFor(() => { const s = f.state(); return !!s && Object.keys(s.sent).length === 0; }, 8000, "the question to be forgotten");
+    await sleep(200);
+    assert.deepEqual(f.posts.map((e) => e.event), ["request.opened"]);
+  } finally { await f.close(); }
+});
+test("filters, live: only the ended run's own reply is judged; a run with no reply of its own is posted", async () => {
+  const f = await startFake({ filters: { cancelled: { skipWhen: ["\\bWAITING\\b[^\\n]*\\b[Ww]atch"] } } });
+  try {
+    const waiting = "Kicked off CI.\nWAITING: the CI watch reports back when the run ends";
+    const a1 = { id: "a1", ordinal: 1, status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt: "2026-11-07T04:05:00Z" };
+    const a2 = { id: "a2", ordinal: 2, status: "running", startedAt: now() }, b1 = { id: "b1", ordinal: 1, status: "running", startedAt: now() };
+    f.setThread(busy("A", "a2"), { runs: [a1, a2], turnItems: [{ type: "assistant_message", runId: "a1", text: waiting }] });
+    f.setThread(busy("B", "b1"), { runs: [b1], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 2 threads/.test(f.out), 8000, "first snapshot");
+    f.update(idle("A", "a2"), { runs: [a1, { ...a2, status: "interrupted", completedAt: now() }], turnItems: [{ type: "assistant_message", runId: "a1", text: waiting }] });
+    f.update(idle("B", "b1"), { runs: [{ ...b1, status: "interrupted", completedAt: now() }], turnItems: [{ type: "assistant_message", runId: "b1", text: waiting }] });
+    await f.waitFor(() => f.posts.length >= 1 && /not sent: thread\.cancelled "Thread B"/.test(f.out), 8000, "both cancels to be handled");
+    await sleep(200);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId]), [["thread.cancelled", "a2"]], "the earlier run's WAITING line doesn't hold back the later cancel");
+    assert.match(f.out, /thread\.cancelled "Thread A" a2 is sent: the run left no reply for filters\.cancelled to check/);
+  } finally { await f.close(); }
+});
+test("filters: a bad pattern stops the listener at startup with BAD_LISTEN_CONFIG and names the setting", async () => {
+  const f = await startFake({ filters: { finished: { postWhen: ["("] } } });
+  try {
+    assert.equal(await f.start().exited, 1);
+    assert.match(f.out, /BAD_LISTEN_CONFIG: listen\.json filters\.finished\.postWhen\[0\] is not a valid pattern/);
+  } finally { await f.close(); }
 });
 test("preview-finish: filters see the whole last reply, not the 600-character lastReply", async () => {
   const fs = require("fs"), os = require("os"), http = require("http"), { execFile } = require("child_process");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-preview-filters-"));
-  fs.copyFileSync(path.join(__dirname, "..", "tools", "t3listen"), path.join(tmp, "t3listen"));
-  fs.copyFileSync(path.join(__dirname, "..", "tools", "thread-match.js"), path.join(tmp, "thread-match.js"));
+  copyTools(tmp);
   fs.writeFileSync(path.join(tmp, "token"), "test-fixture");
   fs.writeFileSync(path.join(tmp, "listen.json"), JSON.stringify({ url: "http://127.0.0.1:9/", headers: {}, machine: "m", filters: EXAMPLE_FILTERS }));
   const thread = { id: "filter-thread-01", title: "Long reply", status: "idle" };
@@ -557,5 +634,5 @@ test("preview-finish: filters see the whole last reply, not the 600-character la
     reply = "All done, tests pass.";
     r = await run(); assert.equal(r.code, 0, r.out);
     assert.match(r.out, /^would not report \(listen\.json filters\): last reply matches no filters\.finished\.postWhen pattern/);
-  } finally { srv.close(); }
+  } finally { srv.closeAllConnections(); srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
