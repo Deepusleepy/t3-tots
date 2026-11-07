@@ -271,7 +271,7 @@ test("preview-finish: NOT_FOUND in the shell list still reads an id-like query f
     r = await run("abcdefgh"); assert.equal(r.code, 1); assert.match(r.out, /AMBIGUOUS/);
     r = await run("some missing title"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
     r = await run("missing-id-999"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("preview-finish: archivedThreads are searched; colon ids are id-like; AMBIGUOUS still stops", async () => {
@@ -300,7 +300,7 @@ test("preview-finish: archivedThreads are searched; colon ids are id-like; AMBIG
     r = await run("thread:delegated-task:deadbeef"); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/);
     r = await run("Live One"); assert.equal(r.code, 0, r.out);
     r = await run("abcdefgh"); assert.equal(r.code, 1); assert.match(r.out, /AMBIGUOUS/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("preview-finish: usage-limit fields come from the ended run; armResume is not called", async () => {
@@ -333,7 +333,7 @@ test("preview-finish: usage-limit fields come from the ended run; armResume is n
   fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
   const r = await new Promise((done) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", thread.id],
     { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => done({ code: err ? err.code : 0, out: out + errOut })));
-  srv.close();
+  srv.close(); fs.rmSync(tmp, { recursive: true, force: true });
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /PREVIEW payload/);
   const json = r.out.slice(r.out.indexOf("{"));
@@ -426,7 +426,7 @@ test("preview-finish: a thread only in T3's archived list is found by its title"
     assert.ok(asked.includes("orchestration.getArchivedShellSnapshot"), asked.join());
     r = await run("never existed"); assert.equal(r.code, 1, r.out); assert.match(r.out, /NOT_FOUND/);
     assert.doesNotMatch(r.out, /couldn't be checked/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a weak live match is still used", async () => {
@@ -468,7 +468,7 @@ test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a w
     assert.match(r.out, /^NOT_FOUND: no thread matches "Shipped last week"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
     r = await run("missing-id-999"); assert.equal(r.code, 1, r.out);
     assert.match(r.out, /^NOT_FOUND: no thread matches "missing-id-999"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 const { startFake, copyTools, sleep } = require("./fake-t3");
@@ -635,4 +635,62 @@ test("preview-finish: filters see the whole last reply, not the 600-character la
     r = await run(); assert.equal(r.code, 0, r.out);
     assert.match(r.out, /^would not report \(listen\.json filters\): last reply matches no filters\.finished\.postWhen pattern/);
   } finally { srv.closeAllConnections(); srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+test("filters: a pattern that backtracks without end is cut off at the budget and the event is sent", () => {
+  const F = l.compileFilters({ finished: { postWhen: ["(a+)+b"] } }), text = "a".repeat(40), t0 = Date.now();
+  const d = l.filterDecision(F, "thread.finished", text, 200);
+  const took = Date.now() - t0;
+  assert.equal(d.skip, null, "over budget means sent");
+  assert.match(d.note, /filters\.finished took longer than 200 ms/);
+  assert.ok(took >= 150 && took < 2000, `stopped near the budget (${took} ms)`);
+  assert.deepEqual(l.filterDecision(F, "thread.finished", "aab", 200), { skip: null, note: null }, "a fast match is decided normally");
+  assert.match(l.filterDecision(F, "thread.finished", "nothing", 200).skip, /no filters\.finished\.postWhen/);
+});
+test("filters, live: a runaway pattern doesn't stall the listener; the finish is sent and the next one is still judged", async () => {
+  const f = await startFake({ filters: { finished: { postWhen: ["(a+)+b"] } } });
+  try {
+    const run = (id) => ({ id, status: "running", startedAt: now() });
+    f.setThread(busy("A", "a1"), { runs: [run("a1")], turnItems: [] });
+    f.setThread(busy("B", "b1"), { runs: [run("b1")], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 2 threads/.test(f.out), 8000, "first snapshot");
+    f.update(idle("A", "a1"), { runs: [{ ...run("a1"), status: "completed", completedAt: now() }], turnItems: [{ type: "assistant_message", runId: "a1", text: "a".repeat(60) }] });
+    f.update(idle("B", "b1"), { runs: [{ ...run("b1"), status: "completed", completedAt: now() }], turnItems: [{ type: "assistant_message", runId: "b1", text: "All done." }] });
+    await f.waitFor(() => /not sent: thread\.finished "Thread B"/.test(f.out), 8000, "the second finish to be judged");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId]), [["thread.finished", "a1"]]);
+    assert.match(f.out, /thread\.finished "Thread A" a1 is sent: filters\.finished took longer than 1000 ms on this reply/);
+  } finally { await f.close(); }
+});
+test("filters, live: off by default, every run end and question event is posted as before", async () => {
+  const f = await startFake();
+  try {
+    const run = (id, status = "running", extra = {}) => ({ id, status, startedAt: "2026-11-07T04:00:00Z", ...extra });
+    const req = { id: "req-9", kind: "user_input", status: "pending", createdAt: now(), responseCapability: { type: "resumable" } };
+    const item = { type: "user_input_request", requestId: "req-9", questions: [{ id: "q", question: "Which?", options: [{ label: "Blue" }] }] };
+    f.setThread(busy("F", "f1"), { runs: [run("f1")], turnItems: [] });
+    f.setThread(busy("C", "c1"), { runs: [run("c1")], turnItems: [] });
+    f.setThread(busy("X", "x1"), { runs: [run("x1")], turnItems: [] });
+    f.setThread({ ...busy("Q", "q1"), pendingRuntimeRequest: { id: "req-9" } }, { runs: [run("q1")], turnItems: [item], runtimeRequests: [req] });
+    f.start(); await f.waitFor(() => f.posts.length === 1, 8000, "the open question");
+    f.update(idle("F", "f1"), { runs: [run("f1", "completed", { completedAt: now() })], turnItems: [{ type: "assistant_message", runId: "f1", text: "Done." }] });
+    f.update(idle("C", "c1"), { runs: [run("c1", "interrupted", { completedAt: now() })], turnItems: [] });
+    f.update({ ...busy("X", "x1"), status: "failed", activeRunId: null }, { runs: [run("x1", "failed", { completedAt: now() })], turnItems: [{ type: "error", runId: "x1", text: "boom" }] });
+    f.update({ ...busy("Q", "q1"), pendingRuntimeRequest: null }, { runs: [run("q1")], turnItems: [item], runtimeRequests: [{ ...req, status: "resolved", resolvedAt: now() }] });
+    await f.waitFor(() => f.posts.length === 5, 8000, "all five events");
+    await sleep(300);
+    assert.deepEqual(f.posts.map((e) => e.event).sort(), ["request.opened", "request.resolved", "thread.cancelled", "thread.failed", "thread.finished"]);
+    assert.ok(!/is not a setting|filters/.test(f.out), "nothing about filters is logged");
+  } finally { await f.close(); }
+});
+test("filters, live: a T3 that puts no run ids on its items still judges the newest run by the newest reply", async () => {
+  const f = await startFake({ filters: { finished: { postWhen: ["^BLOCKED"] } } });
+  try {
+    const r1 = { id: "o1", ordinal: 1, status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt: "2026-11-07T04:05:00Z" };
+    const r2 = { id: "o2", ordinal: 2, status: "running", startedAt: now() };
+    f.setThread(busy("O", "o2"), { runs: [r1, r2], turnItems: [{ type: "assistant_message", text: "BLOCKED: old run" }] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    f.update(idle("O", "o2"), { runs: [r1, { ...r2, status: "completed", completedAt: now() }], turnItems: [{ type: "assistant_message", text: "BLOCKED: old run" }, { type: "assistant_message", text: "All done." }] });
+    await f.waitFor(() => /not sent: thread\.finished "Thread O"/.test(f.out), 8000, "the filter decision");
+    assert.deepEqual(f.posts, []);
+    assert.ok(!/no reply/.test(f.out), "the newest reply counts as the newest run's own reply");
+  } finally { await f.close(); }
 });

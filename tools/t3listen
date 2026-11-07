@@ -4,7 +4,7 @@
 // projects listed in autoresume.json, or in threads T3 Tots started, get T3's "Resume at reset" armed, see autoResumeSet),
 // by POSTing JSON to the webhook in listen.json. No polling: it follows T3's live event stream. Needs Node 22+.
 // The webhook URL and headers live only in listen.json next to this script and are never printed.
-const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process");
+const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto"), cp = require("child_process"), vm = require("vm");
 const { pickThread, idLike, lookupThread } = (() => { try { return require("./thread-match"); } catch (e) { // same rules as t3ctl; see tools/thread-match.js
   if (e.code !== "MODULE_NOT_FOUND") throw e;
   console.error("TOOLS_INCOMPLETE: thread-match.js must be next to t3listen. Reinstall the tools (t3-install-tools)."); process.exit(1);
@@ -72,16 +72,29 @@ function patternHits(p, text, negRe) {
   const parts = p.lines === "all" ? [ls.join("\n")] : p.lines === "first" ? ls.slice(0, 1) : p.lines === "last" ? ls.slice(-1) : [...new Set([ls[0], ls.at(-1)])].filter((x) => x !== undefined);
   return parts.some((part) => (p.notNegated && negRe ? part.split(/[.!?;](?=\s|$)|,|\n/) : [part]).some((c) => { const m = c.match(p.re); return !!m && !(p.notNegated && negRe && negRe.test(c.slice(0, m.index))); }));
 }
-const filterChecksReply = (F, event) => { const r = F && FILTERED[event] && F[FILTERED[event]]; return !!(r && !r.off && (r.postWhen.length || r.skipWhen.length)); };
-function filterSkip(F, event, text) { // -> why the event is not sent, or null to send it. text null: the run left no reply, so only false holds it back
-  const name = FILTERED[event], r = F && name && F[name]; if (!r) return null;
-  if (r.off) return `filters.${name} is false`;
-  if (text === null || text === undefined) return null;
-  text = String(text).replace(/[\u2018\u2019\u02BC]/g, "'");
-  const i = r.skipWhen.findIndex((p) => patternHits(p, text, F.negRe)); if (i >= 0) return `last reply matches filters.${name}.skipWhen[${i}]`;
-  if (r.postWhen.length && !r.postWhen.some((p) => patternHits(p, text, F.negRe))) return `last reply matches no filters.${name}.postWhen pattern`;
-  return null;
+// A user pattern can backtrack for minutes on the wrong reply and the listener has one thread, so each check runs under a time
+// budget: vm's timeout interrupts a running regex. Over budget, the event is sent and the log says so.
+const FILTER_BUDGET_MS = 1000, filterSandbox = vm.createContext({});
+function withinBudget(fn, ms) {
+  filterSandbox.fn = fn;
+  try { return { value: vm.runInContext("fn()", filterSandbox, { timeout: ms }) }; }
+  catch (err) { if (err && err.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") return { timedOut: true }; throw err; }
+  finally { filterSandbox.fn = null; }
 }
+function filterDecision(F, event, text, budgetMs = FILTER_BUDGET_MS) { // -> { skip: why it is not sent, or null; note: why it is sent although filters are set }
+  const name = FILTERED[event], r = F && name && F[name]; if (!r) return { skip: null, note: null };
+  if (r.off) return { skip: `filters.${name} is false`, note: null };
+  if (!r.postWhen.length && !r.skipWhen.length) return { skip: null, note: null };
+  if (text === null || text === undefined) return { skip: null, note: `the run left no reply for filters.${name} to check` };
+  text = String(text).replace(/[\u2018\u2019\u02BC]/g, "'");
+  const d = withinBudget(() => {
+    const i = r.skipWhen.findIndex((p) => patternHits(p, text, F.negRe)); if (i >= 0) return `last reply matches filters.${name}.skipWhen[${i}]`;
+    if (r.postWhen.length && !r.postWhen.some((p) => patternHits(p, text, F.negRe))) return `last reply matches no filters.${name}.postWhen pattern`;
+    return null;
+  }, budgetMs);
+  return d.timedOut ? { skip: null, note: `filters.${name} took longer than ${budgetMs} ms on this reply` } : { skip: d.value, note: null };
+}
+const filterSkip = (F, event, text, budgetMs) => filterDecision(F, event, text, budgetMs).skip;
 const configFilters = (f) => { try { return compileFilters(f); } catch (err) { die("BAD_LISTEN_CONFIG", `listen.json ${err.message}`); } };
 function loadConfig() {
   const c = readJSON(CONF, null);
@@ -424,8 +437,8 @@ async function reportEnd(ep, t, runId, opts = {}) {
   if (S.finished[e.runId]) return;
   if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, run); if (a) Object.assign(e, { usageLimit: true }, a); }
   cleanEvent(e); // before it is saved: listen-state.json never holds a raw title, project or reply
-  const why = filterSkip(C.filters, e.event, replyText);
-  if (!why && replyText === null && filterChecksReply(C.filters, e.event)) log(`${e.event} "${clean(e.title)}" ${e.runId.slice(-12)} is sent: the run left no reply for filters.${FILTERED[e.event]} to check`);
+  const { skip: why, note } = filterDecision(C.filters, e.event, replyText);
+  if (note) log(`${e.event} "${clean(e.title)}" ${e.runId.slice(-12)} is sent: ${note}`);
   if (why) { S.finished[e.runId] = { threadId: t.id, at: Date.now() }; saveState(); log(`not sent: ${e.event} "${clean(e.title)}" ${e.runId.slice(-12)} (${why})`); return; } // marked reported, so catch-up skips it too
   S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
 }
@@ -650,8 +663,8 @@ async function previewFinish() { // print the run-end event the listener would s
   const t = { ...(p.thread || {}), id: (p.thread && p.thread.id) || id };
   const { e, skip, run, replyText } = await buildEnd(ep, t, null, { preview: true });
   if (!e) { console.log(`would not report: ${skip}`); return; }
-  const why = filterSkip(C.filters, e.event, replyText); if (why) console.log(`would not report (listen.json filters): ${why}`);
-  else if (replyText === null && filterChecksReply(C.filters, e.event)) console.log(`would report: the run left no reply for filters.${FILTERED[e.event]} to check`);
+  const { skip: why, note } = filterDecision(C.filters, e.event, replyText); if (why) console.log(`would not report (listen.json filters): ${why}`);
+  else if (note) console.log(`would report: ${note}`);
   // usage-limit fields from the ended run; never arm (preview writes nothing)
   if (e.event === "thread.failed" && !e.delegated) {
     const a = usageLimitFields(t, run);
@@ -665,5 +678,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filtersLine };
+if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
