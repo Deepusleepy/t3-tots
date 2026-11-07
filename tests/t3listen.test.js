@@ -272,7 +272,7 @@ test("preview-finish: NOT_FOUND in the shell list still reads an id-like query f
     r = await run("abcdefgh"); assert.equal(r.code, 1); assert.match(r.out, /AMBIGUOUS/);
     r = await run("some missing title"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
     r = await run("missing-id-999"); assert.equal(r.code, 1); assert.match(r.out, /NOT_FOUND/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("preview-finish: archivedThreads are searched; colon ids are id-like; AMBIGUOUS still stops", async () => {
@@ -301,7 +301,7 @@ test("preview-finish: archivedThreads are searched; colon ids are id-like; AMBIG
     r = await run("thread:delegated-task:deadbeef"); assert.equal(r.code, 0, r.out); assert.match(r.out, /would not report: no run/);
     r = await run("Live One"); assert.equal(r.code, 0, r.out);
     r = await run("abcdefgh"); assert.equal(r.code, 1); assert.match(r.out, /AMBIGUOUS/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("preview-finish: usage-limit fields come from the ended run; armResume is not called", async () => {
@@ -334,7 +334,7 @@ test("preview-finish: usage-limit fields come from the ended run; armResume is n
   fs.mkdirSync(path.join(tmp, "t3")); fs.writeFileSync(path.join(tmp, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: srv.address().port }));
   const r = await new Promise((done) => execFile(process.execPath, [path.join(tmp, "t3listen"), "preview-finish", "--dry-run", "--thread", thread.id],
     { env: { ...process.env, T3_HOME: path.join(tmp, "t3") } }, (err, out, errOut) => done({ code: err ? err.code : 0, out: out + errOut })));
-  srv.close();
+  srv.close(); fs.rmSync(tmp, { recursive: true, force: true });
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /PREVIEW payload/);
   const json = r.out.slice(r.out.indexOf("{"));
@@ -427,7 +427,7 @@ test("preview-finish: a thread only in T3's archived list is found by its title"
     assert.ok(asked.includes("orchestration.getArchivedShellSnapshot"), asked.join());
     r = await run("never existed"); assert.equal(r.code, 1, r.out); assert.match(r.out, /NOT_FOUND/);
     assert.doesNotMatch(r.out, /couldn't be checked/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a weak live match is still used", async () => {
@@ -469,7 +469,7 @@ test("preview-finish: a failed archived-list read is named on NOT_FOUND, and a w
     assert.match(r.out, /^NOT_FOUND: no thread matches "Shipped last week"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
     r = await run("missing-id-999"); assert.equal(r.code, 1, r.out);
     assert.match(r.out, /^NOT_FOUND: no thread matches "missing-id-999"[\s\S]*T3's archived threads couldn't be checked:.*archive rpc down/);
-  } finally { srv.close(); }
+  } finally { srv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test("reliability settings: off unless listen.json sets them; bad values fall back to the defaults", () => {
@@ -628,5 +628,80 @@ test("repeat holds, live: a held count survives a restart after the window and r
     await f.waitFor(() => f.count(/watching 1 threads/) === 2, 8000, "the restart");
     await fail("r3", 3); await f.waitFor(() => f.posts.length === 2, 8000, "the third failure");
     assert.deepEqual(f.posts.map((e) => [e.runId, e.repeatsSuppressed]), [["r1", undefined], ["r3", 1]]);
+  } finally { await f.close(); }
+});
+test("retry, live: a failure the webhook refused is kept across a crash and sent once after the restart", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus((e) => (e.event === "thread.failed" ? 400 : 200));
+    f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => /webhook answered HTTP 400 for thread\.failed/.test(f.out), 8000, "the refused send");
+    assert.ok(f.state().finished.r1.e, "the unsent failure is saved");
+    await f.stop(); f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.length === 1, 8000, "the resend after the restart");
+    await fakeT3.sleep(500);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId]), [["thread.failed", "r1"]]);
+    assert.equal(f.state().finished.r1.e, undefined, "marked delivered");
+  } finally { await f.close(); }
+});
+test("retry queue full, live: a batch that can't be queued is saved per failure, survives a crash, and is sent once", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 1.5 });
+  try {
+    f.setHookStatus((e) => (e.event === "request.opened" || e.event === "thread.failed.batch" ? 400 : 200));
+    for (let i = 0; i < 100; i++) {
+      const id = `Q${i}`, req = { id: `req-${i}`, kind: "user_input", status: "pending", createdAt: isoNow(), responseCapability: { type: "resumable" } };
+      f.setThread({ ...busyT(id, `${id}r`), pendingRuntimeRequest: { id: req.id } }, { runs: [], runtimeRequests: [req], turnItems: [{ type: "user_input_request", requestId: req.id, questions: [{ id: "q", question: `Q ${i}?`, options: [{ label: "Yes" }] }] }] });
+    }
+    for (const id of ["A", "B"]) f.setThread(busyT(id, `${id}1`), { runs: [{ id: `${id}1`, status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 102 threads/.test(f.out), 20000, "100 refused questions to fill the retry queue");
+    for (const id of ["A", "B"]) f.update(failedT(id, `${id}1`), { runs: [failRun(`${id}1`)], turnItems: [errItem(`${id}1`, `boom ${id}`)] });
+    await f.waitFor(() => /retry queue is full; thread\.failed\.batch/.test(f.out), 10000, "the batch to meet the full queue");
+    const s = f.state();
+    for (const r of ["A1", "B1"]) assert.ok(s.finished[r].parked && s.finished[r].parked["thread.failed"], `${r} is parked in listen-state.json`);
+    assert.ok(!/has no saved state, so it is dropped/.test(f.out), "nothing is dropped");
+    await f.stop(); f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.filter((e) => e.event === "request.opened").length === 100 && f.posts.some((e) => e.event === "thread.failed.batch"), 20000, "everything after the restart");
+    await fakeT3.sleep(2500);
+    const failures = f.posts.filter((e) => e.event.startsWith("thread.failed")).flatMap((e) => (e.failures || [e]).map((x) => x.runId)).sort();
+    assert.deepEqual(failures, ["A1", "B1"], "each failure arrives once");
+    assert.equal(f.posts.filter((e) => e.event === "request.opened").length, 100, "each question arrives once");
+  } finally { await f.close(); }
+});
+test("repeat holds, live: a usage limit set to resume is held when it repeats; one that isn't set is always sent", async () => {
+  const f = await fakeT3.startFake({ repeatFailureHours: 6 });
+  try {
+    require("fs").writeFileSync(require("path").join(f.dir, "autoresume.json"), JSON.stringify({ projects: ["proj"] }));
+    const reset = new Date(Date.now() + 3600e3).toISOString();
+    const limitFail = async (id, runId, projectId) => {
+      f.update({ ...busyT(id, runId), projectId }, { runs: [{ id: runId, status: "running", startedAt: isoNow() }], turnItems: [] });
+      await fakeT3.sleep(150);
+      f.update({ ...failedT(id, runId, { usageLimitResetAt: reset, lastErrorClass: "usage_limit" }), projectId }, { runs: [failRun(runId, { lastErrorClass: "usage_limit", usageLimitResetAt: reset })], turnItems: [errItem(runId, `You've hit your usage limit. Resets at ${runId === "u1" || runId === "v1" ? "5:00 AM" : "10:00 AM"}`)] });
+      await f.waitFor(() => !!f.state() && !!f.state().finished[runId], 8000, `run ${runId}`);
+    };
+    f.setThread({ ...busyT("U", "u0"), projectId: "p1" }, { runs: [], turnItems: [] });
+    f.setThread({ ...busyT("V", "v0"), projectId: "p2" }, { runs: [], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 2 threads/.test(f.out), 8000, "first snapshot");
+    await limitFail("U", "u1", "p1"); await limitFail("V", "v1", "p2");
+    await f.waitFor(() => f.posts.length === 2, 8000, "the first stops");
+    await limitFail("U", "u2", "p1"); await limitFail("V", "v2", "p2");
+    await f.waitFor(() => f.posts.length === 3 && /held back thread\.failed "Thread U"/.test(f.out), 8000, "the second stops");
+    await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.runId, e.usageLimit, e.autoResumeSet]), [["u1", true, true], ["v1", true, false], ["v2", true, false]]);
+    assert.deepEqual(f.commands.map((c) => c.payload.limitRecovery.runId), ["u1", "u2"], "both of U's stops were armed; V's never");
+  } finally { await f.close(); }
+});
+test("preview-finish: says when a failure would be held back as a repeat", async () => {
+  const f = await fakeT3.startFake({ repeatFailureHours: 6 });
+  try {
+    f.setThread(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503 (req 9f8e7d6c5b4a)")] });
+    const fs = require("fs"), path = require("path"), { execFile } = require("child_process");
+    const preview = () => new Promise((done) => execFile(process.execPath, [path.join(f.dir, "t3listen"), "preview-finish", "--dry-run", "--thread", "A"],
+      { env: { ...process.env, T3_HOME: path.join(f.dir, "t3") } }, (err, out, errOut) => done({ code: err ? err.code : 0, out: out + errOut })));
+    let r = await preview(); assert.equal(r.code, 0, r.out); assert.ok(!/would hold back/.test(r.out), r.out);
+    fs.writeFileSync(path.join(f.dir, "listen-state.json"), JSON.stringify({ sent: {}, finished: {}, failRepeat: { A: { err: "provider error 503 (req #id)", at: Date.now() - 3600e3, runId: "r0" } } }));
+    r = await preview(); assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /^would hold back: the same error as this thread's last sent failure, inside repeatFailureHours/m);
   } finally { await f.close(); }
 });

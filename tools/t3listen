@@ -672,7 +672,9 @@ async function previewFinish() { // print the run-end event the listener would s
     const a = usageLimitFields(t, run);
     if (a) Object.assign(e, a, a.resumeAt ? { resumeAtLocal: localTime(a.resumeAt) } : {});
   }
-  cleanEvent(e); e.text = summary(e); console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
+  cleanEvent(e); e.text = summary(e);
+  if (e.event === "thread.failed" && C.repeatFailureMs > 0 && repeatCheck(((readJSON(STATE, {}) || {}).failRepeat || {})[t.id], e, Date.now(), C.repeatFailureMs).hold) console.log("would hold back: the same error as this thread's last sent failure, inside repeatFailureHours");
+  console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
 }
 
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
