@@ -705,3 +705,15 @@ test("preview-finish: says when a failure would be held back as a repeat", async
     assert.match(r.out, /^would hold back: the same error as this thread's last sent failure, inside repeatFailureHours/m);
   } finally { await f.close(); }
 });
+test("state, live: a save Windows refuses while another process has listen-state.json open is retried, so the failure isn't lost", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setThread(busyT("W", "w1"), { runs: [{ id: "w1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    const fs = require("fs"), fd = fs.openSync(path.join(f.dir, "listen-state.json"), "r");
+    setTimeout(() => fs.closeSync(fd), 300);
+    f.update(failedT("W", "w1"), { runs: [failRun("w1")], turnItems: [errItem("w1", "boom")] });
+    await f.waitFor(() => f.posts.length === 1, 8000, "the failure");
+    assert.equal(f.posts[0].runId, "w1"); assert.ok(!/EPERM|error:/.test(f.out), f.out);
+  } finally { await f.close(); }
+});

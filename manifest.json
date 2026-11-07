@@ -66,8 +66,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 64953,
-   "sha256": "b8a675d9d27162cb702a396cc08b43cdb43438c049686dce6b58d0f20d7fb68c",
+   "bytes": 65278,
+   "sha256": "bb1def3af7aa7e5bf8b21d2eb8b3062e7fd1169e9d630c9e4e0437c69b4c9ff5",
    "targets": [
     "macos",
     "linux",
