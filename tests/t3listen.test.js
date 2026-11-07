@@ -76,7 +76,7 @@ test("restart catch-up: any thread in the window (busy too), not only END[t.stat
   const end = src.indexOf("afterSnapshotListen(", start);
   const block = src.slice(start, end);
   assert.ok(block.includes("catchUpThreads("), block);
-  assert.ok(block.includes("reportEnd(ep, t, null, { since })"), block);
+  assert.ok(block.includes("reportEnd(ep, t, null, { since, failedSince })"), block);
   assert.ok(!block.includes("END[t.status]"), block);
   assert.ok(!block.includes("!isBusy(t)"), block); // failed ends must still report when the thread is busy
   assert.ok(!/\b36e5\b/.test(block) && !block.includes("3600000"), block); // no hour cap; buildEnd skips completedAt < since
@@ -487,14 +487,15 @@ test("catchUpSince: back to the last connection by default; catchUpMinutes caps 
   assert.equal(l.catchUpSince(lastAlive, start, 600), lastAlive - 120000, "a cap wider than the outage changes nothing");
   assert.equal(l.catchUpSince(0, start, 2), 0);
 });
+const fakeT3 = require("./fake-t3");
 test("repeatCheck: the same thread and error inside the window is held; the next sent one counts what was held", () => {
   const h = 3600e3, t0 = Date.parse("2026-11-03T10:00:00Z");
   const fail = (runId, error) => ({ event: "thread.failed", threadId: "t1", runId, error });
-  let r = l.repeatCheck(undefined, fail("r1", "Provider error 503 (req 9f8e7d6c5b4a)"), t0, 6 * h);
+  let r = l.repeatCheck(undefined, fail("r1", "Provider error 503 (req 9f8e7d6c5b4a) at 2026-11-03T10:00:00Z"), t0, 6 * h);
   assert.equal(r.hold, false); assert.equal(r.repeats, undefined);
-  r = l.repeatCheck(r.rec, fail("r2", "provider error 502 (req 0a1b2c3d4e5f)"), t0 + h, 6 * h);
-  assert.equal(r.hold, true, "numbers and ids don't make an error different"); assert.equal(r.rec.held, 1);
-  r = l.repeatCheck(r.rec, fail("r3", "Provider error 500 (req 77aa88bb99cc)"), t0 + 2 * h, 6 * h);
+  r = l.repeatCheck(r.rec, fail("r2", "provider error 503 (req 0a1b2c3d4e5f) at 2026-11-03T11:00:07Z"), t0 + h, 6 * h);
+  assert.equal(r.hold, true, "request ids and timestamps don't make an error different"); assert.equal(r.rec.held, 1);
+  r = l.repeatCheck(r.rec, fail("r3", "Provider error 503 (req 77aa88bb99cc) at 2026-11-03T12:00:00Z"), t0 + 2 * h, 6 * h);
   assert.equal(r.hold, true); assert.equal(r.rec.held, 2);
   assert.equal(l.repeatCheck(r.rec, fail("r1", "Provider error 503 (req 9f8e7d6c5b4a)"), t0 + 3 * h, 6 * h).hold, false, "the same run resent after a restart is not a repeat");
   const other = l.repeatCheck(r.rec, fail("r4", "context window exceeded"), t0 + 3 * h, 6 * h);
@@ -502,11 +503,25 @@ test("repeatCheck: the same thread and error inside the window is held; the next
   const later = l.repeatCheck(r.rec, fail("r5", "Provider error 503 (req 1)"), t0 + 7 * h, 6 * h);
   assert.equal(later.hold, false, "after the window the same error is sent again"); assert.equal(later.repeats.repeatsSuppressed, 2);
 });
+test("repeatCheck: a status code is a difference; a usage limit that wasn't set to resume is never held", () => {
+  const h = 3600e3, t0 = Date.parse("2026-11-07T00:00:00Z");
+  const sent = l.repeatCheck(undefined, { threadId: "t", runId: "a", error: "Provider returned HTTP 503" }, t0, 6 * h);
+  assert.equal(l.repeatCheck(sent.rec, { threadId: "t", runId: "b", error: "Provider returned HTTP 401" }, t0 + h, 6 * h).hold, false, "401 after 503 is a new problem");
+  assert.notEqual(l.failureKey({ error: "HTTP 503" }), l.failureKey({ error: "HTTP 401" }));
+  assert.equal(l.failureKey({ error: "Rate limited until 5:00 PM, retry in 12000ms" }), l.failureKey({ error: "Rate limited until 10:30 am, retry in 30000ms" }), "clock times and long numbers don't count");
+  const limit = (runId, autoResumeSet, resets) => ({ threadId: "t", runId, error: `You've hit your usage limit. Resets at ${resets}`, usageLimit: true, autoResumeSet });
+  const armed = l.repeatCheck(undefined, limit("u1", true, "5:00 AM"), t0, 6 * h);
+  assert.equal(l.repeatCheck(armed.rec, limit("u2", true, "10:00 AM"), t0 + 5 * h, 6 * h).hold, true, "a second stop that resumes on its own needs nothing from you");
+  const notArmed = l.repeatCheck(armed.rec, limit("u2", false, "10:00 AM"), t0 + 5 * h, 6 * h);
+  assert.equal(notArmed.hold, false, "a stop that won't resume on its own needs you");
+  assert.equal(l.repeatCheck(notArmed.rec, limit("u3", false, "3:00 PM"), t0 + 5.5 * h, 6 * h).hold, false, "and so does the next one");
+});
 test("failure waves: the wait restarts with each failure but never past the cap; a batch lists every failure", () => {
   const t0 = 1e12;
   assert.equal(l.waveDelay(t0, t0, 20000, 120000), 20000);
   assert.equal(l.waveDelay(t0, t0 + 110000, 20000, 120000), 10000);
   assert.equal(l.waveDelay(t0, t0 + 130000, 20000, 120000), 0);
+  assert.equal(l.waveDelay(t0, t0, 3e9, 4e9), 2147483647, "never longer than a timer can wait");
   const f = (n, at) => ({ event: "thread.failed", kind: "thread-failed", machine: "m", threadId: `t${n}`, title: `Thread ${n}`, project: "p", runId: `r${n}`, status: "failed",
     error: "boom", completedAt: at, text: "x", eventId: "e", sentAt: "s", usageLimit: n === 2 ? true : undefined });
   const b = l.batchEvent([f(1, "2026-11-03T10:00:05Z"), f(2, "2026-11-03T10:00:01Z"), f(3, "2026-11-03T10:00:09Z")], "m");
@@ -519,8 +534,99 @@ test("failure waves: the wait restarts with each failure but never past the cap;
   assert.match(text, /- "Thread 2" \(p\): boom \(usage limit, not auto-resumed\)/);
   assert.match(l.summary({ ...f(4, "2026-11-03T10:00:00Z"), completedAtLocal: "now", repeatsSuppressed: 3, repeatsSince: "2026-11-03T04:00:00Z" }), /3 more failure\(s\) of this thread with the same error were held back since/);
 });
-test("failure waves and repeats are off by default: a failure is delivered as before", () => {
-  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
-  const body = src.slice(src.indexOf("function holdFailure"), src.indexOf("async function flushWave"));
-  assert.ok(body.indexOf("C.repeatFailureMs > 0") < body.indexOf("C.failureWaveMs > 0") && body.includes("return false"), body);
+test("retry queue full: a batch keeps each failure it carries in listen-state.json, and they come back one by one", () => {
+  const st = { sent: {}, finished: { r1: { threadId: "a", at: 1, e: { event: "thread.failed", runId: "r1" } }, r2: { threadId: "b", at: 1, e: { event: "thread.failed", runId: "r2" } } } };
+  const q = Array.from({ length: l.MAX_RETRY_QUEUE }, (_, i) => ({ e: { event: "x", runId: `q${i}` } }));
+  const batch = { e: { event: "thread.failed.batch", failures: [{ runId: "r1" }, { runId: "r2" }, { runId: "gone" }] }, rounds: 3, since: 5 };
+  assert.equal(l.keepForRetry(q, st, batch), "parked");
+  assert.deepEqual(Object.keys(st.finished.r1.parked), ["thread.failed"]); assert.equal(st.finished.r1.parked["thread.failed"].e, st.finished.r1.e);
+  assert.equal(l.refillFromState([], st, 9), 2);
+  assert.equal(l.keepForRetry(q, { sent: {}, finished: {} }, batch), "dropped", "nothing saved to keep");
+});
+test("settingsLine: status names the optional listener settings that are on", () => {
+  assert.equal(l.settingsLine({}), "defaults");
+  assert.equal(l.settingsLine({ catchUpMinutes: 2, failureWaveSeconds: 20, repeatFailureHours: 6 }), "catch-up of finishes and cancels capped at 2 min, failure waves 20s (up to 120s), repeat holds 6h");
+});
+const isoNow = () => new Date().toISOString();
+const busyT = (id, runId) => ({ id, title: `Thread ${id}`, status: "running", activeRunId: runId, latestRunId: runId });
+const failedT = (id, runId, extra = {}) => ({ id, title: `Thread ${id}`, status: "failed", activeRunId: null, latestRunId: runId, ...extra });
+const failRun = (id, extra = {}) => ({ id, status: "failed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow(), ...extra });
+const errItem = (runId, text) => ({ type: "error", runId, text });
+test("failure waves, live: off by default, a failure is posted once as a plain thread.failed", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => f.posts.length === 1, 8000, "the failure");
+    await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId, e.error]), [["thread.failed", "r1", "Provider error 503"]]);
+  } finally { await f.close(); }
+});
+test("failure waves, live: a reconnect while a wave is open doesn't send the failure twice", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 4 });
+  try {
+    f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => !!f.state() && !!(f.state().finished.r1 || {}).e, 8000, "the failure to be held in the wave");
+    f.dropSockets();
+    await f.waitFor(() => f.count(/connected to T3/) === 2 && f.count(/watching 1 threads/) === 2, 8000, "the reconnect");
+    await f.waitFor(() => f.posts.length >= 1, 9000, "the wave to be sent");
+    await fakeT3.sleep(500);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId]), [["thread.failed", "r1"]]);
+  } finally { await f.close(); }
+});
+test("failure waves, live: two failures close together are one batch; a restart while it is open sends it once", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 3 });
+  try {
+    for (const id of ["A", "B"]) f.setThread(busyT(id, `${id}1`), { runs: [{ id: `${id}1`, status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 2 threads/.test(f.out), 8000, "first snapshot");
+    for (const id of ["A", "B"]) f.update(failedT(id, `${id}1`), { runs: [failRun(`${id}1`)], turnItems: [errItem(`${id}1`, `boom ${id}`)] });
+    await f.waitFor(() => { const s = f.state(); return !!s && !!(s.finished.A1 || {}).e && !!(s.finished.B1 || {}).e; }, 8000, "both failures to be saved");
+    await f.stop(); assert.deepEqual(f.posts, [], "nothing was sent before the restart");
+    f.start();
+    await f.waitFor(() => f.posts.length >= 1, 9000, "the batch after the restart");
+    await fakeT3.sleep(800);
+    assert.equal(f.posts.length, 1);
+    assert.equal(f.posts[0].event, "thread.failed.batch"); assert.equal(f.posts[0].count, 2);
+    assert.deepEqual(f.posts[0].failures.map((x) => x.runId).sort(), ["A1", "B1"]);
+    assert.equal(f.state().finished.A1.e, undefined, "each run is marked delivered");
+  } finally { await f.close(); }
+});
+test("catch-up, live: catchUpMinutes caps finishes, but a failure from the outage is still sent and its usage limit armed", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    require("fs").writeFileSync(require("path").join(f.dir, "autoresume.json"), JSON.stringify({ projects: ["proj"] }));
+    const reset = new Date(Date.now() + 3600e3).toISOString();
+    f.setThread(failedT("F", "f1", { usageLimitResetAt: reset, lastErrorClass: "usage_limit" }), { runs: [failRun("f1", { lastErrorClass: "usage_limit", usageLimitResetAt: reset })], turnItems: [errItem("f1", "You've hit your usage limit")] });
+    f.setThread({ id: "G", title: "Thread G", status: "idle", activeRunId: null, latestRunId: "g1" }, { runs: [{ id: "g1", status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow() }], turnItems: [{ type: "assistant_message", runId: "g1", text: "Done." }] });
+    await fakeT3.sleep(50);
+    f.start();
+    await f.waitFor(() => f.count(/watching 2 threads/) === 1 && f.posts.length >= 1, 9000, "catch-up");
+    await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId, e.usageLimit, e.autoResumeSet]), [["thread.failed", "f1", true, true]], "the finish is capped, the failure is not");
+    assert.deepEqual(f.commands.map((c) => [c.payload.type, c.payload.limitRecovery && c.payload.limitRecovery.runId]), [["thread.metadata.update", "f1"]]);
+  } finally { await f.close(); }
+});
+test("repeat holds, live: a held count survives a restart after the window and rides on the next sent failure", async () => {
+  const f = await fakeT3.startFake({ repeatFailureHours: 1.5 / 3600 });
+  try {
+    const fail = async (runId, n) => {
+      f.update(busyT("A", runId), { runs: [{ id: runId, status: "running", startedAt: isoNow() }], turnItems: [] });
+      await fakeT3.sleep(150);
+      f.update(failedT("A", runId), { runs: [failRun(runId)], turnItems: [errItem(runId, "Provider error 503 (req 9f8e7d6c5b4a)")] });
+      await f.waitFor(() => !!f.state() && !!f.state().finished[runId], 8000, `failure ${n}`);
+    };
+    f.setThread(busyT("A", "r0"), { runs: [{ id: "r0", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    await fail("r1", 1); await f.waitFor(() => f.posts.length === 1, 8000, "the first failure");
+    await fail("r2", 2); await f.waitFor(() => /held back thread\.failed/.test(f.out), 8000, "the repeat to be held");
+    await fakeT3.sleep(1800); await f.stop(); f.start();
+    await f.waitFor(() => f.count(/watching 1 threads/) === 2, 8000, "the restart");
+    await fail("r3", 3); await f.waitFor(() => f.posts.length === 2, 8000, "the third failure");
+    assert.deepEqual(f.posts.map((e) => [e.runId, e.repeatsSuppressed]), [["r1", undefined], ["r3", 1]]);
+  } finally { await f.close(); }
 });

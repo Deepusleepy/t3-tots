@@ -160,6 +160,11 @@ const MAX_RETRY_QUEUE = 100;
 const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.finished[e.runId] : null);
 function keepForRetry(q, st, item) {
   if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
+  if (item.e.failures) {
+    let kept = 0;
+    for (const f of item.e.failures) { const s = st.finished[f.runId]; if (s && s.e) { (s.parked = s.parked || {})["thread.failed"] = { e: s.e, rounds: item.rounds || 0, since: item.since }; kept++; } }
+    return kept ? "parked" : "dropped";
+  }
   const s = stateFor(st, item.e); if (!s) return "dropped";
   (s.parked = s.parked || {})[item.e.event] = { e: item.e, rounds: item.rounds || 0, since: item.since }; return "parked";
 }
@@ -184,14 +189,25 @@ function retryLater(item) {
 // after the first). One failure alone is sent as a plain thread.failed; two or more are sent once as thread.failed.batch.
 // repeatFailureHours: a thread that fails again with the same error as its last sent failure within that window is held back
 // (counted in listen-state.json "failRepeat"); the next failure that is sent carries repeatsSuppressed and repeatsSince.
-const failureKey = (e) => String(e.error || (e.usageLimit ? "usage limit" : e.status || "")).toLowerCase().replace(/[0-9a-f]{8,}|\d+/g, "#").replace(/\s+/g, " ").trim().slice(0, 200);
+// "Same error": ids, timestamps, clock times and numbers of 4+ digits are ignored, but status codes like 401 and 503 count.
+// A usage-limit stop that won't resume on its own (autoResumeSet not true) is never held: it needs the user.
+const failureKey = (e) => {
+  if (e.usageLimit) return e.autoResumeSet === true ? "usage limit, resumes at reset" : null;
+  return String(e.error || e.status || "").toLowerCase()
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, "#id")
+    .replace(/\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(z|[+-]\d{2}:?\d{2})?/g, "#time")
+    .replace(/\b\d{1,2}:\d{2}(:\d{2})?(\s?[ap]\.?m\b\.?)?/g, "#time")
+    .replace(/\b(?=[a-f]*\d)[0-9a-f]{8,}\b/g, "#id")
+    .replace(/\d{4,}/g, "#n")
+    .replace(/\s+/g, " ").trim().slice(0, 200);
+};
 function repeatCheck(rec, e, now, windowMs) { // -> { hold, rec }: rec is the new failRepeat entry for this thread
   const err = failureKey(e);
   if (rec && rec.runId === e.runId) return { hold: false, rec }; // the same run again (resent after a restart), not a repeat
-  if (rec && rec.err === err && now - rec.at < windowMs) return { hold: true, rec: { ...rec, held: (rec.held || 0) + 1 } };
+  if (err !== null && rec && rec.err === err && now - rec.at < windowMs) return { hold: true, rec: { ...rec, held: (rec.held || 0) + 1 } };
   return { hold: false, rec: { err, at: now, runId: e.runId }, ...(rec && rec.held ? { repeats: { repeatsSuppressed: rec.held, repeatsSince: new Date(rec.at).toISOString() } } : {}) };
 }
-const waveDelay = (opened, now, quietMs, maxMs) => Math.max(0, Math.min(quietMs, opened + maxMs - now));
+const waveDelay = (opened, now, quietMs, maxMs) => Math.max(0, Math.min(quietMs, opened + maxMs - now, 2147483647)); // setTimeout's limit
 const BATCH_DROP = new Set(["event", "kind", "machine", "text", "sentAt", "eventId"]);
 function batchEvent(items, machine) { // thread.failed events -> one thread.failed.batch
   const at = items.map((e) => e.completedAt).sort();
@@ -202,6 +218,7 @@ function batchEvent(items, machine) { // thread.failed events -> one thread.fail
 let wave = null;
 function holdFailure(e) { // -> true when the failure was held back or queued in a wave (it is sent later or not at all)
   const now = Date.now();
+  if (wave && wave.items.some((x) => x.runId === e.runId)) return true;
   if (C.repeatFailureMs > 0) {
     const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs); S.failRepeat[e.threadId] = r.rec; saveState();
     if (r.hold) { log(`held back thread.failed "${e.title}" ${ref(e).slice(-12)}: same error as its last sent failure (${r.rec.held} held)`); markDelivered(e); return true; }
@@ -217,9 +234,10 @@ async function flushWave() {
   const w = wave; wave = null; if (!w || !w.items.length) return;
   return deliver(w.items.length === 1 ? w.items[0] : batchEvent(w.items, C.machine), { now: true });
 }
+function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",")}`).digest("hex").slice(0, 16); }
 async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran)
   if (e.event === "thread.failed" && !opts.now && holdFailure(e)) return true;
-  cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",")}`).digest("hex").slice(0, 16);
+  stamp(e);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
     const r = await post(e);
@@ -234,7 +252,7 @@ async function deliver(e, opts = {}) { // opts.now: send without the failure-wav
 setInterval(async () => {
   const q = queue; queue = [];
   for (const item of q) {
-    const { e } = item; item.rounds++; e.sentAt = new Date().toISOString();
+    const { e } = item; item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
     const r = await post(e);
     if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
     log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
@@ -309,7 +327,7 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   const delegated = t.id.startsWith(DELEGATED);
   if (delegated && event !== "thread.failed") return { skip: "sub-task thread that didn't fail" };
   if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
-  if (opts.since && endedAt(run) < opts.since) return { skip: "ended before the listener's last run" };
+  if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run" };
   const items = p.turnItems || [], txt = (x) => x.text ?? x.content ?? (x.message && x.message.text);
   const said = items.filter((x) => x.type === "assistant_message" && typeof txt(x) === "string" && txt(x).trim());
   const reply = said.filter((x) => x.runId === run.id).at(-1) || said.at(-1);
@@ -427,7 +445,8 @@ async function checkFinish(ep, t, prev) {
   await reportEnd(ep, t, prev.activeRunId, { live: true });
 }
 function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k];
-  for (const [k, r] of Object.entries(S.failRepeat)) if (!(r.at > Date.now() - C.repeatFailureMs)) delete S.failRepeat[k]; }
+  const keep = Math.max(14 * 864e5, C.repeatFailureMs);
+  for (const [k, r] of Object.entries(S.failRepeat)) if (!(C.repeatFailureMs > 0) || !(r.at > Date.now() - keep)) delete S.failRepeat[k]; }
 // lastAlive is a connected-session watermark. Do not advance it while the socket is down, or catch-up
 // `since` shrinks to ~2 min and finishes from a longer outage are skipped.
 let listening = false, liveGen = 0;
@@ -438,10 +457,12 @@ const tickLastAlive = (open, lastAlive, now = Date.now()) => open ? now : lastAl
 const afterSnapshotListen = ({ socketOpen, gen, liveGen: g, lastAlive, now = Date.now() }) =>
   (socketOpen && gen === g) ? { listening: true, lastAlive: now } : { listening: false, lastAlive };
 // catchUpSince: report run ends after this time on restart. lastAlive minus 2 minutes, never earlier than catchUpMinutes before
-// the start when listen.json sets it; 0 = first run with this feature, nothing to catch up on
+// the start when listen.json sets it; 0 = first run with this feature, nothing to catch up on. The cap is for finishes and
+// cancels only: failures are caught up back to lastAlive, so a usage-limit stop from the outage still gets Resume at reset armed.
 const catchUpSince = (lastAlive, start, catchUpMinutes) => { const s = lastAlive ? lastAlive - 120000 : 0;
   return s && catchUpMinutes !== null && catchUpMinutes !== undefined ? Math.max(s, start - catchUpMinutes * 60000) : s; };
 const START = Date.now();
+let resentSaved = false;
 const catchUpThreads = (threads, since) => (threads || []).filter((t) => Date.parse(t.updatedAt || 0) > since); // busy too: failed always fires
 setInterval(() => {
   if (DRY || !C) return;
@@ -482,11 +503,11 @@ async function onItem(ep, v, full, ctx = {}) {
     for (const t of v.snapshot.threads || []) noteRun(t);
     if (!DRY) {
       pruneFinished();
-      for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); // not delivered before the restart
-      const since = catchUpSince(S.lastAlive, START, C.catchUpMinutes); // 0 on the first run with this feature: nothing to catch up on
+      if (!resentSaved) { resentSaved = true; for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); } // not delivered before the restart
+      const since = catchUpSince(S.lastAlive, START, C.catchUpMinutes), failedSince = catchUpSince(S.lastAlive, START, null); // 0 on the first run with this feature: nothing to catch up on
       // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
       // look at busy threads too so a failed end from downtime is still reported (failed always fires)
-      if (since) for (const t of catchUpThreads(v.snapshot.threads, since)) await reportEnd(ep, t, null, { since });
+      if (failedSince) for (const t of catchUpThreads(v.snapshot.threads, failedSince)) await reportEnd(ep, t, null, { since, failedSince });
       const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
       listening = next.listening;
       if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
@@ -597,6 +618,14 @@ function serviceArgs() { // what the autostart entry runs, to tell whether it wa
   } catch { return ""; }
 }
 // approvals are sent when listen.json has "approvals": true OR the service runs with --approvals
+// the optional reliability settings listen.json turns on, for status
+function settingsLine(c) {
+  const r = reliability(c || {}), on = [];
+  if (r.catchUpMinutes !== null) on.push(`catch-up of finishes and cancels capped at ${r.catchUpMinutes} min`);
+  if (r.failureWaveMs > 0) on.push(`failure waves ${r.failureWaveMs / 1000}s (up to ${r.failureWaveMaxMs / 1000}s)`);
+  if (r.repeatFailureMs > 0) on.push(`repeat holds ${+(r.repeatFailureMs / 3600e3).toFixed(4)}h`);
+  return on.length ? on.join(", ") : "defaults";
+}
 const approvalsLine = (file, flag) => (file || flag ? `on (${[file && "listen.json", flag && "installed with --approvals"].filter(Boolean).join(" and ")})` : "off");
 function status() {
   let inst = "not installed", running = false, pid = null;
@@ -606,7 +635,7 @@ function status() {
   if (!running) { const p = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (p) try { process.kill(p, 0); running = true; pid = p; } catch {} }
   const st = readJSON(STATE, { sent: {} }), open = Object.values(st.sent || {}).filter((s) => !s.skipped).length;
   let tail = ""; try { tail = fs.readFileSync(LOG, "utf8").trim().split("\n").slice(-3).join("\n"); } catch {}
-  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
+  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nlistener settings: ${settingsLine(readJSON(CONF, {}) || {})}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
 }
 async function test() {
   C = loadConfig(); const e = { event: "test", machine: C.machine, threadId: "test", title: "t3listen test", project: null, requestId: "test-" + Date.now(), kind: "test" };
@@ -651,5 +680,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, catchUpSince, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, reliability, failureKey, repeatCheck, waveDelay, batchEvent };
+if (require.main !== module) module.exports = { keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, catchUpSince, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
