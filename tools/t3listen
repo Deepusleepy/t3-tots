@@ -119,10 +119,10 @@ function requestInfo(p, r) {
   return o;
 }
 function summary(e) {
-  if (e.failures) return `T3 failure wave on ${e.machine}: ${e.count} threads failed between ${e.firstAtLocal} and ${e.lastAtLocal}\n` + e.failures.map((f) => `- "${f.title}"${f.project ? ` (${f.project})` : ""}: ${f.error || f.status}${f.usageLimit ? (f.autoResumeSet ? " (usage limit, auto-resume set)" : " (usage limit, not auto-resumed)") : ""}${f.repeatsSuppressed ? ` (${f.repeatsSuppressed} earlier same failure(s) held back)` : ""}`).join("\n");
+  if (e.failures) return `T3 failure wave on ${e.machine}: ${e.count} threads failed between ${e.firstAtLocal} and ${e.lastAtLocal}\n` + e.failures.map((f) => `- "${f.title}"${f.project ? ` (${f.project})` : ""}: ${f.error || f.status}${f.usageLimit ? (f.autoResumeSet ? " (usage limit, auto-resume set)" : " (usage limit, not auto-resumed)") : ""}${f.repeatsSuppressed ? ` (${f.repeatsSuppressed} repeat(s) of its previous failure held back)` : ""}`).join("\n");
   const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
   if (END_WORD[e.event]) { const d = e.durationSec, dur = d == null ? "" : ` after ${d >= 3600 ? `${Math.floor(d / 3600)}h ${Math.round((d % 3600) / 60)}m` : d >= 60 ? `${Math.round(d / 60)}m` : `${d}s`}`;
-    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.repeatsSuppressed ? `\n${e.repeatsSuppressed} more failure(s) of this thread with the same error were held back since ${localTime(e.repeatsSince)}.` : ""}${e.usageLimit ? (e.autoResumeSet ? `\nUsage limit: auto-resume is set for ${e.resumeAtLocal || localTime(e.resumeAt)}.` : `\nUsage limit: not auto-resumed (${e.autoResumeNote || "unknown"}).`) : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
+    return `T3 ${e.delegated ? "sub-task " : ""}thread ${where} ${END_WORD[e.event]} at ${e.completedAtLocal}${dur}${e.error ? `\nError: ${e.error}` : ""}${e.repeatsSuppressed ? `\n${e.repeatsSuppressed} repeat(s) of this thread's previous failure were held back since ${localTime(e.repeatsSince)}.` : ""}${e.usageLimit ? (e.autoResumeSet ? `\nUsage limit: auto-resume is set for ${e.resumeAtLocal || localTime(e.resumeAt)}.` : `\nUsage limit: not auto-resumed (${e.autoResumeNote || "unknown"}).`) : ""}${e.lastReply ? `\nLast reply: ${e.lastReply}` : ""}`; }
   if (e.event === "request.resolved") return `T3 ${e.kind === "user_input" ? "question" : "approval"} in ${where} is closed${e.answeredHere ? " (answered from chat)" : ""}: ${e.status}${e.answers ? " - " + Object.values(e.answers).map((v) => (Array.isArray(v) ? v.join(", ") : v)).join("; ") : e.decision ? " - " + e.decision : ""}`;
   if (e.questions) return `T3 question in ${where}:\n${e.context ? `Context: ${e.context}\n` : ""}` + e.questions.map((q) => `${q.question}${q.multiSelect ? " (pick one or more)" : ""}\n` + q.options.map((x, i) => `  ${i + 1}. ${x.label}`).join("\n") + (q.allowCustomAnswer ? "\n  (or type an answer)" : "")).join("\n");
   return `T3 approval in ${where}: ${e.approval.requestKind}${e.approval.prompt ? " - " + e.approval.prompt : ""}\n` + e.approval.options.map((x) => `  - ${x.label}`).join("\n");
@@ -190,7 +190,7 @@ function retryLater(item) {
 // repeatFailureHours: a thread that fails again with the same error as its last sent failure within that window is held back
 // (counted in listen-state.json "failRepeat"); the next failure that is sent carries repeatsSuppressed and repeatsSince.
 // "Same error": ids, timestamps, clock times and numbers of 4+ digits are ignored, but status codes like 401 and 503 count.
-// A usage-limit stop that won't resume on its own (autoResumeSet not true) is never held: it needs the user.
+// A usage-limit stop that won't resume on its own (autoResumeSet not true, or any sub-task's) is never held: it needs the user.
 const failureKey = (e) => {
   if (e.usageLimit) return e.autoResumeSet === true ? "usage limit, resumes at reset" : null;
   return String(e.error || e.status || "").toLowerCase()
@@ -201,8 +201,8 @@ const failureKey = (e) => {
     .replace(/\d{4,}/g, "#n")
     .replace(/\s+/g, " ").trim().slice(0, 200);
 };
-function repeatCheck(rec, e, now, windowMs) { // -> { hold, rec }: rec is the new failRepeat entry for this thread
-  const err = failureKey(e);
+function repeatCheck(rec, e, now, windowMs, needsYou = false) { // -> { hold, rec }: rec is the new failRepeat entry for this thread
+  const err = needsYou ? null : failureKey(e);
   if (rec && rec.runId === e.runId) return { hold: false, rec }; // the same run again (resent after a restart), not a repeat
   if (err !== null && rec && rec.err === err && now - rec.at < windowMs) return { hold: true, rec: { ...rec, held: (rec.held || 0) + 1 } };
   return { hold: false, rec: { err, at: now, runId: e.runId }, ...(rec && rec.held ? { repeats: { repeatsSuppressed: rec.held, repeatsSince: new Date(rec.at).toISOString() } } : {}) };
@@ -210,17 +210,17 @@ function repeatCheck(rec, e, now, windowMs) { // -> { hold, rec }: rec is the ne
 const waveDelay = (opened, now, quietMs, maxMs) => Math.max(0, Math.min(quietMs, opened + maxMs - now, 2147483647)); // setTimeout's limit
 const BATCH_DROP = new Set(["event", "kind", "machine", "text", "sentAt", "eventId"]);
 function batchEvent(items, machine) { // thread.failed events -> one thread.failed.batch
-  const at = items.map((e) => e.completedAt).sort();
+  const at = items.map((e) => e.completedAt).sort((a, b) => Date.parse(a) - Date.parse(b));
   return { event: "thread.failed.batch", kind: "thread-failed-batch", machine, title: `${items.length} threads`, count: items.length,
     firstAt: at[0], lastAt: at.at(-1), firstAtLocal: localTime(at[0]), lastAtLocal: localTime(at.at(-1)),
     failures: items.map((e) => Object.fromEntries(Object.entries(e).filter(([k]) => !BATCH_DROP.has(k)))) };
 }
 let wave = null;
-function holdFailure(e) { // -> true when the failure was held back or queued in a wave (it is sent later or not at all)
+function holdFailure(e, needsYou) { // -> true when the failure was held back or queued in a wave (it is sent later or not at all)
   const now = Date.now();
   if (wave && wave.items.some((x) => x.runId === e.runId)) return true;
   if (C.repeatFailureMs > 0) {
-    const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs);
+    const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs, needsYou);
     if (r.repeats) Object.assign(e, r.repeats);
     S.failRepeat[e.threadId] = r.rec; saveState();
     if (r.hold) { log(`held back thread.failed "${e.title}" ${ref(e).slice(-12)}: same error as its last sent failure (${r.rec.held} held)`); markDelivered(e); return true; }
@@ -236,8 +236,8 @@ async function flushWave() {
   return deliver(w.items.length === 1 ? w.items[0] : batchEvent(w.items, C.machine), { now: true });
 }
 function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",")}`).digest("hex").slice(0, 16); }
-async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran)
-  if (e.event === "thread.failed" && !opts.now && holdFailure(e)) return true;
+async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran); opts.needsYou: never hold it as a repeat
+  if (e.event === "thread.failed" && !opts.now && holdFailure(e, opts.needsYou)) return true;
   stamp(e);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   for (let i = 0; i < 3; i++) {
@@ -443,7 +443,7 @@ async function reportEnd(ep, t, runId, opts = {}) {
   if (S.finished[e.runId]) return;
   if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, run); if (a) Object.assign(e, { usageLimit: true }, a); }
   cleanEvent(e); // before it is saved: listen-state.json never holds a raw title, project or reply
-  S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e);
+  S.finished[e.runId] = { threadId: t.id, at: Date.now(), e }; saveState(); await deliver(e, { needsYou: e.delegated && !!usageLimitFields(t, run) });
 }
 async function checkFinish(ep, t, prev) {
   if (!prev || !isActive(prev)) return; // only a run that we saw running or starting
@@ -681,7 +681,7 @@ async function previewFinish() { // print the run-end event the listener would s
     if (a) Object.assign(e, a, a.resumeAt ? { resumeAtLocal: localTime(a.resumeAt) } : {});
   }
   cleanEvent(e); e.text = summary(e);
-  if (e.event === "thread.failed" && C.repeatFailureMs > 0 && repeatCheck(((readJSON(STATE, {}) || {}).failRepeat || {})[t.id], e, Date.now(), C.repeatFailureMs).hold) console.log("would hold back: the same error as this thread's last sent failure, inside repeatFailureHours");
+  if (e.event === "thread.failed" && C.repeatFailureMs > 0 && repeatCheck(((readJSON(STATE, {}) || {}).failRepeat || {})[t.id], e, Date.now(), C.repeatFailureMs, e.delegated && !!usageLimitFields(t, run)).hold) console.log("would hold back: the same error as this thread's last sent failure, inside repeatFailureHours");
   console.log("PREVIEW payload (not sent) " + JSON.stringify(e, null, 1));
 }
 

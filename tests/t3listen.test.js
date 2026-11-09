@@ -532,7 +532,12 @@ test("failure waves: the wait restarts with each failure but never past the cap;
   const text = l.summary(b);
   assert.match(text, /^T3 failure wave on m: 3 threads failed between /);
   assert.match(text, /- "Thread 2" \(p\): boom \(usage limit, not auto-resumed\)/);
-  assert.match(l.summary({ ...f(4, "2026-11-03T10:00:00Z"), completedAtLocal: "now", repeatsSuppressed: 3, repeatsSince: "2026-11-03T04:00:00Z" }), /3 more failure\(s\) of this thread with the same error were held back since/);
+  const carried = l.summary({ ...f(4, "2026-11-03T10:00:00Z"), completedAtLocal: "now", error: "context window exceeded", repeatsSuppressed: 3, repeatsSince: "2026-11-03T04:00:00Z" });
+  assert.match(carried, /3 repeat\(s\) of this thread's previous failure were held back since/);
+  assert.doesNotMatch(carried, /same error/, "the count can ride on a failure with a different error");
+  assert.match(l.summary(l.batchEvent([{ ...f(5, "2026-11-03T10:00:00Z"), repeatsSuppressed: 2 }, f(6, "2026-11-03T10:00:01Z")], "m")), /"Thread 5" \(p\): boom \(2 repeat\(s\) of its previous failure held back\)/);
+  const mixed = l.batchEvent([f(7, "2026-11-03T10:00:10Z"), f(8, "2026-11-03T10:00:09.500Z")], "m");
+  assert.deepEqual([mixed.firstAt, mixed.lastAt], ["2026-11-03T10:00:09.500Z", "2026-11-03T10:00:10Z"], "times are compared as instants, not as text");
 });
 test("retry queue full: a batch keeps each failure it carries in listen-state.json, and they come back one by one", () => {
   const st = { sent: {}, finished: { r1: { threadId: "a", at: 1, e: { event: "thread.failed", runId: "r1" } }, r2: { threadId: "b", at: 1, e: { event: "thread.failed", runId: "r2" } } } };
@@ -711,6 +716,25 @@ test("repeat holds, live: a usage limit set to resume is held when it repeats; o
     await fakeT3.sleep(300);
     assert.deepEqual(f.posts.map((e) => [e.runId, e.usageLimit, e.autoResumeSet]), [["u1", true, true], ["v1", true, false], ["v2", true, false]]);
     assert.deepEqual(f.commands.map((c) => c.payload.limitRecovery.runId), ["u1", "u2"], "both of U's stops were armed; V's never");
+  } finally { await f.close(); }
+});
+test("repeat holds, live: a sub-task's usage-limit stop is never held, since sub-tasks are never resumed on their own", async () => {
+  const f = await fakeT3.startFake({ repeatFailureHours: 6 });
+  try {
+    const S = "thread:delegated-task:S", reset = new Date(Date.now() + 3600e3).toISOString();
+    const limitFail = async (runId, resets) => {
+      f.update(busyT(S, runId), { runs: [{ id: runId, status: "running", startedAt: isoNow() }], turnItems: [] });
+      await fakeT3.sleep(150);
+      f.update(failedT(S, runId, { usageLimitResetAt: reset, lastErrorClass: "usage_limit" }), { runs: [failRun(runId, { lastErrorClass: "usage_limit", usageLimitResetAt: reset })], turnItems: [errItem(runId, `You've hit your usage limit. Resets at ${resets}`)] });
+      await f.waitFor(() => !!f.state() && !!f.state().finished[runId], 8000, `run ${runId}`);
+    };
+    f.setThread(busyT(S, "s0"), { runs: [], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    await limitFail("s1", "5:00 AM"); await f.waitFor(() => f.posts.length === 1, 8000, "the first stop");
+    await limitFail("s2", "10:00 AM"); await f.waitFor(() => f.posts.length === 2 || /held back thread\.failed/.test(f.out), 8000, "the second stop");
+    await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.runId, e.delegated]), [["s1", true], ["s2", true]]);
+    assert.deepEqual(f.commands, [], "sub-tasks are never armed");
   } finally { await f.close(); }
 });
 test("preview-finish: says when a failure would be held back as a repeat", async () => {
