@@ -515,6 +515,20 @@ test("filters: the README example keeps only finishes that need action and cance
   assert.equal(can("waiting for the watch"), null, "WAITING must be uppercase");
   assert.equal(l.filtersLine(EXAMPLE_FILTERS), "on (finished, cancelled)");
 });
+test("filters: the README example stays fast on a 64 KB reply full of dashes, markdown or one long line", () => {
+  const F = l.compileFilters(EXAMPLE_FILTERS), K = 64 * 1024;
+  const replies = { dashes: "-----\n".repeat(K / 6), table: "| --- | --- |\n".repeat(K / 14), markdown: " \t> * _ # -\n".repeat(K / 12),
+    longLine: "-".repeat(K), waiting: `WAITING ${"-".repeat(200)}\n`.repeat(K / 209), words: "no usage limit, nothing needs a decision. ".repeat(K / 42) };
+  for (const [name, text] of Object.entries(replies)) for (const event of ["thread.finished", "thread.cancelled"]) {
+    const t0 = process.hrtime.bigint(), d = l.filterDecision(F, event, text, 60000), ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 200, `${event} on the ${name} reply took ${ms.toFixed(0)} ms`); assert.equal(d.note, null);
+  }
+});
+test("docs: resolved false says the phone's question card stays open and t3ctl answer says NOT_PENDING", () => {
+  const read = (...p) => require("fs").readFileSync(path.join(__dirname, "..", ...p), "utf8");
+  assert.match(read("README.md").match(/^\| `resolved` \| `false` \|.*$/m)[0], /card stays[\s\S]*NOT_PENDING/);
+  assert.match(read("skills", "t3-phone-answers", "SKILL.md"), /With `resolved` off,[^\n]*card can outlive its question[^\n]*NOT_PENDING/);
+});
 test("filters: false turns an event off; bad settings are named", () => {
   const F = l.compileFilters({ finished: false, negations: [] });
   assert.match(l.filterSkip(F, "thread.finished", "STUCK"), /filters\.finished is false/); assert.equal(l.filterSkip(F, "thread.cancelled", "x"), null);
