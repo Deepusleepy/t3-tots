@@ -630,6 +630,27 @@ test("repeat holds, live: a held count survives a restart after the window and r
     assert.deepEqual(f.posts.map((e) => [e.runId, e.repeatsSuppressed]), [["r1", undefined], ["r3", 1]]);
   } finally { await f.close(); }
 });
+test("repeat holds, live: the failure that carries the held count keeps it when the listener crashes before sending it", async () => {
+  const f = await fakeT3.startFake({ repeatFailureHours: 1.5 / 3600 });
+  try {
+    const fail = async (runId) => {
+      f.update(busyT("A", runId), { runs: [{ id: runId, status: "running", startedAt: isoNow() }], turnItems: [] });
+      await fakeT3.sleep(150);
+      f.update(failedT("A", runId), { runs: [failRun(runId)], turnItems: [errItem(runId, "Provider error 503")] });
+      await f.waitFor(() => !!f.state() && !!f.state().finished[runId], 8000, `failure ${runId}`);
+    };
+    f.setThread(busyT("A", "r0"), { runs: [], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    await fail("r1"); await f.waitFor(() => f.posts.length === 1, 8000, "the first failure");
+    await fail("r2"); await f.waitFor(() => /held back thread\.failed/.test(f.out), 8000, "the repeat to be held");
+    await fakeT3.sleep(1800);
+    f.setHookStatus((e) => (e.event === "thread.failed" ? 400 : 200));
+    await fail("r3"); await f.waitFor(() => /webhook answered HTTP 400 for thread\.failed/.test(f.out), 8000, "the refused send");
+    await f.stop(); f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.length === 2, 8000, "the resend after the restart");
+    assert.deepEqual(f.posts.map((e) => [e.runId, e.repeatsSuppressed]), [["r1", undefined], ["r3", 1]]);
+  } finally { await f.close(); }
+});
 test("retry, live: a failure the webhook refused is kept across a crash and sent once after the restart", async () => {
   const f = await fakeT3.startFake();
   try {

@@ -220,9 +220,10 @@ function holdFailure(e) { // -> true when the failure was held back or queued in
   const now = Date.now();
   if (wave && wave.items.some((x) => x.runId === e.runId)) return true;
   if (C.repeatFailureMs > 0) {
-    const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs); S.failRepeat[e.threadId] = r.rec; saveState();
-    if (r.hold) { log(`held back thread.failed "${e.title}" ${ref(e).slice(-12)}: same error as its last sent failure (${r.rec.held} held)`); markDelivered(e); return true; }
+    const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs);
     if (r.repeats) Object.assign(e, r.repeats);
+    S.failRepeat[e.threadId] = r.rec; saveState();
+    if (r.hold) { log(`held back thread.failed "${e.title}" ${ref(e).slice(-12)}: same error as its last sent failure (${r.rec.held} held)`); markDelivered(e); return true; }
   }
   if (!(C.failureWaveMs > 0)) return false;
   if (!wave) wave = { items: [], opened: now, timer: null };
