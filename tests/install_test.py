@@ -10,6 +10,7 @@ FETCHER = re.search(r"````python\n(.*?)````", SKILL, re.S).group(1)
 MANIFEST = json.loads((ROOT / "manifest.json").read_text())
 TOOLS = [f for f in MANIFEST["files"] if f["kind"] == "tool"]
 sha = lambda b: hashlib.sha256(b).hexdigest()
+POSIX_MODES = os.name != "nt"
 
 
 def fetcher(tmp):
@@ -77,7 +78,7 @@ class Fetcher(unittest.TestCase):
         for name in ("t3ctl.cmd", "t3listen.cmd", "ui-press.applescript", "cleanup/scan.py", "report/report.py", "manifest.json", "VERSION"):
             self.assertTrue((self.dst / name).is_file(), name)
         self.assertFalse((self.dst / "tools").exists()); self.assertFalse((self.dst / "skills").exists())
-        self.assertTrue(os.stat(self.dst / "t3ctl").st_mode & stat.S_IXUSR)
+        if POSIX_MODES: self.assertTrue(os.stat(self.dst / "t3ctl").st_mode & stat.S_IXUSR)
         h = run(self.f, "hashes", "windows", dst=self.dst).stdout
         self.assertIn("  t3ctl.cmd\n", h); self.assertNotIn("tools/", h); self.assertNotIn("t3ui", h)
 
@@ -102,7 +103,7 @@ class Fetcher(unittest.TestCase):
         self.assertIn("  manifest.json\n", run(self.f, "hashes", "linux", dst=self.dst).stdout)
         if not shutil.which("curl"):
             self.skipTest("no curl")
-        sh = run(self.f, "emit", "macos", str(self.tmp / "mac"), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
+        sh = run(self.f, "emit", "macos", (self.tmp / "mac").as_posix(), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
         r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("files verified", r.stdout)
         mac = self.tmp / "mac"
@@ -118,7 +119,7 @@ class Fetcher(unittest.TestCase):
         if not shutil.which("curl"):
             self.skipTest("no curl")
         run(self.f, "box", "--from", str(ROOT), dst=self.dst)
-        sh = run(self.f, "emit", "linux", str(self.tmp / "lin"), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
+        sh = run(self.f, "emit", "linux", (self.tmp / "lin").as_posix(), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
         self.assertNotIn("t3ui", sh)
         r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
