@@ -217,7 +217,7 @@ function readPresence(platform = process.platform, exec = cp.execFileSync) {
       { encoding: "utf8", timeout: 2000, maxBuffer: 4096, stdio: ["ignore", "pipe", "ignore"] }));
   } catch { return null; } // unknown presence must not lose an away notification
 }
-const PRESENT_EVENTS = new Set(["request.opened", "request.resolved", "thread.finished", "thread.failed", "thread.cancelled", "thread.failed.batch"]);
+const PRESENT_EVENTS = new Set(["request.opened", "thread.finished", "thread.failed", "thread.cancelled", "thread.failed.batch"]);
 // Reading T3 output often has no keyboard/mouse input for several minutes; 60s treated that as away.
 const PRESENT_IDLE_SECONDS = 900;
 function presenceSettings(c) {
@@ -243,8 +243,15 @@ async function post(e, { presence = readPresence, send = fetch, config = C, stat
 }
 const ref = (e) => String(e.requestId || e.runId || "");
 function settleDelivery(state, e, suppressed = false) {
-  if (e.failures) { for (const f of e.failures) settleDelivery(state, { event: "thread.failed", runId: f.runId }, suppressed); return; }
-  if (e.runId && !e.requestId) { const f = state.finished[e.runId]; if (f) { delete f.e; delete f.parked; if (suppressed) f.suppressed = true; } return; }
+  if (e.failures) { for (const f of e.failures) settleDelivery(state, { event: "thread.failed", runId: f.runId, threadId: f.threadId }, suppressed); return; }
+  if (e.runId && !e.requestId) {
+    const f = state.finished[e.runId], threadId = e.threadId || (f && f.threadId);
+    // holdFailure records a candidate before posting. If presence suppresses it,
+    // do not let that unseen failure hold back the next failure while away.
+    if (suppressed && state.failRepeat?.[threadId]?.runId === e.runId) delete state.failRepeat[threadId];
+    if (f) { delete f.e; delete f.parked; if (suppressed) f.suppressed = true; }
+    return;
+  }
   const s = state.sent[e.requestId]; if (!s) return;
   if (suppressed && e.event === "request.opened") s.suppressed = true;
   if (s.parked) { delete s.parked[e.event]; if (!Object.keys(s.parked).length) delete s.parked; }
@@ -738,7 +745,7 @@ function settingsLine(c) {
   if (r.repeatFailureMs > 0) on.push(`repeat holds ${+(r.repeatFailureMs / 3600e3).toFixed(4)}h`);
   try {
     const p = presenceSettings(c || {});
-    if (p.suppressWhileActive) on.push(`macOS active-use suppression (${p.activeIdleSeconds / 60} min idle window)`);
+    if (p.suppressWhileActive) on.push(`macOS active-use suppression (${p.activeIdleSeconds / 60} min idle window)${process.platform === "darwin" ? "" : " (no effect on this OS)"}`);
   } catch (err) { on.push(`invalid presence setting: ${err.message}`); }
   return on.length ? on.join(", ") : "defaults";
 }

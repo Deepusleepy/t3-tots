@@ -1052,7 +1052,7 @@ test("webhook boundary suppresses all notification kinds while active, sends awa
   const state = { sent: {}, finished: {} };
   const send = async () => { sends++; return { ok: true, status: 200 }; };
   const config = { url: "https://example.com/events", headers: {}, ...l.presenceSettings({ suppressWhileActive: true }) };
-  for (const event of ["request.opened", "request.resolved", "thread.finished", "thread.failed", "thread.cancelled"]) {
+  for (const event of ["request.opened", "thread.finished", "thread.failed", "thread.cancelled"]) {
     assert.deepEqual(await l.post({ event }, { state, config, send, presence: () => ({ t3: true, idleSeconds: 1 }) }), { ok: true, suppressed: true });
   }
   assert.equal(sends, 0);
@@ -1176,5 +1176,48 @@ test("presence, live: failure wave batch is suppressed and never replayed after 
     const watches = f.count(/watching /);
     f.start(); await f.waitFor(() => f.count(/watching /) > watches);
     assert.equal(f.posts.length, 0);
+  } finally { await f.close(); }
+});
+
+test("presence settlement clears only the suppressed run's repeat record, including batch members", () => {
+  const state = { sent: {}, finished: { a: { threadId: "A", e: {} }, b: { threadId: "B", e: {} } },
+    failRepeat: { A: { runId: "a" }, B: { runId: "newer" } } };
+  l.settleDelivery(state, { event: "thread.failed.batch", failures: [{ runId: "a", threadId: "A" }, { runId: "b", threadId: "B" }] }, true);
+  assert.deepEqual(state.failRepeat, { B: { runId: "newer" } });
+});
+
+test("presence, live: a suppressed failure does not hold back the same error while away after restart", async () => {
+  const f = await startFake({ suppressWhileActive: true, repeatFailureHours: 1 });
+  const setPresence = mockNativePresence(f, { t3: true, idleSeconds: 1 });
+  try {
+    f.setThread(busyT("A", "r1"), { runs: [presenceRun("r1")], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching /.test(f.out));
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => f.state()?.finished.r1?.suppressed);
+    assert.equal(f.state().failRepeat.A, undefined);
+    assert.equal(f.posts.length, 0);
+    await f.stop(); setPresence({ t3: false, idleSeconds: 1 });
+    const watches = f.count(/watching /);
+    f.start(); await f.waitFor(() => f.count(/watching /) > watches);
+    f.update(busyT("A", "r2"), { runs: [presenceRun("r2")], turnItems: [] });
+    f.update(failedT("A", "r2"), { runs: [failRun("r2")], turnItems: [errItem("r2", "Provider error 503")] });
+    await f.waitFor(() => f.posts.length === 1);
+    assert.equal(f.posts[0].runId, "r2");
+    assert.equal(f.state().failRepeat.A.runId, "r2");
+  } finally { await f.close(); }
+});
+
+for (const resolved of [true, false]) test(`presence, live: delivered question cleanup respects filters.resolved=${resolved}`, async () => {
+  const f = await startFake({ suppressWhileActive: true, ...(resolved ? {} : { filters: { resolved: false } }) });
+  const setPresence = mockNativePresence(f, { t3: false, idleSeconds: 1 });
+  const req = { id: "q-close", kind: "user_input", status: "pending", createdAt: now(), responseCapability: { type: "resumable" } };
+  const item = { type: "user_input_request", requestId: req.id, questions: [{ id: "q", question: "Which?", options: [{ label: "Blue" }] }] };
+  try {
+    f.setThread({ ...busy("Q", "rq"), pendingRuntimeRequest: { id: req.id } }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [req] });
+    f.start(); await f.waitFor(() => f.posts.length === 1);
+    setPresence({ t3: true, idleSeconds: 1 });
+    f.update({ ...busy("Q", "rq"), pendingRuntimeRequest: null }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [{ ...req, status: "resolved", resolvedAt: now() }] });
+    await f.waitFor(() => !f.state()?.sent[req.id]);
+    assert.deepEqual(f.posts.map(e => e.event), resolved ? ["request.opened", "request.resolved"] : ["request.opened"]);
   } finally { await f.close(); }
 });
