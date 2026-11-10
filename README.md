@@ -102,6 +102,37 @@ Example: send finishes only when the reply has a `STUCK` or `BLOCKED` status lin
 }
 ```
 
+### Listener settings for busy setups (optional)
+
+Each POST can start work on the receiving side, so `listen.json` has a few optional settings that cut repeats and bursts. All of them are off unless you add them, and the listener behaves as before without them.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `catchUpMinutes` | not set (back to the last connection) | After a restart, report finishes and cancels from at most this many minutes before the listener started. `0` reports none from before the start. Failures are always caught up back to the last connection, so a usage-limit stop from the outage still gets Resume at reset. Questions are not affected (`skipStaleMinutes` covers them). |
+| `failureWaveSeconds` | `0` (off) | Hold each `thread.failed` this many seconds for more failures. The wait starts again with each new failure. One failure alone is still sent as a plain `thread.failed`. Two or more are sent once as `thread.failed.batch`. `20` works well. Turn it on only after the receiving routine knows `thread.failed.batch` (update the t3-phone-answers skill first): an older routine ignores events it doesn't know. |
+| `failureWaveMaxSeconds` | `120` | The longest a wave is held after its first failure, however many follow. |
+| `repeatFailureHours` | `0` (off) | When a thread fails again with the same error as its last sent failure within this many hours, hold it back. Ids, timestamps, clock times and numbers of 4 or more digits in the error don't count as a difference; shorter numbers such as HTTP status codes do. A usage-limit stop is held only when Resume at reset is set for it, so one that needs you is always sent. The next failure that is sent for that thread carries `repeatsSuppressed` (how many were held back) and `repeatsSince`, even after a restart. |
+
+```json
+{ "url": "https://...", "headers": { "Authorization": "..." }, "catchUpMinutes": 2, "failureWaveSeconds": 20, "failureWaveMaxSeconds": 120, "repeatFailureHours": 6 }
+```
+
+A `thread.failed.batch` event looks like this. Each entry in `failures` has the same fields as a `thread.failed` event, without `event`, `kind`, `machine`, `text`, `sentAt` and `eventId`:
+
+```json
+{
+ "event": "thread.failed.batch", "kind": "thread-failed-batch", "machine": "laptop", "title": "3 threads", "count": 3,
+ "firstAt": "2026-11-03T10:00:01.000Z", "lastAt": "2026-11-03T10:00:09.000Z", "firstAtLocal": "Nov 3, 11:00 AM CET", "lastAtLocal": "Nov 3, 11:00 AM CET",
+ "failures": [
+  { "threadId": "...", "title": "Fix login", "project": "web", "delegated": false, "runId": "...", "status": "failed", "error": "Provider error 503",
+    "startedAt": "...", "completedAt": "...", "completedAtLocal": "...", "durationSec": 41, "lastReply": "...", "usageLimit": true, "autoResumeSet": false, "repeatsSuppressed": 2, "repeatsSince": "..." }
+ ],
+ "text": "T3 failure wave on laptop: 3 threads failed between ...", "sentAt": "...", "eventId": "..."
+}
+```
+
+`usageLimit`, `autoResumeSet`, `resumeAt` and `repeatsSuppressed` appear only when they apply, as on `thread.failed`. Each run in a batch is marked as reported, so a restart doesn't send it again. A failure still waiting in a wave, or still unsent, is resent once when the listener restarts; a reconnect to T3 doesn't send it twice. `node t3listen status` lists which of these settings are on. `node t3listen preview-finish --thread <id>` says when a failure would be held back as a repeat.
+
 ## Delegated mode and approvals
 
 Delegated mode starts only when you hand over control, for example "I'm away, keep it moving". The agent then answers routine questions, nudges stalled threads, and resumes threads after a usage limit.

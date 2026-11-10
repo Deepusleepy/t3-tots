@@ -10,6 +10,22 @@ FETCHER = re.search(r"````python\n(.*?)````", SKILL, re.S).group(1)
 MANIFEST = json.loads((ROOT / "manifest.json").read_text())
 TOOLS = [f for f in MANIFEST["files"] if f["kind"] == "tool"]
 sha = lambda b: hashlib.sha256(b).hexdigest()
+POSIX_MODES = os.name != "nt"
+
+
+def usable_shell(name):
+    b = shutil.which(name)
+    if not b:
+        return None
+    try:
+        sees_this_checkout = subprocess.run([b, "-c", '[ -r "$1" ]', name, pathlib.Path(__file__).resolve().as_posix()], capture_output=True, timeout=30)
+        return b if sees_this_checkout.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+BASH = usable_shell("bash")
+SH = usable_shell("sh")
 
 
 def fetcher(tmp):
@@ -77,7 +93,7 @@ class Fetcher(unittest.TestCase):
         for name in ("t3ctl.cmd", "t3listen.cmd", "ui-press.applescript", "cleanup/scan.py", "report/report.py", "manifest.json", "VERSION"):
             self.assertTrue((self.dst / name).is_file(), name)
         self.assertFalse((self.dst / "tools").exists()); self.assertFalse((self.dst / "skills").exists())
-        self.assertTrue(os.stat(self.dst / "t3ctl").st_mode & stat.S_IXUSR)
+        if POSIX_MODES: self.assertTrue(os.stat(self.dst / "t3ctl").st_mode & stat.S_IXUSR)
         h = run(self.f, "hashes", "windows", dst=self.dst).stdout
         self.assertIn("  t3ctl.cmd\n", h); self.assertNotIn("tools/", h); self.assertNotIn("t3ui", h)
 
@@ -102,8 +118,10 @@ class Fetcher(unittest.TestCase):
         self.assertIn("  manifest.json\n", run(self.f, "hashes", "linux", dst=self.dst).stdout)
         if not shutil.which("curl"):
             self.skipTest("no curl")
-        sh = run(self.f, "emit", "macos", str(self.tmp / "mac"), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
-        r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
+        if not SH:
+            self.skipTest("no working sh on PATH")
+        sh = run(self.f, "emit", "macos", (self.tmp / "mac").as_posix(), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
+        r = subprocess.run([SH, "-c", sh], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("files verified", r.stdout)
         mac = self.tmp / "mac"
         for f in TOOLS:
@@ -117,10 +135,12 @@ class Fetcher(unittest.TestCase):
     def test_linux_install_chmods_only_what_it_installs(self):
         if not shutil.which("curl"):
             self.skipTest("no curl")
+        if not SH:
+            self.skipTest("no working sh on PATH")
         run(self.f, "box", "--from", str(ROOT), dst=self.dst)
-        sh = run(self.f, "emit", "linux", str(self.tmp / "lin"), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
+        sh = run(self.f, "emit", "linux", (self.tmp / "lin").as_posix(), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
         self.assertNotIn("t3ui", sh)
-        r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
+        r = subprocess.run([SH, "-c", sh], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue(os.access(self.tmp / "lin" / "t3ctl", os.X_OK)); self.assertTrue((self.tmp / "lin" / "manifest.json").is_file())
 
@@ -280,6 +300,21 @@ class SmallTools(unittest.TestCase):
             r = subprocess.run([sys.executable, str(ROOT / "tools/report/report.py"), "in.json", "out.html", *extra], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1); self.assertIn("usage:", r.stderr); self.assertNotIn("Traceback", r.stderr)
 
+    def test_make_manifest_works_without_git_installed(self):
+        no_git = {**os.environ, "PATH": tempfile.mkdtemp(prefix="t3tots-no-git-")}
+        check = lambda root: subprocess.run([sys.executable, str(root / "scripts" / "make-manifest.py"), "--check"], capture_output=True, text=True, env=no_git)
+        r = check(ROOT)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("manifest ok", r.stdout)
+        copy = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-manifest-"))
+        for d in ("scripts", "tools", "skills"):
+            shutil.copytree(ROOT / d, copy / d)
+        for f in ("VERSION", "manifest.json"):
+            shutil.copy(ROOT / f, copy)
+        (copy / "tools" / "loose.py").write_text("print('not in TOOLS')\n")
+        r = check(copy)
+        self.assertEqual(r.returncode, 1); self.assertIn("UNLISTED_TOOL", r.stdout + r.stderr); self.assertIn("tools/loose.py", r.stdout + r.stderr)
+        shutil.rmtree(copy, ignore_errors=True)
+
 
 class SkillOsascript(unittest.TestCase):
     """Shell snippets that launch AppleScript helpers: paths stay in argv, escaping is documented, quotes are not claimed safe."""
@@ -309,22 +344,23 @@ class T3uiQuoting(unittest.TestCase):
     def ks_line(self):
         line = [l for l in (ROOT / "tools" / "t3ui").read_text().splitlines() if l.startswith("ks(){")][0]
         return line
+    @unittest.skipUnless(BASH, "no working bash on PATH")
     def test_text_is_an_argument_with_a_stub(self):
         d = tempfile.mkdtemp(); stub = os.path.join(d, "osascript")
         with open(stub, "w") as f: f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > "$(dirname "$0")/args"\n')
         os.chmod(stub, 0o755)
-        subprocess.run(["bash", "-c", self.ks_line() + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, env={**os.environ, "PATH": d + os.pathsep + os.environ["PATH"]}, check=True)
+        subprocess.run([BASH, "-c", self.ks_line() + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, env={**os.environ, "PATH": d + os.pathsep + os.environ["PATH"]}, check=True)
         args = open(os.path.join(d, "args")).read().split("\0")[:-1]
         self.assertEqual(args[-1], self.PAYLOAD); self.assertEqual(args[-2], "--")
         self.assertFalse(any(self.PAYLOAD in a for a in args[:-1]))
         self.assertFalse(os.path.exists(os.path.join(d, "PWNED1")) or os.path.exists(os.path.join(d, "PWNED2")))
         shutil.rmtree(d, ignore_errors=True)
-    @unittest.skipUnless(shutil.which("osascript"), "macOS only")
+    @unittest.skipUnless(BASH and shutil.which("osascript"), "macOS only")
     def test_real_osascript_returns_text_literally(self):
         d = tempfile.mkdtemp()
         line = self.ks_line().replace('tell application "System Events" to keystroke (item 1 of argv)', "return item 1 of argv")
         self.assertNotIn("System Events", line)
-        out = subprocess.run(["bash", "-c", line + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, capture_output=True, text=True, check=True).stdout.rstrip("\n")
+        out = subprocess.run([BASH, "-c", line + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, capture_output=True, text=True, check=True).stdout.rstrip("\n")
         self.assertEqual(out, self.PAYLOAD); self.assertEqual(os.listdir(d), [])
         shutil.rmtree(d, ignore_errors=True)
 

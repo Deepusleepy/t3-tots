@@ -24,9 +24,10 @@ class Dupes(unittest.TestCase):
             with contextlib.redirect_stdout(out): runpy.run_path(SCAN, run_name="__main__")
         finally:
             builtins.open = real_open; sys.argv = argv
-        dup = [sorted(os.path.relpath(p, tmp) for p in g["paths"]) for g in json.loads(out.getvalue())["results"][0]["duplicates"]]
+        rel = lambda p: pathlib.PurePath(os.path.relpath(p, tmp)).as_posix()
+        dup = [sorted(rel(p) for p in g["paths"]) for g in json.loads(out.getvalue())["results"][0]["duplicates"]]
         self.assertEqual(dup, [sorted(plain)])
-        touched = {os.path.relpath(p, tmp) for p in opened if p.startswith(str(tmp))}
+        touched = {rel(p) for p in opened if p.startswith(str(tmp))}
         self.assertFalse(touched & set(sensitive), touched & set(sensitive))
 
 
