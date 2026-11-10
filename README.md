@@ -66,6 +66,42 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
+### Filters (optional)
+
+Each POST can start work on the receiving side. If most finishes need nothing from you, add a `filters` section to `listen.json` so only the run ends that need action are sent. Without `filters` every event is sent as before. `thread.failed`, `request.opened` and `test` are never filtered.
+
+| Key | Value | Effect |
+|---|---|---|
+| `resolved` | `false` | Don't send `request.resolved`. The phone then isn't told when a question is answered in T3, cancelled or expires, so its card stays until you answer it, and `t3ctl answer` says `NOT_PENDING`. |
+| `finished`, `cancelled` | `false` | Don't send that event at all. |
+| `finished`, `cancelled` | `{ "postWhen": [...], "skipWhen": [...] }` | Send it only when the run's own last reply matches a `postWhen` pattern (when any are listed) and no `skipWhen` pattern. A run that ended without a reply of its own is always sent. |
+| `negations` | list of words | Words that make a `notNegated` match not count. Default: `no`, `not`, `nothing`, `none`, `never`, `neither`, `nor`, `without`, `unless`, `n't`. |
+
+A pattern is a JavaScript regex string, or an object:
+
+- `pattern`: the regex.
+- `flags`: regex flags, for example `"i"`. `m` is always added, so `^` and `$` match at each line.
+- `lines`: which part of the reply to test. `all` (default, the whole reply), `first`, `last`, or `edge` (the first and the last line, each on its own).
+- `notNegated`: `true` means a match counts only when its clause has no negation word before it. A clause ends at `.` `!` `?` or `;` followed by a space or the line end, at `,`, or at a line break, so `v1.4` and `usage.limit` stay whole. Curly apostrophes count as `'`. "Nothing needs a decision from you" doesn't match a "needs a decision" pattern.
+
+Filters see the whole last reply of the run that ended, not only the 600 characters in `lastReply`. They run on the listener's own thread, so each check gets 1 second: a pattern that takes longer on a reply (one that backtracks badly, such as `(a+)+b`) is cut off, the event is sent, and `listen.log` says so. Keep patterns simple. A filtered run end is logged in `listen.log` and marked as reported, so a restart doesn't send it later. `node t3listen preview-finish --thread <id>` says when filters would hold an event back, and `node t3listen status` lists which filters are on, or says the filters are invalid. A bad value, such as a pattern that doesn't compile, stops the listener at startup with `BAD_LISTEN_CONFIG` and names the setting. A key the filters don't know is ignored and listed in `listen.log` and `status`, so a newer `listen.json` never stops an older listener.
+
+Example: send finishes only when the reply has a `STUCK` or `BLOCKED` status line, opens or closes with stuck, blocked or error, names a usage limit or HTTP 429 on its first or last line, or says something needs a decision. Skip cancels whose reply has an uppercase `WAITING` line that names a watch or wake-up still running.
+
+```json
+"filters": {
+ "finished": { "postWhen": [
+  "^[ \\t>*_`#-]*(STUCK|BLOCKED)\\b(?!-)",
+  { "pattern": "^[ \\t>*_`#-]*(stuck|blocked|error)\\b(?!-)", "flags": "i", "lines": "edge" },
+  { "pattern": "usage.?limit|(?<![#\\d])\\b429\\b|too many requests", "flags": "i", "lines": "edge", "notNegated": true },
+  { "pattern": "\\b(needs?|requires?) (a |an |your )?decisions?\\b|\\bdecision (is )?needed\\b", "flags": "i", "notNegated": true }
+ ] },
+ "cancelled": { "skipWhen": [
+  "\\bWAITING\\b[^\\n]*\\b([Ww]atch|[Ww]akes?\\b|[Ww]ake-?up|[Mm]onitor|[Pp]oll)"
+ ] }
+}
+```
+
 ### Listener settings for busy setups (optional)
 
 Each POST can start work on the receiving side, so `listen.json` has a few optional settings that cut repeats and bursts. All of them are off unless you add them, and the listener behaves as before without them.
