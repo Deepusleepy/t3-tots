@@ -300,6 +300,21 @@ class SmallTools(unittest.TestCase):
             r = subprocess.run([sys.executable, str(ROOT / "tools/report/report.py"), "in.json", "out.html", *extra], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1); self.assertIn("usage:", r.stderr); self.assertNotIn("Traceback", r.stderr)
 
+    def test_make_manifest_works_without_git_installed(self):
+        no_git = {**os.environ, "PATH": tempfile.mkdtemp(prefix="t3tots-no-git-")}
+        check = lambda root: subprocess.run([sys.executable, str(root / "scripts" / "make-manifest.py"), "--check"], capture_output=True, text=True, env=no_git)
+        r = check(ROOT)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("manifest ok", r.stdout)
+        copy = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-manifest-"))
+        for d in ("scripts", "tools", "skills"):
+            shutil.copytree(ROOT / d, copy / d)
+        for f in ("VERSION", "manifest.json"):
+            shutil.copy(ROOT / f, copy)
+        (copy / "tools" / "loose.py").write_text("print('not in TOOLS')\n")
+        r = check(copy)
+        self.assertEqual(r.returncode, 1); self.assertIn("UNLISTED_TOOL", r.stdout + r.stderr); self.assertIn("tools/loose.py", r.stdout + r.stderr)
+        shutil.rmtree(copy, ignore_errors=True)
+
 
 class SkillOsascript(unittest.TestCase):
     """Shell snippets that launch AppleScript helpers: paths stay in argv, escaping is documented, quotes are not claimed safe."""

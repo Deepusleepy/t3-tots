@@ -35,8 +35,11 @@ TOOLS = [  # repo path, installed path, targets, purpose
 
 def repo_files(folder):
     """Files under folder that git would commit (tracked or new, not ignored); every file if git isn't there."""
-    r = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", folder], cwd=ROOT, capture_output=True, text=True)
-    if r.returncode == 0:
+    try:
+        r = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", folder], cwd=ROOT, capture_output=True, text=True)
+    except FileNotFoundError:
+        r = None
+    if r is not None and r.returncode == 0:
         return [p for p in r.stdout.splitlines() if (ROOT / p).is_file()]
     return [f.relative_to(ROOT).as_posix() for f in (ROOT / folder).rglob("*")
             if f.is_file() and not f.name.startswith(".") and "__pycache__" not in f.parts and "out" not in f.relative_to(ROOT / folder).parts]
