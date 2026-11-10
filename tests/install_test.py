@@ -13,6 +13,17 @@ sha = lambda b: hashlib.sha256(b).hexdigest()
 POSIX_MODES = os.name != "nt"
 
 
+def usable_bash():
+    b = shutil.which("bash")
+    try:
+        return b if b and subprocess.run([b, "-c", "exit 0"], capture_output=True, timeout=30).returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+BASH = usable_bash()
+
+
 def fetcher(tmp):
     """The fetcher with PIN/PINNED set to this checkout, so the tests run before a release is pinned."""
     code = re.sub(r'PIN = "[^"]*"', f'PIN = "{MANIFEST["version"]}"', FETCHER, count=1)
@@ -310,22 +321,23 @@ class T3uiQuoting(unittest.TestCase):
     def ks_line(self):
         line = [l for l in (ROOT / "tools" / "t3ui").read_text().splitlines() if l.startswith("ks(){")][0]
         return line
+    @unittest.skipUnless(BASH, "no working bash on PATH")
     def test_text_is_an_argument_with_a_stub(self):
         d = tempfile.mkdtemp(); stub = os.path.join(d, "osascript")
         with open(stub, "w") as f: f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > "$(dirname "$0")/args"\n')
         os.chmod(stub, 0o755)
-        subprocess.run(["bash", "-c", self.ks_line() + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, env={**os.environ, "PATH": d + os.pathsep + os.environ["PATH"]}, check=True)
+        subprocess.run([BASH, "-c", self.ks_line() + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, env={**os.environ, "PATH": d + os.pathsep + os.environ["PATH"]}, check=True)
         args = open(os.path.join(d, "args")).read().split("\0")[:-1]
         self.assertEqual(args[-1], self.PAYLOAD); self.assertEqual(args[-2], "--")
         self.assertFalse(any(self.PAYLOAD in a for a in args[:-1]))
         self.assertFalse(os.path.exists(os.path.join(d, "PWNED1")) or os.path.exists(os.path.join(d, "PWNED2")))
         shutil.rmtree(d, ignore_errors=True)
-    @unittest.skipUnless(shutil.which("osascript"), "macOS only")
+    @unittest.skipUnless(BASH and shutil.which("osascript"), "macOS only")
     def test_real_osascript_returns_text_literally(self):
         d = tempfile.mkdtemp()
         line = self.ks_line().replace('tell application "System Events" to keystroke (item 1 of argv)', "return item 1 of argv")
         self.assertNotIn("System Events", line)
-        out = subprocess.run(["bash", "-c", line + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, capture_output=True, text=True, check=True).stdout.rstrip("\n")
+        out = subprocess.run([BASH, "-c", line + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, capture_output=True, text=True, check=True).stdout.rstrip("\n")
         self.assertEqual(out, self.PAYLOAD); self.assertEqual(os.listdir(d), [])
         shutil.rmtree(d, ignore_errors=True)
 
