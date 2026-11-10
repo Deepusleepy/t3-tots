@@ -13,15 +13,19 @@ sha = lambda b: hashlib.sha256(b).hexdigest()
 POSIX_MODES = os.name != "nt"
 
 
-def usable_bash():
-    b = shutil.which("bash")
+def usable_shell(name):
+    b = shutil.which(name)
+    if not b:
+        return None
     try:
-        return b if b and subprocess.run([b, "-c", "exit 0"], capture_output=True, timeout=30).returncode == 0 else None
+        sees_this_checkout = subprocess.run([b, "-c", '[ -r "$1" ]', name, pathlib.Path(__file__).resolve().as_posix()], capture_output=True, timeout=30)
+        return b if sees_this_checkout.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None
 
 
-BASH = usable_bash()
+BASH = usable_shell("bash")
+SH = usable_shell("sh")
 
 
 def fetcher(tmp):
@@ -114,8 +118,10 @@ class Fetcher(unittest.TestCase):
         self.assertIn("  manifest.json\n", run(self.f, "hashes", "linux", dst=self.dst).stdout)
         if not shutil.which("curl"):
             self.skipTest("no curl")
+        if not SH:
+            self.skipTest("no working sh on PATH")
         sh = run(self.f, "emit", "macos", (self.tmp / "mac").as_posix(), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
-        r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
+        r = subprocess.run([SH, "-c", sh], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("files verified", r.stdout)
         mac = self.tmp / "mac"
         for f in TOOLS:
@@ -129,10 +135,12 @@ class Fetcher(unittest.TestCase):
     def test_linux_install_chmods_only_what_it_installs(self):
         if not shutil.which("curl"):
             self.skipTest("no curl")
+        if not SH:
+            self.skipTest("no working sh on PATH")
         run(self.f, "box", "--from", str(ROOT), dst=self.dst)
         sh = run(self.f, "emit", "linux", (self.tmp / "lin").as_posix(), dst=self.dst, env={"T3TOTS_RAW_BASE": ROOT.as_uri() + "/"}).stdout
         self.assertNotIn("t3ui", sh)
-        r = subprocess.run(["sh", "-c", sh], capture_output=True, text=True)
+        r = subprocess.run([SH, "-c", sh], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue(os.access(self.tmp / "lin" / "t3ctl", os.X_OK)); self.assertTrue((self.tmp / "lin" / "manifest.json").is_file())
 
