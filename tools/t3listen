@@ -98,11 +98,12 @@ const filterSkip = (F, event, text, budgetMs) => filterDecision(F, event, text, 
 const configFilters = (f) => { try { return compileFilters(f); } catch (err) { die("BAD_LISTEN_CONFIG", `listen.json ${err.message}`); } };
 // optional number settings: missing, unreadable or negative means the default d (null = no limit)
 const numOr = (v, d) => (v === undefined || v === null || v === "" || !Number.isFinite(+v) || +v < 0 ? d : +v);
-// reliability settings, all off unless listen.json sets them (see README "Phone answers"):
-// catchUpMinutes: after a restart, report run ends from at most this many minutes before the start (missing = back to the last connection)
+// reliability settings (see README "Phone answers"):
+// catchUpMinutes: after a restart or a lost connection, report finishes and cancels from at most this many minutes back; older ones are counted in one thread.missed.summary
 // failureWaveSeconds / failureWaveMaxSeconds: hold a thread.failed this long for more failures; two or more post as one thread.failed.batch
 // repeatFailureHours: hold back a thread's failure with the same error as its last post within this many hours
-const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, null), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
+const CATCH_UP_MINUTES = 30;
+const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_MINUTES), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
   failureWaveMaxMs: numOr(c.failureWaveMaxSeconds, 120) * 1000, repeatFailureMs: numOr(c.repeatFailureHours, 0) * 3600e3 });
 function loadConfig() {
   const c = readJSON(CONF, null);
@@ -187,6 +188,7 @@ function requestInfo(p, r) {
   return o;
 }
 function summary(e) {
+  if (e.event === "thread.missed.summary") return `T3 on ${e.machine}: ${e.count} run end(s)${e.firstAtLocal ? ` between ${e.firstAtLocal} and ${e.lastAtLocal}` : ""} were not sent one by one${e.threads.length ? `\nThreads: ${e.threads.map((x) => `"${x}"`).join(", ")}${e.count > e.threads.length ? ", ..." : ""}` : ""}`;
   if (e.failures) return `T3 failure wave on ${e.machine}: ${e.count} threads failed between ${e.firstAtLocal} and ${e.lastAtLocal}\n` + e.failures.map((f) => `- "${f.title}"${f.project ? ` (${f.project})` : ""}: ${f.error || f.status}${f.usageLimit ? (f.autoResumeSet ? " (usage limit, auto-resume set)" : " (usage limit, not auto-resumed)") : ""}${f.repeatsSuppressed ? ` (${f.repeatsSuppressed} repeat(s) of its previous failure held back)` : ""}`).join("\n");
   const where = `"${e.title}"${e.project ? ` (${e.project})` : ""} on ${e.machine}`;
   if (END_WORD[e.event]) { const d = e.durationSec, dur = d == null ? "" : ` after ${d >= 3600 ? `${Math.floor(d / 3600)}h ${Math.round((d % 3600) / 60)}m` : d >= 60 ? `${Math.round(d / 60)}m` : `${d}s`}`;
@@ -201,23 +203,48 @@ const answeredHere = (id) => { const m = readJSON(HERE, {}) || {}; return !!m[cr
 
 // ---------- delivery ----------
 let C, queue = [], delivered = 0;
+// A rate-limited webhook is left alone until it says to come back (Retry-After, in seconds or as a date), or for 15 minutes.
+const RATE_LIMIT_PAUSE_MS = 15 * 60000;
+function rateLimitPause(status, body = "", retryAfter = null, now = Date.now()) { // -> ms to stop sending for; 0 = not a rate limit
+  if (status !== 429 && !/\brate.?limit|too many requests/i.test(body)) return 0;
+  const asked = retryAfter === null || retryAfter === "" ? NaN : Number.isFinite(+retryAfter) ? +retryAfter * 1000 : Date.parse(retryAfter) - now;
+  return Number.isFinite(asked) ? Math.min(Math.max(asked, 60000), 864e5) : RATE_LIMIT_PAUSE_MS;
+}
 const RETRYABLE = (st, body = "") => st === 408 || st === 429 || st >= 500 || /rate.?limit|too many|try again/i.test(body); // some webhook hosts send rate limits as 400
 function redact(s) { // never let the webhook URL or header values reach the log
   s = String(s || ""); const secrets = [C && C.url, ...Object.values((C && C.headers) || {}).flatMap((v) => [v, ...String(v).split(/\s+/)])].filter((v) => v && String(v).length > 7);
   for (const v of secrets.sort((a, b) => String(b).length - String(a).length)) s = s.split(String(v)).join("[redacted]");
   return s.replace(/\s+/g, " ").trim().slice(0, 500);
 }
-// The shell stream has no client-focus signal. On macOS, read foreground app +
-// input idle time without Accessibility permission or inspecting window/thread text.
+// The shell stream has no client-focus signal, so ask the OS which app is in front and how long input has been idle.
+// Neither probe needs extra permissions or reads window titles or thread text. Linux has no probe: X11 and Wayland desktops share no way to ask.
 const MAC_PRESENCE = 'ObjC.import("AppKit"); ObjC.import("CoreGraphics"); JSON.stringify({t3: /^com\\.t3tools\\.t3code(?:\\.|$)/i.test(String($.NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.js || "")), idleSeconds: $.CGEventSourceSecondsSinceLastEventType(1, 0xffffffff)})';
+const WIN_PRESENCE = [
+  "$ErrorActionPreference='Stop'",
+  "Add-Type -Namespace T3Tots -Name Presence -MemberDefinition '[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p); [StructLayout(LayoutKind.Sequential)] public struct LastInput { public uint cb; public uint tick; } [DllImport(\"user32.dll\")] public static extern bool GetLastInputInfo(ref LastInput i); [DllImport(\"kernel32.dll\")] public static extern uint GetTickCount();'",
+  "$p=[uint32]0; [void][T3Tots.Presence]::GetWindowThreadProcessId([T3Tots.Presence]::GetForegroundWindow(),[ref]$p)",
+  "$i=New-Object T3Tots.Presence+LastInput; $i.cb=8; [void][T3Tots.Presence]::GetLastInputInfo([ref]$i)",
+  "'{\"app\":\"'+((Get-Process -Id $p).ProcessName -replace '[\\\\\"]','')+'\",\"idleSeconds\":'+([uint32]([T3Tots.Presence]::GetTickCount()-$i.tick)/1000)+'}'",
+].join("; ");
+const WIN_T3_APP = /^T3 Code(?: \(|$)/i; // "T3 Code", "T3 Code (Nightly)"
+const PRESENCE_PROBES = {
+  darwin: { file: "/usr/bin/osascript", args: ["-l", "JavaScript", "-e", MAC_PRESENCE], timeout: 2000, parse: (o) => o },
+  win32: { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", WIN_PRESENCE], timeout: 5000, parse: (o) => ({ t3: WIN_T3_APP.test(String(o.app)), idleSeconds: o.idleSeconds }) },
+};
 function readPresence(platform = process.platform, exec = cp.execFileSync) {
-  if (platform !== "darwin") return null;
+  const probe = PRESENCE_PROBES[platform]; if (!probe) return null;
   try {
-    return JSON.parse(exec("/usr/bin/osascript", ["-l", "JavaScript", "-e", MAC_PRESENCE],
-      { encoding: "utf8", timeout: 2000, maxBuffer: 4096, stdio: ["ignore", "pipe", "ignore"] }));
+    return probe.parse(JSON.parse(exec(probe.file, probe.args, { encoding: "utf8", timeout: probe.timeout, maxBuffer: 4096, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })));
   } catch { return null; } // unknown presence must not lose an away notification
 }
-const PRESENT_EVENTS = new Set(["request.opened", "thread.finished", "thread.failed", "thread.cancelled", "thread.failed.batch"]);
+// A burst of events shares one probe: each one starts a process (about 1 s on Windows).
+const PRESENCE_CACHE_MS = 10000;
+function cachedPresence(read = readPresence, clock = Date.now) {
+  let at = -Infinity, value = null;
+  return () => { const now = clock(); if (now - at >= PRESENCE_CACHE_MS) { value = read(); at = now; } return value; };
+}
+const livePresence = cachedPresence();
+const PRESENT_EVENTS = new Set(["request.opened", "thread.finished", "thread.failed", "thread.cancelled", "thread.failed.batch", "thread.missed.summary"]);
 // Reading T3 output often has no keyboard/mouse input for several minutes; 60s treated that as away.
 const PRESENT_IDLE_SECONDS = 900;
 function presenceSettings(c) {
@@ -228,7 +255,7 @@ function presenceSettings(c) {
 }
 const configPresence = (c) => { try { return presenceSettings(c); } catch (err) { die("BAD_LISTEN_CONFIG", `listen.json ${err.message}`); } };
 const presentInT3 = (p, idleSeconds = PRESENT_IDLE_SECONDS) => !!(p && p.t3 === true && Number.isFinite(p.idleSeconds) && p.idleSeconds >= 0 && p.idleSeconds < idleSeconds);
-async function post(e, { presence = readPresence, send = fetch, config = C, state = S } = {}) { // one attempt
+async function post(e, { presence = livePresence, send = fetch, config = C, state = S } = {}) { // one attempt
   // Check at the last boundary before EVERY attempt (live, catch-up and retries).
   // Never send a resolution for a question the phone was not told about.
   if ((e.event === "request.resolved" && state.sent[e.requestId]?.suppressed)
@@ -238,7 +265,7 @@ async function post(e, { presence = readPresence, send = fetch, config = C, stat
     const r = await send(config.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...config.headers }, body: JSON.stringify(e), signal: AbortSignal.timeout(20000) });
     if (r.ok) return { ok: true, status: r.status };
     let body = ""; try { body = await r.text(); } catch {}
-    return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body) };
+    return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body), pauseMs: rateLimitPause(r.status, body, r.headers ? r.headers.get("retry-after") : null) };
   } catch (err) { return { ok: false, status: 0, body: (err.cause && err.cause.code) || err.name, retry: true }; }
 }
 const ref = (e) => String(e.requestId || e.runId || "");
@@ -339,38 +366,95 @@ async function flushWave() {
   const w = wave; wave = null; if (!w || !w.items.length) return;
   return deliver(w.items.length === 1 ? w.items[0] : batchEvent(w.items, C.machine), { now: true });
 }
-function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",")}`).digest("hex").slice(0, 16); }
+// ---------- run ends that are combined into one message ----------
+// Every POST starts work on the receiving side, so a finish or cancel gets its own message only when it is fresh and few
+// are going out. It is counted instead, and sent with the others as one thread.missed.summary, when it is older than the
+// catch-up window, when the webhook is rate limited, when it could not be delivered for an hour, or when more than
+// RUN_ENDS_PER_MINUTE went out in the last minute. Failures and questions are never combined.
+const RUN_END_KEEP_MS = 3600e3, RUN_ENDS_PER_MINUTE = 10;
+const perishable = (e) => e.event === "thread.finished" || e.event === "thread.cancelled";
+const staleRunEnd = (e, since, now = Date.now()) => perishable(e) && now - since > RUN_END_KEEP_MS;
+function runEndBudget(sentAt, now = Date.now()) { // -> true and notes the send when another run end may go out on its own
+  while (sentAt.length && now - sentAt[0] >= 60000) sentAt.shift();
+  if (sentAt.length >= RUN_ENDS_PER_MINUTE) return false;
+  sentAt.push(now); return true;
+}
+const recentRunEnds = [];
+const newMissed = () => ({ count: 0, titles: [], firstAt: null, lastAt: null });
+function noteMissed(m, e) {
+  m.count++;
+  if (e.title && m.titles.length < 20 && !m.titles.includes(e.title)) m.titles.push(e.title);
+  const at = Date.parse(e.completedAt); if (!Number.isFinite(at)) return;
+  if (!m.firstAt || at < Date.parse(m.firstAt)) m.firstAt = e.completedAt;
+  if (!m.lastAt || at > Date.parse(m.lastAt)) m.lastAt = e.completedAt;
+}
+const missedEvent = (m, machine) => ({ event: "thread.missed.summary", kind: "thread-missed-summary", machine, title: `${m.count} run ends`, count: m.count,
+  firstAt: m.firstAt, lastAt: m.lastAt, firstAtLocal: m.firstAt && localTime(m.firstAt), lastAtLocal: m.lastAt && localTime(m.lastAt), threads: m.titles });
+// The count (S.missed) and the pause (S.pausedUntil) are saved in listen-state.json, so a restart neither loses the summary nor posts into a rate limit.
+const paused = (now = Date.now()) => now < (S.pausedUntil || 0);
+function pauseSending(ms) {
+  const until = Date.now() + ms; if (until <= (S.pausedUntil || 0)) return;
+  S.pausedUntil = until; saveState(); log(`webhook is rate limited; nothing is sent until ${localTime(new Date(until).toISOString())}`);
+}
+let flushTimer = null, flushing = false, catchingUp = false; // catch-up counts first and sends one summary at its end
+function combine(e, why) { // count a finish or cancel instead of sending it; the summary follows within a few seconds
+  noteMissed(S.missed, e); markDelivered(e); log(`combined into the next thread.missed.summary (${why}): ${e.event} ${ref(e).slice(-12)}`);
+  if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = null; flushMissed().catch((err) => log("error:", err.message)); }, 5000).unref();
+}
+async function flushMissed() { // the count is cleared only once the webhook took the summary; until then each round tries again
+  if (DRY || flushing || catchingUp || !S.missed.count || paused()) return;
+  const e = missedEvent(S.missed, C.machine); stamp(e);
+  flushing = true; let r; try { r = await post(e); } finally { flushing = false; }
+  if (r.pauseMs) pauseSending(r.pauseMs);
+  if (!r.ok) { log(`thread.missed.summary (${e.count} run ends) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}; it is tried again`); return; }
+  S.missed = newMissed(); saveState();
+  if (r.suppressed) log(`suppressed thread.missed.summary (${e.count} run ends, active in T3)`);
+  else { delivered++; log(`sent thread.missed.summary (${e.count} run ends) -> HTTP ${r.status}`); }
+}
+function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",") || e.sentAt}`).digest("hex").slice(0, 16); }
 async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran); opts.needsYou: never hold it as a repeat
   if (e.event === "thread.failed" && !opts.now && holdFailure(e, opts.needsYou)) return true;
   stamp(e);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
-  for (let i = 0; i < 3; i++) {
+  if (perishable(e) && paused()) { combine(e, "webhook is rate limited"); return true; }
+  if (perishable(e) && !runEndBudget(recentRunEnds)) { combine(e, `more than ${RUN_ENDS_PER_MINUTE} run ends in a minute`); return true; }
+  for (let i = 0; i < 3 && !paused(); i++) {
     const r = await post(e);
     if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)`); markDelivered(e, true); return true; }
     if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status}`); delivered++; markDelivered(e); return true; }
     if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${ref(e).slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}`);
     else log(`webhook not reachable (${r.body})`);
-    if (!r.retry) break; if (i < 2) await sleep((/rate.?limit/i.test(r.body || "") ? 20000 : 2000) * 3 ** i);
+    if (r.pauseMs) pauseSending(r.pauseMs);
+    if (!r.retry) break; if (i < 2) await sleep(2000 * 3 ** i);
   }
   // keep it queued and retry every 60s: retryable failures (network, 408, 429, 5xx) for up to 24h, other 4xx 10 times
+  if (perishable(e) && paused()) { combine(e, "webhook is rate limited"); return true; }
   retryLater({ e, rounds: 0, since: Date.now() }); return false;
 }
 setInterval(async () => {
-  const q = queue; queue = [];
+  const q = queue.sort((a, b) => perishable(a.e) - perishable(b.e)); queue = []; // questions and failures go first
   for (const item of q) {
-    const { e } = item; item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
+    const { e } = item;
+    if (perishable(e)) {
+      const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : paused() ? "webhook is rate limited" : !runEndBudget(recentRunEnds) ? `more than ${RUN_ENDS_PER_MINUTE} run ends in a minute` : null;
+      if (why) { combine(e, why); continue; }
+    }
+    if (paused()) { retryLater(item); continue; }
+    item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
     const r = await post(e);
     if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)`); markDelivered(e, true); continue; }
     if (r.ok) { log(`sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status} (retry ${item.rounds})`); delivered++; markDelivered(e); continue; }
+    if (r.pauseMs) pauseSending(r.pauseMs);
     log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
     if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) retryLater(item);
     else log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
   }
   if (refillFromState(queue, S, Date.now())) saveState();
+  await flushMissed();
 }, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
-let S = { sent: {}, finished: {}, failRepeat: {} };
+let S = { sent: {}, finished: {}, failRepeat: {}, missed: newMissed(), pausedUntil: 0 };
 const RENAME_BUSY = ["EBUSY", "EPERM", "EACCES"]; // Windows won't replace a file another process has open (status, a backup, antivirus)
 function saveState() {
   if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S));
@@ -426,8 +510,8 @@ const noteRun = (t) => { const prev = runSeen.get(t.id); runSeen.set(t.id, { sta
 const isActive = (t) => !!(t && (t.activeRunId || ACTIVE.has(t.status)));
 const isBusy = (t) => isActive(t) || (t && t.status === "queued"); // a queued message is about to start
 async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason }
-  let p = null;
-  for (let i = 0; i < 3; i++) { // the projection can trail the shell update by a moment
+  let p = opts.snap || null; // catch-up already read the thread once for all of its runs
+  for (let i = 0; i < 3 && !opts.snap; i++) { // the projection can trail the shell update by a moment
     try { p = await threadSnap(ep, t.id); } catch (err) { return { skip: `couldn't read thread: ${err.message}` }; }
     if (!p) return { skip: "thread gone" };
     const r = runId && (p.runs || []).find((x) => x.id === runId);
@@ -441,7 +525,8 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   const delegated = t.id.startsWith(DELEGATED);
   if (delegated && event !== "thread.failed") return { skip: "sub-task thread that didn't fail" };
   if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
-  if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run" };
+  if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run",
+    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, title: t.title || t.id, completedAt: run.completedAt } : null };
   const items = p.turnItems || [], txt = (x) => x.text ?? x.content ?? (x.message && x.message.text);
   const said = items.filter((x) => x.type === "assistant_message" && typeof txt(x) === "string" && txt(x).trim());
   const own = said.filter((x) => x.runId === run.id).at(-1), reply = own || said.at(-1);
@@ -535,6 +620,11 @@ async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet,
     return { ...fields, autoResumeSet: true, resumeAt: resetAt, resumeAtLocal: localTime(resetAt) };
   } catch (err) { log(`usage limit in "${clean(t.title)}": couldn't arm resume-at-reset: ${err.message}`); return { ...fields, autoResumeSet: false, autoResumeNote: `arm failed: ${trim(err.message, 160)}` }; }
 }
+function countLate(t, late) { // a finish or cancel from the outage, before the catch-up window: counted once, never sent on its own
+  if (S.finished[late.runId]) return;
+  if (!filterDecision(C.filters, late.event, null).skip) noteMissed(S.missed, { title: clean(late.title), completedAt: late.completedAt });
+  S.finished[late.runId] = { threadId: t.id, at: Date.now() }; saveState();
+}
 async function reportEnd(ep, t, runId, opts = {}) {
   if (runId && S.finished[runId]) return;
   if (!runId && opts.since) { // catch-up: every ended run in the window, not only the newest
@@ -542,10 +632,11 @@ async function reportEnd(ep, t, runId, opts = {}) {
     try { p = await threadSnap(ep, t.id); } catch (err) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: couldn't read thread: ${err.message}`); return; }
     if (!p) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: thread gone`); return; }
     const ended = (p.runs || []).filter((r) => r.startedAt && END[r.status]).sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
-    for (const run of ended) await reportEnd(ep, t, run.id, opts);
+    for (const run of ended) await reportEnd(ep, t, run.id, { ...opts, snap: p });
     return;
   }
-  const { e, skip, run, replyText } = await buildEnd(ep, t, runId, opts);
+  const { e, skip, run, replyText, late } = await buildEnd(ep, t, runId, opts);
+  if (late) countLate(t, late);
   if (!e) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: ${skip}`); return; }
   if (S.finished[e.runId]) return;
   if (e.event === "thread.failed" && !e.delegated) { const a = await armResume(ep, t.id, run); if (a) Object.assign(e, { usageLimit: true }, a); }
@@ -579,7 +670,6 @@ const afterSnapshotListen = ({ socketOpen, gen, liveGen: g, lastAlive, now = Dat
 // cancels only: failures are caught up back to lastAlive, so a usage-limit stop from the outage still gets Resume at reset armed.
 const catchUpSince = (lastAlive, start, catchUpMinutes) => { const s = lastAlive ? lastAlive - 120000 : 0;
   return s && catchUpMinutes !== null && catchUpMinutes !== undefined ? Math.max(s, start - catchUpMinutes * 60000) : s; };
-const START = Date.now();
 let resentSaved = false;
 const catchUpThreads = (threads, since) => (threads || []).filter((t) => Date.parse(t.updatedAt || 0) > since); // busy too: failed always fires
 setInterval(() => {
@@ -621,11 +711,17 @@ async function onItem(ep, v, full, ctx = {}) {
     for (const t of v.snapshot.threads || []) noteRun(t);
     if (!DRY) {
       pruneFinished();
-      if (!resentSaved) { resentSaved = true; for (const f of Object.values(S.finished)) if (f.e && Date.now() - f.at < 864e5) await deliver(f.e); } // not delivered before the restart
-      const since = catchUpSince(S.lastAlive, START, C.catchUpMinutes), failedSince = catchUpSince(S.lastAlive, START, null); // 0 on the first run with this feature: nothing to catch up on
+      catchingUp = true; try {
+      if (!resentSaved) { resentSaved = true; for (const f of Object.values(S.finished)) {
+        if (!f.e || Date.now() - f.at >= 864e5) continue;
+        if (staleRunEnd(f.e, f.at)) combine(f.e, "not delivered for an hour"); else await deliver(f.e);
+      } } // not delivered before the restart
+      const since = catchUpSince(S.lastAlive, Date.now(), C.catchUpMinutes), failedSince = catchUpSince(S.lastAlive, Date.now(), null); // 0 on the first run with this feature: nothing to catch up on
       // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
       // look at busy threads too so a failed end from downtime is still reported (failed always fires)
       if (failedSince) for (const t of catchUpThreads(v.snapshot.threads, failedSince)) await reportEnd(ep, t, null, { since, failedSince });
+      } finally { catchingUp = false; }
+      await flushMissed();
       const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
       listening = next.listening;
       if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
@@ -650,7 +746,8 @@ async function run() {
   if (!DRY) {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
-    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {}; S.failRepeat = S.failRepeat || {};
+    S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {}; S.failRepeat = S.failRepeat || {}; S.missed = { ...newMissed(), ...S.missed };
+    S.pausedUntil = Math.min(+S.pausedUntil || 0, Date.now() + 864e5);
     for (const s of Object.values(S.sent)) { delete s.parked; delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) { delete f2.parked; delete f2.retryLater; }
   }
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
@@ -740,12 +837,12 @@ function serviceArgs() { // what the autostart entry runs, to tell whether it wa
 // the optional reliability settings listen.json turns on, for status
 function settingsLine(c) {
   const r = reliability(c || {}), on = [];
-  if (r.catchUpMinutes !== null) on.push(`catch-up of finishes and cancels capped at ${r.catchUpMinutes} min`);
+  if (r.catchUpMinutes !== CATCH_UP_MINUTES) on.push(`catch-up of finishes and cancels capped at ${r.catchUpMinutes} min`);
   if (r.failureWaveMs > 0) on.push(`failure waves ${r.failureWaveMs / 1000}s (up to ${r.failureWaveMaxMs / 1000}s)`);
   if (r.repeatFailureMs > 0) on.push(`repeat holds ${+(r.repeatFailureMs / 3600e3).toFixed(4)}h`);
   try {
     const p = presenceSettings(c || {});
-    if (p.suppressWhileActive) on.push(`macOS active-use suppression (${p.activeIdleSeconds / 60} min idle window)${process.platform === "darwin" ? "" : " (no effect on this OS)"}`);
+    if (p.suppressWhileActive) on.push(`active-use suppression (${p.activeIdleSeconds / 60} min idle window)${PRESENCE_PROBES[process.platform] ? "" : " (no effect on this OS)"}`);
   } catch (err) { on.push(`invalid presence setting: ${err.message}`); }
   return on.length ? on.join(", ") : "defaults";
 }
@@ -814,5 +911,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
+if (require.main !== module) module.exports = { runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
