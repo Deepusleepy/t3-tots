@@ -1491,3 +1491,45 @@ test("unreachable webhook, live: the first event finds it down, the next ones do
     assert.deepEqual(f.posts.map((e) => e.runId).sort(), ["A1", "B1", "C1"]);
   } finally { await f.close(); }
 });
+
+const askT = (pending) => ({ id: "Q", title: "Thread Q", status: "running", activeRunId: "Q1", latestRunId: "Q1", pendingRuntimeRequest: pending ? { id: "q1" } : null });
+const askReq = { id: "q1", kind: "user_input", status: "pending", createdAt: new Date().toISOString(), responseCapability: { type: "resumable" } };
+const askItem = { type: "user_input_request", requestId: "q1", questions: [{ id: "a", header: "Go", question: "Ship it?", options: [{ label: "Yes" }, { label: "No" }] }] };
+const askProjection = (withRequest) => ({ runs: [{ id: "Q1", status: "running", startedAt: new Date().toISOString() }], runtimeRequests: withRequest ? [askReq] : [], turnItems: withRequest ? [askItem] : [] });
+test("questions, live: T3 reconnecting while the webhook is down doesn't queue the question again each time; it arrives once", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 503);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(true));
+    await f.waitFor(() => f.hits >= 1, 8000, "the first try");
+    for (let i = 0; i < 3; i++) { f.dropSockets(); await f.waitFor(() => f.count(/connected to T3/) === i + 2, 15000, `reconnect ${i + 1}`); await fakeT3.sleep(300); }
+    f.setHookStatus(() => 200);
+    await f.waitFor(() => f.posts.length >= 1, 70000, "the question once the webhook is back"); await fakeT3.sleep(1500);
+    assert.deepEqual(f.posts.map((e) => e.event), ["request.opened"], "one question, not one per reconnect");
+  } finally { await f.close(); }
+});
+test("questions, live: a question T3 announces before its thread data shows it is still sent", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(false)); // the live update is ahead of the thread read
+    setTimeout(() => f.projections.set("Q", askProjection(true)), 1200); // the read catches up, with no new live update
+    await f.waitFor(() => f.posts.length >= 1, 9000, "the question");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.requestId]), [["request.opened", "q1"]]);
+  } finally { await f.close(); }
+});
+test("summary, live: run ends combined while a summary is being sent are counted in the next one, not lost", async () => {
+  const f = await fakeT3.startFake({ runEndsPerMinute: 0 });
+  try {
+    f.setHookStatus(() => ({ status: 200, delayMs: 2500 }));
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    const finish = async (id) => { f.update(busyT(id, `${id}1`), { runs: [{ id: `${id}1`, status: "running", startedAt: isoNow() }], turnItems: [] }); await fakeT3.sleep(150); f.update(doneT(id, `${id}1`), doneRun(`${id}1`)); };
+    await finish("A");
+    await f.waitFor(() => f.hits === 1, 9000, "the first summary is on its way");
+    await finish("B");
+    await f.waitFor(() => f.posts.length === 2, 20000, "the second summary");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 1], ["thread.missed.summary", 1]]);
+    await f.waitFor(() => f.state().missed.count === 0 && !f.state().sending, 9000, "the second summary to be accepted");
+  } finally { await f.close(); }
+});
