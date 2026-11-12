@@ -1257,6 +1257,8 @@ test("rate limit: 429 or a rate-limit body pauses sending for Retry-After, or 15
   assert.equal(l.rateLimitPause(200, "", null, now), 0);
   assert.equal(l.rateLimitPause(400, "bad request", null, now), 0);
   assert.equal(l.rateLimitPause(503, "busy", null, now), 0);
+  for (const body of ["an accurate limit applies", "too many characters in title", "Last reply: we hit too many errors"]) assert.equal(l.rateLimitPause(400, body, null, now), 0, body);
+  assert.equal(l.rateLimitPause(400, "Too Many Requests", null, now), l.RATE_LIMIT_PAUSE_MS);
   assert.equal(l.rateLimitPause(429, "", null, now), l.RATE_LIMIT_PAUSE_MS);
   assert.equal(l.rateLimitPause(400, '{"error":"Automation run rate limit exceeded: 200 per hour"}', null, now), l.RATE_LIMIT_PAUSE_MS);
   assert.equal(l.rateLimitPause(429, "", "1800", now), 1800e3);
@@ -1323,6 +1325,12 @@ test("issue 40, live: after a rate-limit reply nothing more is posted, and the h
     await fakeT3.sleep(400);
     assert.equal(f.hits, 1, "one refused post, then silence: no in-line retries and no posts for the next events");
     assert.equal(f.count(/webhook is rate limited; nothing is sent until/), 1);
+    await f.stop(); f.start(); await f.waitFor(() => f.count(/watching 3 threads/) === 1, 9000, "restart");
+    f.update(busyT("D", "d1"), { runs: [{ id: "d1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    await fakeT3.sleep(150);
+    f.update(doneT("D", "d1"), doneRun("d1"));
+    await f.waitFor(() => ((f.state() || {}).finished || {}).d1, 9000, "fourth finish saved"); await fakeT3.sleep(400);
+    assert.equal(f.hits, 1, "the pause survives a restart: nothing is posted into the rate limit");
     assert.deepEqual(f.posts, []);
   } finally { await f.close(); }
 });
@@ -1343,4 +1351,44 @@ test("issue 40, live: a finish the webhook refused more than an hour ago isn't r
     assert.deepEqual(f.posts.map((e) => [e.event, e.count, e.threads]), [["thread.missed.summary", 1, ["Thread A"]]]);
     assert.equal(f.state().finished.a1.e, undefined, "the stale finish is settled, so no later restart sends it");
   } finally { await f.close(); }
+});
+
+test("issue 40, live: a lost connection in the same process is capped like a restart, so its finishes are counted, not sent one by one", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await fakeT3.sleep(100);
+    for (const id of ["A", "B"]) f.setThread(doneT(id, `${id}1`), doneRun(`${id}1`));
+    f.dropSockets();
+    await f.waitFor(() => f.posts.length >= 1, 15000, "summary after the reconnect"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 2]]);
+  } finally { await f.close(); }
+});
+test("issue 40, live: a summary the webhook refused is kept across a restart and sent once it is accepted", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    for (const id of ["A", "B", "C"]) f.setThread(doneT(id, `${id}1`), doneRun(`${id}1`));
+    f.setHookStatus(() => 503); await fakeT3.sleep(50);
+    f.start(); await f.waitFor(() => /thread\.missed\.summary \(3 run ends\) not sent/.test(f.out), 9000, "refused summary");
+    assert.equal(f.state().missed.count, 3, "the count stays saved");
+    await f.stop(); f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.length >= 1, 9000, "summary after the restart"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count, e.threads.length]), [["thread.missed.summary", 3, 3]]);
+    assert.equal(f.state().missed.count, 0);
+  } finally { await f.close(); }
+});
+test("retry round: stale run ends are counted; at most 10 are posted, questions and failures first; nothing while paused", () => {
+  const now = Date.now(), old = now - l.RUN_END_KEEP_MS - 1;
+  const item = (event, n, since = now) => ({ e: { event, runId: `${event}${n}` }, since });
+  const finishes = Array.from({ length: 12 }, (_, i) => item("thread.finished", i));
+  const q = [item("thread.finished", "old", old), ...finishes, item("thread.failed", 1, old), item("request.opened", 1)];
+  const plan = l.drainPlan(q, now, false);
+  assert.deepEqual(plan.stale.map((i) => i.e.runId), ["thread.finishedold"]);
+  assert.equal(plan.send.length, l.RETRY_POSTS_PER_ROUND);
+  assert.deepEqual(plan.send.slice(0, 2).map((i) => i.e.event), ["thread.failed", "request.opened"], "an old failure is still sent, and it goes first");
+  assert.equal(plan.keep.length, 4);
+  const held = l.drainPlan(q, now, true);
+  assert.deepEqual([held.stale.length, held.send.length, held.keep.length], [1, 0, 14]);
 });
