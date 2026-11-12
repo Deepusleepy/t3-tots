@@ -722,10 +722,13 @@ test("state, live: a save Windows refuses while another process has listen-state
   } finally { await f.close(); }
 });
 test("reliability settings: catch-up is capped at 30 minutes by default, the rest are off; bad values fall back to the defaults", () => {
-  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, runEndsPerMinute: 10, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.equal(l.reliability({ runEndsPerMinute: 3 }).runEndsPerMinute, 3);
+  assert.equal(l.reliability({ runEndsPerMinute: 0 }).runEndsPerMinute, 0, "0 combines every run end");
+  assert.equal(l.settingsLine({ runEndsPerMinute: 3 }), "run ends combined above 3 a minute");
   assert.equal(l.reliability({ catchUpMinutes: 100000 }).catchUpMinutes, 100000, "a large number brings back the old reach");
   assert.deepEqual(l.reliability({ catchUpMinutes: 2, failureWaveSeconds: 20, failureWaveMaxSeconds: 90, repeatFailureHours: 6 }),
-    { catchUpMinutes: 2, failureWaveMs: 20000, failureWaveMaxMs: 90000, repeatFailureMs: 6 * 3600e3 });
+    { catchUpMinutes: 2, runEndsPerMinute: 10, failureWaveMs: 20000, failureWaveMaxMs: 90000, repeatFailureMs: 6 * 3600e3 });
   assert.deepEqual(l.reliability({ catchUpMinutes: "x", failureWaveSeconds: -1, repeatFailureHours: null }), l.reliability({}));
   assert.equal(l.reliability({ catchUpMinutes: 0 }).catchUpMinutes, 0, "0 is a real limit: nothing from before the start");
 });
@@ -1233,7 +1236,7 @@ test("Windows presence: T3 Code and its Nightly build count, other apps don't; b
   assert.equal(l.readPresence("win32", () => "not json"), null);
   assert.equal(l.presentInT3(l.readPresence("win32", exec("T3 Code (Nightly)"))), true);
 });
-test("Windows presence, real probe: on Windows it names the foreground app's state and a non-negative idle time", { skip: process.platform !== "win32" && "Windows only" }, () => {
+test("Windows presence, real probe: on Windows it names the foreground app's state and a non-negative idle time", { skip: process.platform !== "win32" ? "Windows only" : process.env.CI ? "needs a desktop session; a cold CI runner takes longer than the probe's 5 s limit" : false }, () => {
   const p = l.readPresence();
   assert.equal(typeof p.t3, "boolean");
   assert.ok(Number.isFinite(p.idleSeconds) && p.idleSeconds >= 0, JSON.stringify(p));
@@ -1386,6 +1389,9 @@ test("run-end budget: 10 a minute go out on their own; the next one must be comb
   assert.equal(sent.length, l.RUN_ENDS_PER_MINUTE, "a refused one doesn't use up budget");
   assert.equal(l.runEndBudget(sent, t0 + 59999), false);
   assert.equal(l.runEndBudget(sent, t0 + 60000), true, "the first send has aged out");
+  const few = [];
+  assert.deepEqual([1, 2, 3].map((i) => l.runEndBudget(few, t0 + i, 2)), [true, true, false], "the limit comes from the setting");
+  assert.equal(l.runEndBudget([], t0, 0), false, "0 sends none on its own");
 });
 test("issue 40, live: a burst of finishes sends 10 on their own and the rest as one summary; a failure in the burst is still sent", async () => {
   const f = await fakeT3.startFake();
@@ -1419,5 +1425,39 @@ test("catch-up, live: a thread with many old runs is read once, not once per run
     f.start(); await f.waitFor(() => f.posts.length >= 1, 9000, "summary"); await fakeT3.sleep(300);
     assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 12]]);
     assert.equal(f.reads("A") - before, 1, "one read of the thread for its 12 runs");
+  } finally { await f.close(); }
+});
+
+test("autostart node path: a Homebrew Cellar path becomes its opt link when that exists; any other path is kept", () => {
+  const yes = () => true, no = () => false;
+  assert.equal(l.stableNode("/opt/homebrew/Cellar/node@24/24.22.1/bin/node", yes), "/opt/homebrew/opt/node@24/bin/node");
+  assert.equal(l.stableNode("/usr/local/Cellar/node/23.1.0_1/bin/node", yes), "/usr/local/opt/node/bin/node");
+  assert.equal(l.stableNode("/home/linuxbrew/.linuxbrew/Cellar/node/23.1.0/bin/node", yes), "/home/linuxbrew/.linuxbrew/opt/node/bin/node");
+  assert.equal(l.stableNode("/opt/homebrew/Cellar/node@24/24.22.1/bin/node", no), "/opt/homebrew/Cellar/node@24/24.22.1/bin/node", "no link: keep what runs now");
+  for (const p of ["/usr/bin/node", "C:\\Program Files\\nodejs\\node.exe", "/Users/x/.nvm/versions/node/v24.0.0/bin/node"]) assert.equal(l.stableNode(p, yes), p);
+});
+test("issue 40, live: the summary leaves out old finishes that filters.finished.skipWhen would hold back", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0, filters: { finished: { skipWhen: ["^Nothing to do"] } } });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    const reply = (id, text) => ({ runs: [{ id, status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow() }], turnItems: [{ type: "assistant_message", runId: id, text }] });
+    f.setThread(doneT("A", "a1"), reply("a1", "Nothing to do here."));
+    f.setThread(doneT("B", "b1"), reply("b1", "Shipped the fix."));
+    await fakeT3.sleep(50);
+    f.start(); await f.waitFor(() => f.posts.length >= 1, 9000, "summary"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count, e.threads]), [["thread.missed.summary", 1, ["Thread B"]]]);
+  } finally { await f.close(); }
+});
+test("issue 40, live: old finishes of a thread that is running again are counted, not left for a later restart", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    const done = (id, ordinal) => ({ id, ordinal, status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow() });
+    f.setThread(busyT("A", "a3"), { runs: [done("a1", 1), done("a2", 2), { id: "a3", ordinal: 3, status: "running", startedAt: isoNow() }], turnItems: [] });
+    await fakeT3.sleep(50);
+    f.start(); await f.waitFor(() => f.posts.length >= 1, 9000, "summary"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 2]]);
   } finally { await f.close(); }
 });
