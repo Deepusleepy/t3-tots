@@ -149,19 +149,24 @@ function lockDown(f) {
   if (process.platform !== "win32") { fs.chmodSync(f, 0o600); return; }
   try { cp.execFileSync("icacls", [f, "/inheritance:r", "/grant:r", `${process.env.USERNAME}:F`], { stdio: "ignore" }); } catch { console.error("note: couldn't restrict listen.json permissions (icacls)"); }
 }
-async function setup() { // stdin: line 1 = webhook URL, then "Header-Name: value" lines (stops after an Authorization line, or at a blank line)
+async function readHook(what) { // stdin: line 1 = webhook URL, then "Header-Name: value" lines (stops after an Authorization line, or at a blank line)
   const lines = [], rl = require("readline").createInterface({ input: process.stdin, output: process.stdin.isTTY ? process.stderr : undefined, terminal: !!process.stdin.isTTY });
-  if (process.stdin.isTTY) process.stderr.write("T3 Tots listener setup: paste two lines from the routine panel, pressing Enter after each.\n  Line 1: Webhook URL starting https://\n  Line 2: Authorization header starting Authorization:\n");
+  if (process.stdin.isTTY) process.stderr.write(`${what}: paste two lines from the routine panel, pressing Enter after each.\n  Line 1: Webhook URL starting https://\n  Line 2: Authorization header starting Authorization:\n`);
   for await (const l of rl) {
     const t = l.trim().replace(/^POST\s+/i, ""); if (!t) { if (lines.length) break; else continue; }
     lines.push(t); if (lines.length > 1 && /^authorization:/i.test(t)) break;
-    if (process.stdin.isTTY && lines.length === 1) process.stderr.write(/^https?:\/\//.test(t) ? "  got the URL. Now line 2 (Authorization: ...):\n" : "  that doesn't start with https:// - run setup again and paste the Webhook URL first.\n");
+    if (process.stdin.isTTY && lines.length === 1) process.stderr.write(/^https?:\/\//.test(t) ? "  got the URL. Now line 2 (Authorization: ...):\n" : "  that doesn't start with https:// - run it again and paste the Webhook URL first.\n");
   }
   rl.close();
-  const url = lines.shift() || ""; if (!/^https:\/\//.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(url)) die("BAD_URL", "the first line must be the webhook URL (https://...)");
+  const url = lines.shift() || ""; if (!hookUrlOk(url)) die("BAD_URL", "the first line must be the webhook URL (https://...)");
   const headers = {}; for (const l of lines) { const m = l.match(/^([A-Za-z0-9-]+):\s*(.+)$/); if (!m) die("BAD_HEADER", "header lines must look like 'Name: value'"); headers[m[1]] = m[2]; }
+  return { url, headers };
+}
+function saveConf(c) { const tmp = CONF + ".part"; fs.writeFileSync(tmp, JSON.stringify(c, null, 1) + "\n", { mode: 0o600 }); fs.renameSync(tmp, CONF); lockDown(CONF); }
+async function setup() {
+  const { url, headers } = await readHook("T3 Tots listener setup");
   const old = readJSON(CONF, {}), c = { ...old, url, headers, machine: optv("--machine") || old.machine || os.hostname().replace(/\.local$/, ""), approvals: old.approvals === true, skipStaleMinutes: old.skipStaleMinutes ?? 1440 };
-  const tmp = CONF + ".part"; fs.writeFileSync(tmp, JSON.stringify(c, null, 1) + "\n", { mode: 0o600 }); fs.renameSync(tmp, CONF); lockDown(CONF);
+  saveConf(c);
   console.log(`saved listen.json (url set, ${Object.keys(headers).length} header(s), machine "${c.machine}", approvals ${c.approvals ? "on" : "off"}). Test it with: node "${path.join(DIR, "t3listen")}" test`);
 }
 
@@ -826,7 +831,7 @@ async function catchUp(ep, threads, ctx) {
     // look at busy threads too so a failed end from downtime is still reported (failed always fires)
     if (failedSince) for (const t of catchUpThreads(threads, failedSince)) await reportEnd(ep, t, null, { since, failedSince });
   } finally { catchingUp = false; }
-  for (const b of bots.values()) await b.flushMissed();
+  for (const b of bots.values()) { if (!b.main) await b.retryRound(); else await b.flushMissed(); } // the other bots resend what they kept, then every bot sends its summary
   const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
   listening = next.listening;
   if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
@@ -987,12 +992,71 @@ function status() {
   if (!running) { const p = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (p) try { process.kill(p, 0); running = true; pid = p; } catch {} }
   const st = readJSON(STATE, { sent: {} }), open = Object.values(st.sent || {}).filter((s) => !s.skipped).length;
   let tail = ""; try { tail = fs.readFileSync(LOG, "utf8").trim().split("\n").slice(-3).join("\n"); } catch {}
-  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nfilters: ${filtersLine((readJSON(CONF, {}) || {}).filters)}\nlistener settings: ${settingsLine(readJSON(CONF, {}) || {})}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
+  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nfilters: ${filtersLine((readJSON(CONF, {}) || {}).filters)}\nlistener settings: ${settingsLine(readJSON(CONF, {}) || {})}\nbots:\n${botLines(readJSON(CONF, {}) || {}).map((l) => "  " + l).join("\n")}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
+}
+// ---------- bots and subscriptions (edits listen.json; a running listener picks the change up within a minute) ----------
+const optAll = (f) => argv.flatMap((a, i) => (a === f && argv[i + 1] !== undefined ? [argv[i + 1]] : a.startsWith(f + "=") ? [a.slice(f.length + 1)] : []));
+async function t3Projects() { // -> [{ id, title }] from the running T3, or null when it can't be asked
+  const ep = endpoint(); if (!ep || !ep.token) return null;
+  try { const r = await fetch(`${ep.base}/api/orchestration/shell`, { headers: ep.H, signal: AbortSignal.timeout(8000) }); if (!r.ok) return null; return ((await r.json()).projects || []).map((x) => ({ id: x.id, title: x.title })); } catch { return null; }
+}
+function projectRef(q, projects) { // a project named by title or id -> { id, title }; the id is what is matched, so a rename changes nothing
+  if (!projects) die("T3_NOT_REACHABLE", "T3 Code must be running here to look a project up; start it and try again");
+  const byId = projects.find((x) => x.id === q); if (byId) return byId;
+  const hits = projects.filter((x) => String(x.title || "").trim().toLowerCase() === q.trim().toLowerCase());
+  if (hits.length > 1) die("AMBIGUOUS", `${hits.length} projects are called "${clean(q)}"; pass the id: ${hits.map((x) => x.id).join(", ")}`);
+  if (!hits.length) die("NOT_FOUND", `no T3 project is called "${clean(q)}". Projects: ${projects.map((x) => clean(x.title)).slice(0, 30).join(", ")}`);
+  return hits[0];
+}
+async function ruleFromArgs() {
+  const names = optAll("--project"), ev = optv("--events"), rule = {};
+  if (names.length) { const all = await t3Projects(); rule.projects = names.map((n) => projectRef(n, all)); }
+  if (ev) { rule.events = ev.split(",").map((x) => x.trim()).filter(Boolean); const bad = rule.events.find((x) => !EVENT_GROUPS.includes(x)); if (bad || !rule.events.length) die("USAGE", `--events takes ${EVENT_GROUPS.join(", ")}`); }
+  return rule;
+}
+const ruleKey = (r) => JSON.stringify([(r.projects || []).map((x) => (x && typeof x === "object" ? x.id : x)).sort(), [...(r.events || [])].sort()]);
+const ruleText = (r) => `${r.events ? r.events.join(", ") : "every event"} from ${r.projects ? r.projects.map((x) => (x && typeof x === "object" ? clean(x.title || x.id) : x)).join(", ") : "every project"}`;
+function botText(name, b) {
+  const only = [].concat(b.only || []), skip = [].concat(b.skip || []);
+  return `${name}: gets ${only.length ? only.map(ruleText).join("; and ") : "everything"}${skip.length ? `; not ${skip.map(ruleText).join("; nor ")}` : ""}`;
+}
+const botLines = (c) => [botText("main", c.main || {}), ...Object.entries(c.bots || {}).map(([n, b]) => botText(n, b))];
+function saveBots(c) { try { compileRouting(c); } catch (err) { die("BAD_LISTEN_CONFIG", err.message); } saveConf(c); console.log(botLines(c).join("\n")); console.log("A running listener picks this up within a minute."); }
+const confOrDie = () => { const c = readJSON(CONF, null); if (!c) die("NO_LISTEN_CONFIG", `run setup first: node "${path.join(DIR, "t3listen")}" setup`); return c; };
+async function botsCmd() { console.log(botLines(confOrDie()).join("\n")); }
+async function botCmd() { // bot add <name> [--project p]... [--events a,b] (URL and key on stdin) | bot remove <name>
+  const sub = argv[1], name = argv[2], c = confOrDie(); c.bots = c.bots || {};
+  if (!["add", "remove"].includes(sub) || !name) die("USAGE", "t3listen bot add <name> [--project p]... [--events a,b] | bot remove <name>");
+  if (sub === "remove") { if (!c.bots[name]) die("NOT_FOUND", `no bot called "${clean(name)}"`); delete c.bots[name]; return saveBots(c); }
+  if (!BOT_NAME.test(name) || name.toLowerCase() === "main") die("USAGE", `"${clean(name)}" is not a usable bot name (letters, digits, - and _; "main" is the main bot)`);
+  const rule = await ruleFromArgs(), had = c.bots[name], hook = await readHook(`T3 Tots bot "${name}"`);
+  c.bots[name] = { ...hook, only: Object.keys(rule).length ? [rule] : (had && had.only) || [], skip: (had && had.skip) || [] };
+  saveBots(c);
+}
+async function subscribeCmd(un) { // subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]
+  const name = argv[1], c = confOrDie(), rule = await ruleFromArgs();
+  if (!name || !Object.keys(rule).length) die("USAGE", `t3listen ${un ? "unsubscribe" : "subscribe"} <bot|main> [--project p]... [--events ${EVENT_GROUPS.join(",")}]`);
+  const b = name === "main" ? (c.main = c.main || {}) : (c.bots || {})[name]; if (!b) die("NOT_FOUND", `no bot called "${clean(name)}"`);
+  const only = (b.only = [].concat(b.only || [])), skip = (b.skip = [].concat(b.skip || [])), same = (r) => ruleKey(r) === ruleKey(rule);
+  if (un) {
+    const i = only.findIndex(same);
+    if (i < 0) { if (!skip.some(same)) skip.push(rule); }
+    else if (only.length === 1 && name !== "main") die("LAST_SUBSCRIPTION", `that is all "${name}" gets; without it the bot would get everything. Remove the bot instead: t3listen bot remove ${name}`);
+    else only.splice(i, 1);
+  } else {
+    const i = skip.findIndex(same);
+    if (i >= 0) skip.splice(i, 1);
+    else if (!only.length) die("ALREADY_SUBSCRIBED", `"${name}" already gets everything`);
+    else if (!only.some(same)) only.push(rule);
+  }
+  saveBots(c);
 }
 async function test() {
-  C = loadConfig(); const e = { event: "test", machine: C.machine, threadId: "test", title: "t3listen test", project: null, requestId: "test-" + Date.now(), kind: "test" };
+  C = loadConfig(); const bot = optv("--bot"), hook = bot && bot !== "main" ? C.routing.bots[bot] : C;
+  if (!hook) die("NOT_FOUND", `no bot called "${clean(bot)}"`);
+  const e = { event: "test", machine: C.machine, threadId: "test", title: "t3listen test", project: null, requestId: "test-" + Date.now(), kind: "test" };
   if (DRY) { console.log("DRY-RUN payload " + JSON.stringify({ ...e, text: `t3listen test from ${C.machine}` })); return; }
-  const r = await post({ ...e, text: `t3listen test from ${C.machine}: the webhook works`, sentAt: new Date().toISOString() });
+  const r = await post({ ...e, text: `t3listen test from ${C.machine}: the webhook works`, sentAt: new Date().toISOString() }, { config: { ...C, url: hook.url, headers: hook.headers } });
   if (!r.ok) die(r.status ? "WEBHOOK_REJECTED" : "WEBHOOK_UNREACHABLE", r.status ? `HTTP ${r.status}${r.status === 401 || r.status === 403 ? " (check the key)" : ""}${r.body ? `: ${r.body}` : ""}` : r.body);
   console.log(`OK: webhook answered HTTP ${r.status}`);
 }
@@ -1033,8 +1097,11 @@ async function previewFinish() { // print the run-end event the listener would s
 
 const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [--log] [--verbose]   follow T3 and POST question events to the webhook
 t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
-t3listen test [--dry-run]         send one test event to the webhook
+t3listen test [--dry-run] [--bot name]   send one test event to the main bot's webhook, or to one bot's
+t3listen bots                     list the bots and what each gets
+t3listen bot add <name> [--project p]... [--events a,b] | bot remove <name>   add a bot (its webhook URL and key are read from stdin, like setup) or remove one
+t3listen subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]   change what a bot gets; events: questions, approvals, finished, cancelled, failed
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
-else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
+if (require.main !== module) module.exports = { compileRouting, routeNames, eventGroup, EVENT_GROUPS, botText, stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
+else ({ run, setup, test, bots: botsCmd, bot: botCmd, subscribe: () => subscribeCmd(false), unsubscribe: () => subscribeCmd(true), "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });
