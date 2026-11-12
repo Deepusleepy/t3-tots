@@ -116,9 +116,8 @@ Each POST can start work on the receiving side, so the listener limits bursts by
 
 Built in, with no setting:
 
-- **Old run ends become one message.** A finish or cancel is sent on its own only while it is fresh: within `catchUpMinutes` of a restart or reconnect, and for at most an hour while the webhook is refusing or unreachable. Older ones are counted and sent once as `thread.missed.summary`. Failures and questions are never dropped this way. The summary counts every finish and cancel of a type you haven't switched off in `filters`; it doesn't read each reply for `postWhen` or `skipWhen`. The count is saved, so a refused summary is tried again, also after a restart.
-- **A rate limit stops all sending.** When the webhook answers HTTP 429, or any reply that says "rate limit" or "too many requests", nothing more is posted until its `Retry-After` time, or for 15 minutes when it gives none. Events are kept meanwhile, and the pause survives a restart.
-- **Held events go out slowly.** Each minute the listener retries at most 10 held events, questions and failures first.
+- **Run ends are combined when there are too many or they are old.** A finish or cancel gets its own message only when it is fresh and few are going out. It is counted instead when it is older than `catchUpMinutes` at a restart or reconnect, when more than 10 went out in the last minute, when the webhook is rate limited, or when it could not be delivered for an hour. The counted ones are sent together as one `thread.missed.summary`, usually within a few seconds. Failures and questions are never combined. The summary counts every finish and cancel of a type you haven't switched off in `filters`; it doesn't read each reply for `postWhen` or `skipWhen`. The count is saved, so a refused summary is tried again, also after a restart.
+- **A rate limit stops all sending.** When the webhook answers HTTP 429, or any reply that says "rate limit" or "too many requests", nothing more is posted until its `Retry-After` time, or for 15 minutes when it gives none. Questions and failures are kept and sent afterwards, first. Finishes and cancels from that time go into the summary. The pause survives a restart.
 
 | Setting | Default | What it does |
 |---|---|---|
