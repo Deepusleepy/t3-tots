@@ -1011,3 +1011,213 @@ test("state, live: a save Windows refuses while another process has listen-state
     assert.equal(f.posts[0].runId, "w1"); assert.ok(!/EPERM|error:/.test(f.out), f.out);
   } finally { await f.close(); }
 });
+
+test("macOS presence: exact T3 bundle family, bounded command, unknown on failure", () => {
+  let calls = 0;
+  const exec = (file, args, options) => {
+    calls++;
+    assert.equal(file, "/usr/bin/osascript");
+    assert.equal(options.timeout, 2000);
+    assert.deepEqual(options.stdio, ["ignore", "pipe", "ignore"]);
+    const vm = require("node:vm");
+    for (const [bundle, expected] of [["com.t3tools.t3code", true], ["com.t3tools.t3code.nightly", true],
+      ["com.t3tools.T3Code.dev", true], ["com.t3tools.t3code-other", false], ["com.apple.Terminal", false]]) {
+      const result = JSON.parse(vm.runInNewContext(args[3], {
+        ObjC: { import() {} },
+        $: { NSWorkspace: { sharedWorkspace: { frontmostApplication: { bundleIdentifier: { js: bundle } } } },
+          CGEventSourceSecondsSinceLastEventType: () => 5 },
+      }));
+      assert.equal(result.t3, expected, bundle);
+      assert.equal(result.idleSeconds, 5);
+    }
+    return '{"t3":true,"idleSeconds":5}';
+  };
+  assert.deepEqual(l.readPresence("darwin", exec), { t3: true, idleSeconds: 5 });
+  assert.equal(l.readPresence("linux", exec), null);
+  assert.equal(l.readPresence("win32", exec), null);
+  assert.equal(calls, 1);
+  assert.equal(l.readPresence("darwin", () => { throw new Error("timeout"); }), null);
+  assert.equal(l.readPresence("darwin", () => "invalid"), null);
+});
+
+test("presence requires foreground T3 and recent input; idle foreground is away", () => {
+  for (const idleSeconds of [0, 10, 59.99, 60, 600, l.PRESENT_IDLE_SECONDS - 0.01]) assert.equal(l.presentInT3({ t3: true, idleSeconds }), true);
+  for (const p of [null, {}, { t3: false, idleSeconds: 0 }, ...[l.PRESENT_IDLE_SECONDS, l.PRESENT_IDLE_SECONDS + 1, 3600, -1, NaN, Infinity, "5", undefined].map(idleSeconds => ({ t3: true, idleSeconds }))]) {
+    assert.equal(l.presentInT3(p), false);
+  }
+});
+
+test("webhook boundary suppresses all notification kinds while active, sends away and test events", async () => {
+  let sends = 0;
+  const state = { sent: {}, finished: {} };
+  const send = async () => { sends++; return { ok: true, status: 200 }; };
+  const config = { url: "https://example.com/events", headers: {}, ...l.presenceSettings({ suppressWhileActive: true }) };
+  for (const event of ["request.opened", "thread.finished", "thread.failed", "thread.cancelled"]) {
+    assert.deepEqual(await l.post({ event }, { state, config, send, presence: () => ({ t3: true, idleSeconds: 1 }) }), { ok: true, suppressed: true });
+  }
+  assert.equal(sends, 0);
+  for (const presence of [() => null, () => ({ t3: false, idleSeconds: 1 }), () => ({ t3: true, idleSeconds: l.PRESENT_IDLE_SECONDS })]) {
+    assert.equal((await l.post({ event: "thread.finished" }, { state, config, send, presence })).status, 200);
+  }
+  await l.post({ event: "test" }, { state, config, send, presence: () => { throw new Error("test must bypass presence"); } });
+  assert.equal(sends, 4);
+});
+
+test("failed delivery rechecks presence on retry; suppression survives restart and hides unseen resolution", async () => {
+  let active = false, sends = 0;
+  const state = { sent: { q: { delivered: false } }, finished: { r: { e: { event: "thread.finished" }, parked: {} } } };
+  const opts = { state, config: { url: "https://example.com", headers: {}, ...l.presenceSettings({ suppressWhileActive: true }) },
+    presence: () => ({ t3: active, idleSeconds: 1 }),
+    send: async () => { sends++; return { ok: false, status: 503, text: async () => "unavailable" }; } };
+  const e = { event: "request.opened", requestId: "q" };
+  assert.equal((await l.post(e, opts)).retry, true);
+  active = true;
+  const retry = await l.post(e, opts);
+  assert.equal(retry.suppressed, true);
+  l.settleDelivery(state, e, retry.suppressed);
+  l.settleDelivery(state, { event: "thread.finished", runId: "r" }, true);
+  const restored = JSON.parse(JSON.stringify(state));
+  assert.equal(restored.sent.q.delivered, true);
+  assert.equal(restored.sent.q.suppressed, true);
+  assert.deepEqual(restored.finished.r, { suppressed: true }); // no catch-up or parked payload left
+  active = false;
+  assert.equal((await l.post({ event: "request.resolved", requestId: "q" }, { ...opts, state: restored })).suppressed, true);
+  assert.equal(sends, 1);
+  restored.sent.q.closing = true;
+  l.settleDelivery(restored, { event: "request.resolved", requestId: "q" }, true);
+  assert.deepEqual(restored.sent, {});
+});
+
+test("presence settings are opt-in with a configurable positive idle window", () => {
+  assert.deepEqual(l.presenceSettings({}), { suppressWhileActive: false, activeIdleSeconds: 900 });
+  assert.deepEqual(l.presenceSettings({ suppressWhileActive: false }), { suppressWhileActive: false, activeIdleSeconds: 900 });
+  assert.deepEqual(l.presenceSettings({ suppressWhileActive: true, activeIdleMinutes: 2.5 }), { suppressWhileActive: true, activeIdleSeconds: 150 });
+  for (const value of [null, "true", 1]) assert.throws(() => l.presenceSettings({ suppressWhileActive: value }), /suppressWhileActive/);
+  for (const value of [null, "15", 0, -1, NaN, Infinity, Number.MAX_VALUE]) assert.throws(() => l.presenceSettings({ activeIdleMinutes: value }), /activeIdleMinutes/);
+  assert.equal(l.presentInT3({ t3: true, idleSeconds: 149 }, 150), true);
+  assert.equal(l.presentInT3({ t3: true, idleSeconds: 150 }, 150), false);
+});
+
+test("disabled presence does not probe the OS; enabled presence honors the configured window", async () => {
+  let sends = 0;
+  const opts = { state: { sent: {}, finished: {} }, config: { url: "https://example.com", headers: {}, ...l.presenceSettings({}) },
+    send: async () => { sends++; return { ok: true, status: 200 }; },
+    presence: () => { throw new Error("disabled setting must not probe the OS"); } };
+  assert.equal((await l.post({ event: "thread.finished" }, opts)).status, 200);
+  opts.config = { ...opts.config, ...l.presenceSettings({ suppressWhileActive: true, activeIdleMinutes: 1 }) };
+  opts.presence = () => ({ t3: true, idleSeconds: 60 });
+  assert.equal((await l.post({ event: "thread.finished" }, opts)).status, 200);
+  opts.presence = () => ({ t3: true, idleSeconds: 59 });
+  assert.equal((await l.post({ event: "thread.finished" }, opts)).suppressed, true);
+  assert.equal(sends, 2);
+});
+
+test("presence suppresses failure batches and clears each member's retry/catch-up payload", async () => {
+  const state = { sent: {}, finished: { a: { e: {}, parked: {} }, b: { e: {} } } };
+  const e = { event: "thread.failed.batch", failures: [{ runId: "a" }, { runId: "b" }] };
+  const r = await l.post(e, { state, config: l.presenceSettings({ suppressWhileActive: true }),
+    presence: () => ({ t3: true, idleSeconds: 0 }), send: () => { throw new Error("batch must not be posted"); } });
+  assert.equal(r.suppressed, true);
+  l.settleDelivery(state, e, r.suppressed);
+  assert.deepEqual(state.finished, { a: { suppressed: true }, b: { suppressed: true } });
+});
+
+// Run a real listener against the fake server/webhook; only the native presence
+// boundary is replaced in the disposable tool copy. This works on every OS.
+const presenceRun = (id, status = "running", extra = {}) => ({ id, status, startedAt: "2026-11-07T04:00:00Z", ...extra });
+function mockNativePresence(f, value) {
+  const fs = require("fs"), file = path.join(f.dir, "presence-fixture.json"), script = path.join(f.dir, "t3listen");
+  fs.writeFileSync(file, JSON.stringify(value));
+  const preload = `\n(() => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const cp = require("child_process"), exec = cp.execFileSync;
+    cp.execFileSync = (file, ...args) => file === "/usr/bin/osascript"
+      ? require("fs").readFileSync(require("path").join(__dirname, "presence-fixture.json"), "utf8") : exec(file, ...args);
+  })();\n`;
+  fs.writeFileSync(script, fs.readFileSync(script, "utf8").replace(/^(#![^\n]*\n)/, "$1" + preload));
+  return (next) => fs.writeFileSync(file, JSON.stringify(next));
+}
+
+test("presence, live: suppression survives restart, unseen question closes quietly, away finish posts", async () => {
+  const f = await startFake({ suppressWhileActive: true });
+  const setPresence = mockNativePresence(f, { t3: true, idleSeconds: 1 });
+  const req = { id: "q-presence", kind: "user_input", status: "pending", createdAt: now(), responseCapability: { type: "resumable" } };
+  const item = { type: "user_input_request", requestId: req.id, questions: [{ id: "q", question: "Which?", options: [{ label: "Blue" }] }] };
+  try {
+    f.setThread(busy("F", "rf"), { runs: [presenceRun("rf")], turnItems: [] });
+    f.setThread({ ...busy("Q", "rq"), pendingRuntimeRequest: { id: req.id } }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [req] });
+    f.start(); await f.waitFor(() => f.state()?.sent[req.id]?.suppressed, 8000, "suppressed question");
+    f.update(idle("F", "rf"), { runs: [presenceRun("rf", "completed", { completedAt: now() })], turnItems: [] });
+    await f.waitFor(() => f.state()?.finished.rf?.suppressed, 8000, "suppressed finish");
+    assert.equal(f.posts.length, 0);
+    await f.stop(); setPresence({ t3: false, idleSeconds: 1 });
+    const watches = f.count(/watching /);
+    f.start(); await f.waitFor(() => f.count(/watching /) > watches);
+    f.update({ ...busy("Q", "rq"), pendingRuntimeRequest: null }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [{ ...req, status: "resolved", resolvedAt: now() }] });
+    await f.waitFor(() => !f.state()?.sent[req.id], 8000, "quiet resolution");
+    f.update(busy("F", "rf2"), { runs: [presenceRun("rf2")], turnItems: [] });
+    f.update(idle("F", "rf2"), { runs: [presenceRun("rf2", "completed", { completedAt: now() })], turnItems: [] });
+    await f.waitFor(() => f.posts.length === 1);
+    assert.equal(f.posts[0].runId, "rf2");
+  } finally { await f.close(); }
+});
+
+test("presence, live: failure wave batch is suppressed and never replayed after restart", async () => {
+  const f = await startFake({ suppressWhileActive: true, failureWaveSeconds: 0.1 });
+  const setPresence = mockNativePresence(f, { t3: true, idleSeconds: 1 });
+  try {
+    for (const id of ["A", "B"]) f.setThread(busy(id, id + "1"), { runs: [presenceRun(id + "1")], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching /.test(f.out));
+    for (const id of ["A", "B"]) f.update({ ...idle(id, id + "1"), status: "failed" }, { runs: [presenceRun(id + "1", "failed", { completedAt: now() })], turnItems: [] });
+    await f.waitFor(() => f.state()?.finished.A1?.suppressed && f.state()?.finished.B1?.suppressed);
+    assert.match(f.out, /suppressed thread.failed.batch/);
+    assert.equal(f.posts.length, 0);
+    await f.stop(); setPresence({ t3: false, idleSeconds: 1 });
+    const watches = f.count(/watching /);
+    f.start(); await f.waitFor(() => f.count(/watching /) > watches);
+    assert.equal(f.posts.length, 0);
+  } finally { await f.close(); }
+});
+
+test("presence settlement clears only the suppressed run's repeat record, including batch members", () => {
+  const state = { sent: {}, finished: { a: { threadId: "A", e: {} }, b: { threadId: "B", e: {} } },
+    failRepeat: { A: { runId: "a" }, B: { runId: "newer" } } };
+  l.settleDelivery(state, { event: "thread.failed.batch", failures: [{ runId: "a", threadId: "A" }, { runId: "b", threadId: "B" }] }, true);
+  assert.deepEqual(state.failRepeat, { B: { runId: "newer" } });
+});
+
+test("presence, live: a suppressed failure does not hold back the same error while away after restart", async () => {
+  const f = await startFake({ suppressWhileActive: true, repeatFailureHours: 1 });
+  const setPresence = mockNativePresence(f, { t3: true, idleSeconds: 1 });
+  try {
+    f.setThread(busyT("A", "r1"), { runs: [presenceRun("r1")], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching /.test(f.out));
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => f.state()?.finished.r1?.suppressed);
+    assert.equal(f.state().failRepeat.A, undefined);
+    assert.equal(f.posts.length, 0);
+    await f.stop(); setPresence({ t3: false, idleSeconds: 1 });
+    const watches = f.count(/watching /);
+    f.start(); await f.waitFor(() => f.count(/watching /) > watches);
+    f.update(busyT("A", "r2"), { runs: [presenceRun("r2")], turnItems: [] });
+    f.update(failedT("A", "r2"), { runs: [failRun("r2")], turnItems: [errItem("r2", "Provider error 503")] });
+    await f.waitFor(() => f.posts.length === 1);
+    assert.equal(f.posts[0].runId, "r2");
+    assert.equal(f.state().failRepeat.A.runId, "r2");
+  } finally { await f.close(); }
+});
+
+for (const resolved of [true, false]) test(`presence, live: delivered question cleanup respects filters.resolved=${resolved}`, async () => {
+  const f = await startFake({ suppressWhileActive: true, ...(resolved ? {} : { filters: { resolved: false } }) });
+  const setPresence = mockNativePresence(f, { t3: false, idleSeconds: 1 });
+  const req = { id: "q-close", kind: "user_input", status: "pending", createdAt: now(), responseCapability: { type: "resumable" } };
+  const item = { type: "user_input_request", requestId: req.id, questions: [{ id: "q", question: "Which?", options: [{ label: "Blue" }] }] };
+  try {
+    f.setThread({ ...busy("Q", "rq"), pendingRuntimeRequest: { id: req.id } }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [req] });
+    f.start(); await f.waitFor(() => f.posts.length === 1);
+    setPresence({ t3: true, idleSeconds: 1 });
+    f.update({ ...busy("Q", "rq"), pendingRuntimeRequest: null }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [{ ...req, status: "resolved", resolvedAt: now() }] });
+    await f.waitFor(() => !f.state()?.sent[req.id]);
+    assert.deepEqual(f.posts.map(e => e.event), resolved ? ["request.opened", "request.resolved"] : ["request.opened"]);
+  } finally { await f.close(); }
+});

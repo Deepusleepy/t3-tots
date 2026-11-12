@@ -66,6 +66,14 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
+### Active-use suppression (optional, macOS desktop)
+
+Set `"suppressWhileActive": true` in `listen.json` to skip automatic webhook notifications while T3 Code is foreground and system input was used within the last 15 minutes. Set `"activeIdleMinutes": 5`, for example, to choose a shorter window (a positive number). Suppression is off by default and applies to questions, approvals, run ends and failure batches, including retries and catch-up. Suppressed events are remembered, not sent later; the resolution of a suppressed question stays quiet too. Resolutions of delivered questions still go through, so the receiver can close its cards (unless `filters.resolved` is false). Test and dry-run/preview commands still work.
+
+Suppression drops events permanently, including unanswered questions: if you leave before answering a suppressed question, it is not sent to your phone later. The receiver gets no POST for suppressed events, so its delegated-mode actions, such as answering a question or arming resume-at-reset, do not run for those events. The listener's own auto-resume logic is unchanged.
+
+This checks the local macOS desktop app across all threads, without reading window titles or thread text. Windows, Linux, browser-only sessions, activity on another device and failed presence checks retain normal delivery. Input-idle time is system-wide; it cannot prove the user is reading a particular thread.
+
 ### Filters (optional)
 
 Each POST can start work on the receiving side. If most finishes need nothing from you, add a `filters` section to `listen.json` so only the run ends that need action are sent. Without `filters` every event is sent as before. `thread.failed`, `request.opened` and `test` are never filtered.

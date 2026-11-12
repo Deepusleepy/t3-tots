@@ -36,7 +36,7 @@ PINNED = {
  "tools/t3q.py": ["t3q.py", "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b"],
  "tools/t3ctl": ["t3ctl", "a87ed1a77c37f8e91c199d483a1d1e92a370f4c2ae049695aa0ef6b0da213842"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "785fd6e7d1f7c8643312df4788fe3013964cd7cf011519c9107d6d8dd1c7dd3d"],
+ "tools/t3listen": ["t3listen", "1cda72c3ed499e441b921346dcecbc5716c927cc670ebf86aeedc222a13e7c79"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
