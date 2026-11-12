@@ -105,13 +105,45 @@ const numOr = (v, d) => (v === undefined || v === null || v === "" || !Number.is
 const CATCH_UP_MINUTES = 30, RUN_ENDS_PER_MINUTE = 10;
 const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_MINUTES), runEndsPerMinute: numOr(c.runEndsPerMinute, RUN_ENDS_PER_MINUTE), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
   failureWaveMaxMs: numOr(c.failureWaveMaxSeconds, 120) * 1000, repeatFailureMs: numOr(c.repeatFailureHours, 0) * 3600e3 });
+// ---------- bots: who gets which events ----------
+// listen.json "url" and "headers" are the main bot. "bots" adds more webhooks. Every bot, the main one included, follows one rule:
+// it gets an event unless it has "only" rules and none matches, or one of its "skip" rules matches. A rule names projects (T3 ids),
+// event groups, or both. No rules means everything, which is how the main bot starts. An event no bot wants is sent to nobody.
+const EVENT_GROUPS = ["questions", "approvals", "finished", "cancelled", "failed"];
+const eventGroup = (e) => e.event === "thread.finished" ? "finished" : e.event === "thread.cancelled" ? "cancelled" : /^thread\.failed/.test(e.event) ? "failed"
+  : /^request\./.test(e.event) ? (e.kind === "user_input" ? "questions" : "approvals") : null;
+const BOT_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
+const hookUrlOk = (u) => /^https:\/\//.test(u || "") || /^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(u || "");
+function compileRule(r, where) {
+  if (!r || typeof r !== "object" || Array.isArray(r)) throw new Error(`${where} must be an object with "projects" and/or "events"`);
+  const projects = r.projects === undefined ? null : [].concat(r.projects).map((x) => (x && typeof x === "object" ? x.id : x));
+  if (projects && (!projects.length || projects.some((x) => typeof x !== "string" || !x))) throw new Error(`${where}.projects must list project ids`);
+  const events = r.events === undefined ? null : [].concat(r.events);
+  const bad = (events || []).find((x) => !EVENT_GROUPS.includes(x)); if (bad !== undefined) throw new Error(`${where}.events has "${bad}"; use ${EVENT_GROUPS.join(", ")}`);
+  if (events && !events.length) throw new Error(`${where}.events must not be empty`);
+  return { projects, events };
+}
+const compileRules = (o, where) => ({ only: [].concat((o && o.only) || []).map((r, i) => compileRule(r, `${where}.only[${i}]`)), skip: [].concat((o && o.skip) || []).map((r, i) => compileRule(r, `${where}.skip[${i}]`)) });
+function compileRouting(c) { // -> { main: { only, skip }, bots: { name: { url, headers, only, skip } } }; throws with a message that never holds a URL or key
+  const bots = {};
+  for (const [name, b] of Object.entries((c && c.bots) || {})) {
+    if (!BOT_NAME.test(name) || name.toLowerCase() === "main") throw new Error(`bots: "${String(name).slice(0, 40)}" is not a usable bot name (letters, digits, - and _; "main" is taken)`);
+    if (!b || !hookUrlOk(b.url)) throw new Error(`bots.${name}.url must start with https:// (http only for localhost)`);
+    bots[name] = { url: b.url, headers: b.headers || {}, ...compileRules(b, `bots.${name}`) };
+  }
+  return { main: compileRules(c && c.main, "main"), bots };
+}
+const ruleHits = (r, projectId, group) => (!r.projects || r.projects.includes(projectId)) && (!r.events || r.events.includes(group));
+const botWants = (b, projectId, group) => (!b.only.length || b.only.some((r) => ruleHits(r, projectId, group))) && !b.skip.some((r) => ruleHits(r, projectId, group));
+const routeNames = (routing, projectId, group) => [...(botWants(routing.main, projectId, group) ? ["main"] : []), ...Object.keys(routing.bots).filter((n) => botWants(routing.bots[n], projectId, group))];
+const configRouting = (c) => { try { return compileRouting(c); } catch (err) { die("BAD_LISTEN_CONFIG", `listen.json ${err.message}`); } };
 function loadConfig() {
   const c = readJSON(CONF, null);
-  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: staleMinutes(optv("--skip-stale")), filters: null, ...reliability({}), ...presenceSettings({}) };
+  if (!c) { if (DRY) return { machine: os.hostname().replace(/\.local$/, ""), approvals: flag("--approvals"), skipStaleMinutes: staleMinutes(optv("--skip-stale")), filters: null, routing: compileRouting({}), ...reliability({}), ...presenceSettings({}) };
     die("NO_LISTEN_CONFIG", `no listen.json next to t3listen. Create it with: node "${path.join(DIR, "t3listen")}" setup  (or use --dry-run)`); }
   if (!DRY && !/^https:\/\//.test(c.url || "") && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(c.url || "")) die("BAD_LISTEN_CONFIG", "listen.json url must start with https:// (http only for localhost)");
   return { url: c.url, headers: c.headers || {}, machine: c.machine || os.hostname().replace(/\.local$/, ""), approvals: c.approvals === true || flag("--approvals"),
-    skipStaleMinutes: staleMinutes(c.skipStaleMinutes), filters: configFilters(c.filters), ...reliability(c), ...configPresence(c) };
+    skipStaleMinutes: staleMinutes(c.skipStaleMinutes), filters: configFilters(c.filters), routing: configRouting(c), ...reliability(c), ...configPresence(c) };
 }
 function lockDown(f) {
   if (process.platform !== "win32") { fs.chmodSync(f, 0o600); return; }
@@ -212,7 +244,8 @@ function rateLimitPause(status, body = "", retryAfter = null, now = Date.now()) 
 }
 const RETRYABLE = (st, body = "") => st === 408 || st === 429 || st >= 500 || /rate.?limit|too many|try again/i.test(body); // some webhook hosts send rate limits as 400
 function redact(s) { // never let the webhook URL or header values reach the log
-  s = String(s || ""); const secrets = [C && C.url, ...Object.values((C && C.headers) || {}).flatMap((v) => [v, ...String(v).split(/\s+/)])].filter((v) => v && String(v).length > 7);
+  s = String(s || ""); const hooks = C ? [C, ...Object.values((C.routing && C.routing.bots) || {})] : [];
+  const secrets = hooks.flatMap((h) => [h.url, ...Object.values(h.headers || {}).flatMap((v) => [v, ...String(v).split(/\s+/)])]).filter((v) => v && String(v).length > 7);
   for (const v of secrets.sort((a, b) => String(b).length - String(a).length)) s = s.split(String(v)).join("[redacted]");
   return s.replace(/\s+/g, " ").trim().slice(0, 500);
 }
@@ -364,7 +397,9 @@ function holdFailure(e, needsYou) { // -> true when the failure was held back or
 }
 async function flushWave() {
   const w = wave; wave = null; if (!w || !w.items.length) return;
-  return deliver(w.items.length === 1 ? w.items[0] : batchEvent(w.items, C.machine), { now: true });
+  const per = new Map(); // each bot gets the failures it is subscribed to: one alone as thread.failed, more as one batch
+  for (const e of w.items) { const ds = targetsFor(e); if (!ds.includes(mainBot)) markDelivered(e); for (const d of ds) per.set(d, [...(per.get(d) || []), e]); }
+  await Promise.all([...per].map(([d, items]) => sendTo(items.length === 1 ? items[0] : batchEvent(items, C.machine), [d])));
 }
 // ---------- run ends that are combined into one message ----------
 // Every POST starts work on the receiving side, so a finish or cancel gets its own message only when it is fresh and few
@@ -379,7 +414,6 @@ function runEndBudget(sentAt, now = Date.now(), limit = RUN_ENDS_PER_MINUTE) { /
   if (sentAt.length >= limit) return false;
   sentAt.push(now); return true;
 }
-const recentRunEnds = [];
 const newMissed = () => ({ count: 0, titles: [], firstAt: null, lastAt: null });
 function noteMissed(m, e) {
   m.count++;
@@ -390,88 +424,146 @@ function noteMissed(m, e) {
 }
 const missedEvent = (m, machine) => ({ event: "thread.missed.summary", kind: "thread-missed-summary", machine, title: `${m.count} run ends`, count: m.count,
   firstAt: m.firstAt, lastAt: m.lastAt, firstAtLocal: m.firstAt && localTime(m.firstAt), lastAtLocal: m.lastAt && localTime(m.lastAt), threads: m.titles });
-// The count (S.missed) and the pause (S.pausedUntil) are saved in listen-state.json, so a restart neither loses the summary nor posts into a rate limit.
-const paused = (now = Date.now()) => now < (S.pausedUntil || 0);
-function pauseSending(ms) {
-  const until = Date.now() + ms; if (until <= (S.pausedUntil || 0)) return;
-  S.pausedUntil = until; saveState(); log(`webhook is rate limited; nothing is sent until ${localTime(new Date(until).toISOString())}`);
-}
-let flushTimer = null, flushing = false, catchingUp = false; // catch-up counts first and sends one summary at its end
-function combine(e, why) { // count a finish or cancel instead of sending it; the summary follows within a few seconds
-  noteMissed(S.missed, e); markDelivered(e); log(`combined into the next thread.missed.summary (${why}): ${e.event} ${ref(e).slice(-12)}`);
-  if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = null; flushMissed().catch((err) => log("error:", err.message)); }, 5000).unref();
-}
-async function flushMissed() { // the count is cleared only once the webhook took the summary; until then each round tries again
-  if (DRY || flushing || catchingUp || !S.missed.count || paused() || down()) return;
-  const e = missedEvent(S.missed, C.machine); stamp(e);
-  flushing = true; let r; try { r = await post(e); } finally { flushing = false; }
-  if (r.pauseMs) pauseSending(r.pauseMs);
-  if (transportFailure(r)) markDown();
-  if (!r.ok) { log(`thread.missed.summary (${e.count} run ends) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}; it is tried again`); return; }
-  S.missed = newMissed(); saveState();
-  if (r.suppressed) log(`suppressed thread.missed.summary (${e.count} run ends, active in T3)`);
-  else { delivered++; log(`sent thread.missed.summary (${e.count} run ends) -> HTTP ${r.status}`); }
-}
 function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",") || e.sentAt}`).digest("hex").slice(0, 16); }
-// The webhook is "down" after an attempt that got no answer or a 5xx. While it is down, new events go straight to the retry
-// queue, so each one doesn't wait out its own timeout in front of the events behind it. A retry round that gets through clears it.
-let downUntil = 0, kick = null, roundRunning = false;
-const down = (now = Date.now()) => now < downUntil;
-const transportFailure = (r) => !r.ok && !r.suppressed && (!r.status || r.status >= 500);
-function markDown() {
-  const wasDown = down(); downUntil = Date.now() + 60000;
-  if (!wasDown && !kick) kick = setTimeout(() => { kick = null; retryRound().catch((err) => log("error:", err.message)); }, 5000).unref(); // a short blip is retried soon, not a minute later
-}
 const sentLine = (e, r, extra = "") => `sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status}${extra}`;
-async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran); opts.needsYou: never hold it as a repeat
-  if (e.event === "thread.failed" && !opts.now && holdFailure(e, opts.needsYou)) return true;
+const transportFailure = (r) => !r.ok && !r.suppressed && (!r.status || r.status >= 500);
+const MAX_BOT_PENDING = 200;
+let catchingUp = false; // catch-up counts first and each bot sends one summary at its end
+// One bot = one webhook with its own rate-limit pause, run-end budget, summary count and retry queue, so a bot that is slow,
+// refusing or over its limit never holds up another. The main bot keeps its saved state where v1.4.32 had it (S.pausedUntil,
+// S.missed, and the event kept on S.sent / S.finished); every other bot keeps its own under S.bots[name].
+class Bot {
+  constructor(name, hook) { this.name = name; this.hook = hook; this.recent = []; this.downUntil = 0; this.kick = null; this.flushTimer = null; this.flushing = false; this.rounding = false; }
+  get main() { return this.name === "main"; }
+  get tag() { return this.main ? "" : ` [bot ${this.name}]`; }
+  get st() {
+    if (this.main) return S;
+    S.bots = S.bots || {}; const st = (S.bots[this.name] = S.bots[this.name] || {});
+    st.missed = { ...newMissed(), ...st.missed }; st.pending = st.pending || {}; return st;
+  }
+  paused(now = Date.now()) { return now < (this.st.pausedUntil || 0); }
+  down(now = Date.now()) { return now < this.downUntil; }
+  post(e) { return post(e, { config: { ...C, url: this.hook.url, headers: this.hook.headers } }); }
+  pause(ms) {
+    const until = Date.now() + ms; if (until <= (this.st.pausedUntil || 0)) return;
+    this.st.pausedUntil = until; saveState(); log(`webhook is rate limited; nothing is sent until ${localTime(new Date(until).toISOString())}${this.tag}`);
+  }
+  // "Down" follows an attempt that got no answer or a 5xx. While it lasts, new events go straight to the retry queue, so each
+  // one doesn't wait out its own timeout in front of the events behind it. A retry round that gets through clears it.
+  markDown() {
+    const was = this.down(); this.downUntil = Date.now() + 60000;
+    if (!was && !this.kick) this.kick = setTimeout(() => { this.kick = null; this.retryRound().catch((err) => log("error:", err.message)); }, 5000).unref(); // a short blip is retried soon, not a minute later
+  }
+  settle(e, suppressed = false) { if (this.main) return markDelivered(e, suppressed); delete this.st.pending[e.eventId]; saveState(); }
+  keep(item) { // undelivered: kept for the retry rounds and across a restart
+    if (this.main) return retryLater(item);
+    if (perishable(item.e) && !this.st.pending[item.e.eventId] && Object.keys(this.st.pending).length >= MAX_BOT_PENDING) return this.combine(item.e, "too many kept for this bot");
+    this.st.pending[item.e.eventId] = item; saveState();
+  }
+  combine(e, why) { // count a finish or cancel instead of sending it; the summary follows within a few seconds
+    noteMissed(this.st.missed, e); this.settle(e); log(`combined into the next thread.missed.summary (${why}): ${e.event} ${ref(e).slice(-12)}${this.tag}`);
+    if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; this.flushMissed().catch((err) => log("error:", err.message)); }, 5000).unref();
+  }
+  async flushMissed() { // the count is cleared only once the webhook took the summary; until then each round tries again
+    if (DRY || this.flushing || catchingUp || !this.st.missed.count || this.paused() || this.down()) return;
+    const e = missedEvent(this.st.missed, C.machine); stamp(e);
+    this.flushing = true; let r; try { r = await this.post(e); } finally { this.flushing = false; }
+    if (r.pauseMs) this.pause(r.pauseMs);
+    if (transportFailure(r)) this.markDown();
+    if (!r.ok) { log(`thread.missed.summary (${e.count} run ends) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}; it is tried again${this.tag}`); return; }
+    this.st.missed = newMissed(); saveState();
+    if (r.suppressed) log(`suppressed thread.missed.summary (${e.count} run ends, active in T3)${this.tag}`);
+    else { delivered++; log(`sent thread.missed.summary (${e.count} run ends) -> HTTP ${r.status}${this.tag}`); }
+  }
+  async deliver(e) { // one stamped event -> true when nothing is left to keep for this bot
+    if (perishable(e) && this.paused()) { this.combine(e, "webhook is rate limited"); return true; }
+    if (perishable(e) && !runEndBudget(this.recent, Date.now(), C.runEndsPerMinute)) { this.combine(e, `more than ${C.runEndsPerMinute} run ends in a minute`); return true; }
+    if (!this.paused() && !this.down()) {
+      const r = await this.post(e);
+      if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)${this.tag}`); this.settle(e, true); return true; }
+      if (r.ok) { log(sentLine(e, r, this.tag)); delivered++; this.settle(e); return true; }
+      if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${ref(e).slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}${this.tag}`);
+      else log(`webhook not reachable (${r.body})${this.tag}`);
+      if (r.pauseMs) this.pause(r.pauseMs);
+      if (transportFailure(r)) this.markDown();
+    }
+    // kept and retried each minute: retryable failures (network, 408, 429, 5xx) for up to 24h, other 4xx 10 times
+    if (perishable(e) && this.paused()) { this.combine(e, "webhook is rate limited"); return true; }
+    this.keep({ e, rounds: 0, since: Date.now() }); return false;
+  }
+  async retryRound() {
+    if (this.rounding) return; this.rounding = true;
+    try {
+      const taken = this.main ? queue : Object.values(this.st.pending); if (this.main) queue = [];
+      const q = taken.sort((a, b) => perishable(a.e) - perishable(b.e)); // questions and failures go first
+      const stay = (item) => { if (this.main) retryLater(item); }; // another bot's item is still in its saved list
+      let unreachable = false;
+      for (const item of q) {
+        const { e } = item;
+        if (perishable(e)) {
+          const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : this.paused() ? "webhook is rate limited" : !unreachable && !runEndBudget(this.recent, Date.now(), C.runEndsPerMinute) ? `more than ${C.runEndsPerMinute} run ends in a minute` : null;
+          if (why) { this.combine(e, why); continue; }
+        }
+        if (this.paused() || unreachable) { stay(item); continue; } // one attempt found it unreachable: the rest wait for the next round
+        item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
+        const r = await this.post(e);
+        if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)${this.tag}`); this.settle(e, true); continue; }
+        if (r.ok) { this.downUntil = 0; log(sentLine(e, r, ` (retry ${item.rounds})${this.tag}`)); delivered++; this.settle(e); continue; }
+        if (r.pauseMs) this.pause(r.pauseMs);
+        if (transportFailure(r)) { unreachable = true; this.markDown(); }
+        log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}${this.tag}`);
+        if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) this.keep(item);
+        else { log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries${this.main ? "; it is tried again when the listener restarts" : ""}${this.tag}`); if (!this.main) this.settle(e); }
+      }
+      if (this.main && refillFromState(queue, S, Date.now())) saveState();
+      if (!unreachable) await this.flushMissed();
+    } finally { this.rounding = false; }
+  }
+}
+let mainBot = new Bot("main", {});
+const bots = new Map([["main", mainBot]]);
+function syncBots() { // match the running bots to listen.json: the main bot always, the others as configured
+  mainBot.hook = { url: C.url, headers: C.headers || {} };
+  for (const [name, hook] of Object.entries(C.routing.bots)) { if (bots.has(name)) bots.get(name).hook = hook; else bots.set(name, new Bot(name, hook)); }
+  for (const name of [...bots.keys()]) if (name !== "main" && !C.routing.bots[name]) bots.delete(name);
+  for (const name of Object.keys(S.bots || {})) if (!C.routing.bots[name]) { const n = Object.keys(S.bots[name].pending || {}).length; delete S.bots[name]; log(`bot "${name}" is no longer in listen.json${n ? `; ${n} event(s) kept for it are dropped` : ""}`); }
+}
+// A question's close goes to the bots its opening went to, whatever the subscriptions say by then. An event the main bot kept
+// from before a restart goes to the main bot alone: the other bots resend from their own lists.
+const mainOnly = new WeakSet();
+function targetsFor(e) {
+  if (mainOnly.has(e)) return [mainBot];
+  const to = e.event === "request.resolved" && S.sent[e.requestId] && S.sent[e.requestId].to;
+  const names = to || routeNames(C.routing, e.projectId || null, eventGroup(e));
+  return names.map((n) => bots.get(n)).filter(Boolean);
+}
+async function sendTo(e, ds) { // -> true when the main bot has nothing left to keep (it took it, combined it, or isn't subscribed)
   stamp(e);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
-  if (perishable(e) && paused()) { combine(e, "webhook is rate limited"); return true; }
-  if (perishable(e) && !runEndBudget(recentRunEnds, Date.now(), C.runEndsPerMinute)) { combine(e, `more than ${C.runEndsPerMinute} run ends in a minute`); return true; }
-  if (!paused() && !down()) {
-    const r = await post(e);
-    if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)`); markDelivered(e, true); return true; }
-    if (r.ok) { log(sentLine(e, r)); delivered++; markDelivered(e); return true; }
-    if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${ref(e).slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}`);
-    else log(`webhook not reachable (${r.body})`);
-    if (r.pauseMs) pauseSending(r.pauseMs);
-    if (transportFailure(r)) markDown();
-  }
-  // kept and retried each minute: retryable failures (network, 408, 429, 5xx) for up to 24h, other 4xx 10 times
-  if (perishable(e) && paused()) { combine(e, "webhook is rate limited"); return true; }
-  retryLater({ e, rounds: 0, since: Date.now() }); return false;
+  const others = ds.filter((d) => !d.main).map((d) => d.deliver(structuredClone(e)).catch((err) => log("error:", err.message)));
+  let ok = true;
+  if (ds.includes(mainBot)) ok = await mainBot.deliver(e);
+  else { markDelivered(e); if (!ds.length) log(`no bot is subscribed: ${e.event} ${ref(e).slice(-12)} is not sent`); }
+  await Promise.all(others);
+  return ok;
 }
-async function retryRound() {
-  if (roundRunning) return; roundRunning = true;
-  try {
-    const q = queue.sort((a, b) => perishable(a.e) - perishable(b.e)); queue = []; // questions and failures go first
-    let unreachable = false;
-    for (const item of q) {
-      const { e } = item;
-      if (perishable(e)) {
-        const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : paused() ? "webhook is rate limited" : !unreachable && !runEndBudget(recentRunEnds, Date.now(), C.runEndsPerMinute) ? `more than ${C.runEndsPerMinute} run ends in a minute` : null;
-        if (why) { combine(e, why); continue; }
-      }
-      if (paused() || unreachable) { retryLater(item); continue; } // one attempt found it unreachable: the rest wait for the next round
-      item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
-      const r = await post(e);
-      if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)`); markDelivered(e, true); continue; }
-      if (r.ok) { downUntil = 0; log(sentLine(e, r, ` (retry ${item.rounds})`)); delivered++; markDelivered(e); continue; }
-      if (r.pauseMs) pauseSending(r.pauseMs);
-      if (transportFailure(r)) { unreachable = true; markDown(); }
-      log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}`);
-      if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) retryLater(item);
-      else log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries; it is tried again when the listener restarts`);
-    }
-    if (refillFromState(queue, S, Date.now())) saveState();
-    if (!unreachable) await flushMissed();
-  } finally { roundRunning = false; }
+async function deliver(e, opts = {}) { // opts.now: send without the failure-wave / repeat checks (they already ran); opts.needsYou: never hold it as a repeat
+  if (e.event === "thread.failed" && !opts.now && holdFailure(e, opts.needsYou)) return true;
+  const ds = targetsFor(e);
+  if (e.event === "request.opened" && S.sent[e.requestId]) S.sent[e.requestId].to = ds.map((d) => d.name);
+  return sendTo(e, ds);
 }
-setInterval(() => retryRound().catch((err) => log("error:", err.message)), 60000).unref();
+let confSeen = 0;
+function reloadBots() { // listen.json changed while running (t3listen bot / subscribe / unsubscribe): pick up the new bots and rules
+  let m = 0; try { m = fs.statSync(CONF).mtimeMs; } catch { return; }
+  if (!confSeen) { confSeen = m; return; } if (m === confSeen) return; confSeen = m;
+  try { C.routing = compileRouting(readJSON(CONF, {})); syncBots(); saveState(); log(`listen.json changed: ${bots.size - 1} extra bot(s); subscriptions reloaded`); }
+  catch (err) { log(`listen.json changed but can't be used (${err.message}); keeping the bots and rules from before`); }
+}
+setInterval(() => { if (DRY || !C) return; reloadBots(); for (const b of bots.values()) b.retryRound().catch((err) => log("error:", err.message)); }, 60000).unref();
 
 // ---------- state: which requests the phone has been told about ----------
-let S = { sent: {}, finished: {}, failRepeat: {}, missed: newMissed(), pausedUntil: 0 };
+let S = { sent: {}, finished: {}, failRepeat: {}, missed: newMissed(), pausedUntil: 0, bots: {} };
 const RENAME_BUSY = ["EBUSY", "EPERM", "EACCES"]; // Windows won't replace a file another process has open (status, a backup, antivirus)
 function saveState() {
   if (DRY) return; const t = STATE + ".part"; fs.writeFileSync(t, JSON.stringify(S));
@@ -487,7 +579,7 @@ const wanted = (r) => r.status === "pending" && !SKIP_KINDS.has(r.kind) && (r.ki
 async function reconcile(ep, threadId, opts = {}) {
   const t = meta.threads.get(threadId) || {}; let p = null;
   if (!opts.gone) { try { p = await threadSnap(ep, threadId); } catch (err) { log(`couldn't read thread ${threadId.slice(0, 40)}: ${err.message}`); return; } }
-  const base = { machine: C.machine, threadId, title: t.title || threadId, project: meta.projects.get(t.projectId) || null };
+  const base = { machine: C.machine, threadId, title: t.title || threadId, project: meta.projects.get(t.projectId) || null, projectId: t.projectId || null };
   const all = p ? p.runtimeRequests || [] : [];
   const open = all.filter(wanted);
   for (const r of open) {
@@ -548,12 +640,12 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   const replyText = filterReply ? String(txt(filterReply)) : null; // the run's whole own reply, for listen.json filters only (never sent or saved)
   // an old run is counted even when its thread has since started another one; only a fresh finish is dropped for a thread that is going on
   if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run",
-    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, title: t.title || t.id, completedAt: run.completedAt, replyText } : null };
+    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, title: t.title || t.id, projectId: t.projectId || null, completedAt: run.completedAt, replyText } : null };
   if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
   const errItem = items.filter((x) => x.type === "error" && x.runId === run.id).at(-1);
   const errText = errItem ? (txt(errItem) || errItem.message || errItem.title) : t.lastError ? (t.lastError.message || "error") : null;
   const done = run.completedAt || new Date().toISOString(), m = meta.threads.get(t.id) || {};
-  const e = { event, kind: event.replace(".", "-"), machine: C.machine, threadId: t.id, title: t.title || m.title || t.id, project: meta.projects.get(t.projectId || m.projectId) || null,
+  const e = { event, kind: event.replace(".", "-"), machine: C.machine, threadId: t.id, title: t.title || m.title || t.id, project: meta.projects.get(t.projectId || m.projectId) || null, projectId: t.projectId || m.projectId || null,
     delegated, runId: run.id, status: run.status, threadStatus: t.status || null, startedAt: run.startedAt, completedAt: done, completedAtLocal: localTime(done),
     durationSec: run.startedAt ? Math.max(0, Math.round((Date.parse(done) - Date.parse(run.startedAt)) / 1000)) : null,
     lastReply: reply ? trim(txt(reply), 600) : null, ...(event === "thread.failed" && errText ? { error: trim(String(errText), 300) } : {}) };
@@ -641,7 +733,7 @@ async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet,
 }
 function countLate(t, late) { // a finish or cancel from the outage, before the catch-up window: counted once, never sent on its own
   if (S.finished[late.runId]) return;
-  if (!filterDecision(C.filters, late.event, late.replyText).skip) noteMissed(S.missed, { title: clean(late.title), completedAt: late.completedAt });
+  if (!filterDecision(C.filters, late.event, late.replyText).skip) for (const b of targetsFor(late)) noteMissed(b.st.missed, { title: clean(late.title), completedAt: late.completedAt });
   S.finished[late.runId] = { threadId: t.id, at: Date.now() }; saveState();
 }
 async function reportEnd(ep, t, runId, opts = {}) {
@@ -727,14 +819,14 @@ async function catchUp(ep, threads, ctx) {
   try {
     if (!resentSaved) { resentSaved = true; for (const f of Object.values(S.finished)) { // not delivered before the restart
       if (!f.e || Date.now() - f.at >= 864e5) continue;
-      if (staleRunEnd(f.e, f.at)) combine(f.e, "not delivered for an hour"); else await deliver(f.e);
+      if (staleRunEnd(f.e, f.at)) mainBot.combine(f.e, "not delivered for an hour"); else { mainOnly.add(f.e); await deliver(f.e); }
     } }
     const since = catchUpSince(S.lastAlive, Date.now(), C.catchUpMinutes), failedSince = catchUpSince(S.lastAlive, Date.now(), null); // 0 on the first run with this feature: nothing to catch up on
     // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
     // look at busy threads too so a failed end from downtime is still reported (failed always fires)
     if (failedSince) for (const t of catchUpThreads(threads, failedSince)) await reportEnd(ep, t, null, { since, failedSince });
   } finally { catchingUp = false; }
-  await flushMissed();
+  for (const b of bots.values()) await b.flushMissed();
   const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
   listening = next.listening;
   if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
@@ -771,9 +863,11 @@ async function run() {
     const other = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (other && other !== process.pid) { try { process.kill(other, 0); die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } catch (e) { if (e.code === "EPERM") die("ALREADY_RUNNING", `another t3listen is running (pid ${other})`); } }
     fs.writeFileSync(PID, String(process.pid)); process.on("exit", () => { try { if (+fs.readFileSync(PID, "utf8") === process.pid) fs.unlinkSync(PID); } catch {} });
     S = readJSON(STATE, { sent: {} }); S.sent = S.sent || {}; S.finished = S.finished || {}; S.failRepeat = S.failRepeat || {}; S.missed = { ...newMissed(), ...S.missed };
-    S.pausedUntil = Math.min(+S.pausedUntil || 0, Date.now() + 864e5);
+    S.pausedUntil = Math.min(+S.pausedUntil || 0, Date.now() + 864e5); S.bots = S.bots || {};
+    for (const st of Object.values(S.bots)) st.pausedUntil = Math.min(+st.pausedUntil || 0, Date.now() + 864e5);
     for (const s of Object.values(S.sent)) { delete s.parked; delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) { delete f2.parked; delete f2.retryLater; }
   }
+  syncBots(); reloadBots();
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
   if (C.filters && C.filters.ignored.length) log(`listen.json: ${C.filters.ignored.join(", ")} ${C.filters.ignored.length > 1 ? "are not settings" : "is not a setting"} this listener knows; ignored`);
