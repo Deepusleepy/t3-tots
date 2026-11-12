@@ -150,6 +150,29 @@ A `thread.failed.batch` event looks like this. Each entry in `failures` has the 
 
 `usageLimit`, `autoResumeSet`, `resumeAt` and `repeatsSuppressed` appear only when they apply, as on `thread.failed`. Each run in a batch is marked as reported, so a restart doesn't send it again. A failure still waiting in a wave, or still unsent, is resent once when the listener restarts; a reconnect to T3 doesn't send it twice. `node t3listen status` lists which of these settings are on. `node t3listen preview-finish --thread <id>` says when a failure would be held back as a repeat.
 
+### More bots and subscriptions (optional)
+
+One listener can send to several bots. The main bot is the webhook from `setup`, and it gets everything until you unsubscribe it from something. Any other bot gets only what it is subscribed to: one project, several, or certain kinds of event from anywhere. Several bots can get the same project, and each gets its own copy. What no bot is subscribed to is sent to nobody.
+
+```sh
+node t3listen bot add site --project "my-site"            # paste that bot's webhook URL, then its Authorization line
+node t3listen bot add alerts --events failed              # failures from every project
+node t3listen unsubscribe main --project "my-site"        # the main bot stops getting my-site
+node t3listen unsubscribe main --events finished,cancelled
+node t3listen subscribe main --project "my-site"          # undo
+node t3listen bots                                        # who gets what
+node t3listen test --bot site
+node t3listen bot remove site
+```
+
+- Event kinds: `questions`, `approvals`, `finished`, `cancelled`, `failed`.
+- `--project` takes a title or an id and can be repeated. It is looked up in the running T3 Code and saved by id, so renaming a project changes nothing.
+- A bot's webhook URL and key are read from stdin, as in `setup`, and are never printed. Commands and `status` show only names and subscriptions.
+- A running listener picks a change up within a minute. Nothing needs reinstalling.
+- Each bot has its own rate-limit pause, run-end limit, summary and retries, so a bot that is slow, refusing or over its limit never holds up another.
+- A question's close goes to the bots its opening went to. Events carry `projectId` next to `project`.
+- In `listen.json` this is `"main": { "skip": [...] }` and `"bots": { "<name>": { "url", "headers", "only": [...], "skip": [...] } }`. Each rule is `{ "projects": [{ "id", "title" }], "events": [...] }` with either part optional. A bot gets an event unless it has `only` rules and none matches, or a `skip` rule matches.
+
 ## Delegated mode and approvals
 
 Delegated mode starts only when you hand over control, for example "I'm away, keep it moving". The agent then answers routine questions, nudges stalled threads, and resumes threads after a usage limit.

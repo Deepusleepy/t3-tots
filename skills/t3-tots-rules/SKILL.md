@@ -16,7 +16,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 | t3-thread-actions | The thread action asked: `settle`, `unsettle`, `archive`, `unarchive`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
 | t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, under "Decisions" below |
 | t3-watch (delegated mode) | One nudge per stall (`send`), `queue --resume` once for a stuck queue, and `resume-at-reset` on a usage limit |
-| t3-phone-answers | `t3listen` setup, after a yes. In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
+| t3-phone-answers | `t3listen` setup, after a yes, and its bots and subscriptions when the user asks for a change. In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
 | t3-update, t3-sync | The items the user picked |
 | t3-project-tracker | Its tracker file |
 | t3-save-learnings | `AGENTS.md` or `CLAUDE.md`, after a yes to the diff |
@@ -147,7 +147,7 @@ The default token scopes don't cover usage or cost totals, T3 settings (includin
 | `unreadable` | That thread couldn't be read. Reported once per distinct error. The other threads still report |
 
 ### t3listen
-Optional. It needs the token and `listen.json`. It follows T3's live events and POSTs question and finish events to the user's webhook routine (t3-phone-answers). Commands: `setup`, `test`, `install [--approvals]`, `uninstall`, `status`, `preview-finish --thread id|title` (same thread rules as `t3ctl`: full id, an 8+ character prefix, an exact title or one title match, else `AMBIGUOUS`); `--dry-run` prints instead of sending. It sends approvals too when `listen.json` has `"approvals": true` or the service was installed with `--approvals`; `status` prints which. Running `install` again keeps the `listen.json` setting and drops the flag unless you pass it again. When a main thread stops on a usage limit, t3listen arms T3's Resume at reset if the project is listed in `autoresume.json` (`{"enabled":true,"projects":[...]}`) or `t3ctl new` started the thread (recorded in `started-here.json` for 60 days).
+Optional. It needs the token and `listen.json`. It follows T3's live events and POSTs question and finish events to the user's webhook routine (t3-phone-answers). Commands: `setup`, `test [--bot name]`, `bots`, `bot add <name> [--project p]... [--events a,b]`, `bot remove <name>`, `subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]` (t3-phone-answers "More bots"), `install [--approvals]`, `uninstall`, `status`, `preview-finish --thread id|title` (same thread rules as `t3ctl`: full id, an 8+ character prefix, an exact title or one title match, else `AMBIGUOUS`); `--dry-run` prints instead of sending. It sends approvals too when `listen.json` has `"approvals": true` or the service was installed with `--approvals`; `status` prints which. Running `install` again keeps the `listen.json` setting and drops the flag unless you pass it again. When a main thread stops on a usage limit, t3listen arms T3's Resume at reset if the project is listed in `autoresume.json` (`{"enabled":true,"projects":[...]}`) or `t3ctl new` started the thread (recorded in `started-here.json` for 60 days).
 
 ### Other scripts and data files
 - `export.js` writes a redacted JSON export for reports. Options work like t3ctl (`--project Foo` or `--project=Foo`; an unknown option is `USAGE`). `--project` is a filter: an exact id, else a folder, else an exact title (case ignored) picks that project, and two exact matches stop with `AMBIGUOUS` listing them; otherwise every project whose title contains the words is exported, and it prints a note naming them. No `--project` means all. `survey.js` lists activity and stale threads.
@@ -185,6 +185,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `SENT_UNCONFIRMED` | Sent, but T3 still shows it open. Check `t3ctl pending` |
 | `DELIVERY_FIXED`, `QUEUE_HELD`, `SEND_STUCK` | See "Sending into threads" |
 | `NO_LISTEN_CONFIG`, `BAD_LISTEN_CONFIG`, `BAD_URL`, `BAD_HEADER` | `listen.json` is missing or wrong. Run `t3listen setup` again |
+| `LAST_SUBSCRIPTION`, `ALREADY_SUBSCRIBED` | `t3listen unsubscribe` would leave a bot with no subscription, which means everything, so remove the bot instead; or the bot already gets that. Nothing was changed |
 | `WEBHOOK_REJECTED` | The webhook refused the event. HTTP 401 or 403 means a wrong key, so redo setup. A rate-limit reply clears on its own; the listener keeps retrying |
 | `WEBHOOK_UNREACHABLE` | The webhook can't be reached. The listener keeps retrying |
 | `ALREADY_RUNNING` | A listener already runs there |
