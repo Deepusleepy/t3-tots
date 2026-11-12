@@ -66,9 +66,9 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
-### Active-use suppression (optional, macOS desktop)
+### Active-use suppression (optional, macOS and Windows desktop)
 
-Set `"suppressWhileActive": true` in `listen.json` to skip automatic webhook notifications while T3 Code is foreground and system input was used within the last 15 minutes. Set `"activeIdleMinutes": 5`, for example, to choose a shorter window (a positive number). Suppression is off by default and applies to questions, approvals, run ends and failure batches, including retries and catch-up. Suppressed events are remembered, not sent later; the resolution of a suppressed question stays quiet too. Resolutions of delivered questions still go through, so the receiver can close its cards (unless `filters.resolved` is false). Test and dry-run/preview commands still work.
+Set `"suppressWhileActive": true` in `listen.json` to skip automatic webhook notifications while T3 Code is foreground and system input was used within the last 15 minutes. Set `"activeIdleMinutes": 5`, for example, to choose a shorter window (a positive number). Suppression is off by default and applies to questions, approvals, run ends, failure batches and the missed-run summary, including retries and catch-up. It works on macOS and Windows; on Linux the setting has no effect, and `t3listen status` says so. A burst of events shares one check for 10 seconds. Suppressed events are remembered, not sent later; the resolution of a suppressed question stays quiet too. Resolutions of delivered questions still go through, so the receiver can close its cards (unless `filters.resolved` is false). Test and dry-run/preview commands still work.
 
 Suppression drops events permanently, including unanswered questions: if you leave before answering a suppressed question, it is not sent to your phone later. The receiver gets no POST for suppressed events, so its delegated-mode actions, such as answering a question or arming resume-at-reset, do not run for those events. The listener's own auto-resume logic is unchanged.
 
@@ -112,11 +112,16 @@ Example: send finishes only when the reply has a `STUCK` or `BLOCKED` status lin
 
 ### Listener settings for busy setups (optional)
 
-Each POST can start work on the receiving side, so `listen.json` has a few optional settings that cut repeats and bursts. All of them are off unless you add them, and the listener behaves as before without them.
+Each POST can start work on the receiving side, so the listener limits bursts by itself and `listen.json` has a few optional settings that cut repeats.
+
+Built in, with no setting:
+
+- **Old run ends become one message.** A finish or cancel is sent on its own only while it is fresh: within `catchUpMinutes` of a restart, and for at most an hour while the webhook is refusing or unreachable. Older ones are counted and sent once as `thread.missed.summary`. Failures and questions are never dropped this way.
+- **A rate limit stops all sending.** When the webhook answers HTTP 429, or any reply that says "rate limit" or "too many", nothing more is posted until its `Retry-After` time, or for 15 minutes when it gives none. Events are kept meanwhile.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `catchUpMinutes` | not set (back to the last connection) | After a restart, report finishes and cancels from at most this many minutes before the listener started. `0` reports none from before the start. Failures are always caught up back to the last connection, so a usage-limit stop from the outage still gets Resume at reset. Questions are not affected (`skipStaleMinutes` covers them). |
+| `catchUpMinutes` | `30` | After a restart, report finishes and cancels from at most this many minutes before the listener started. Older ones from the outage go into one `thread.missed.summary`. `0` reports none from before the start; a large number such as `100000` sends every one, as before v1.4.32. Failures are always caught up back to the last connection, so a usage-limit stop from the outage still gets Resume at reset. Questions are not affected (`skipStaleMinutes` covers them). |
 | `failureWaveSeconds` | `0` (off) | Hold each `thread.failed` this many seconds for more failures. The wait starts again with each new failure. One failure alone is still sent as a plain `thread.failed`. Two or more are sent once as `thread.failed.batch`. `20` works well. Turn it on only after the receiving routine knows `thread.failed.batch` (update the t3-phone-answers skill first): an older routine ignores events it doesn't know. |
 | `failureWaveMaxSeconds` | `120` | The longest a wave is held after its first failure, however many follow. |
 | `repeatFailureHours` | `0` (off) | When a thread fails again with the same error as its last sent failure within this many hours, hold it back. Ids, timestamps, clock times and numbers of 4 or more digits in the error don't count as a difference; shorter numbers such as HTTP status codes do. A usage-limit stop is held only when Resume at reset is set for it, so one that needs you is always sent. The next failure that is sent for that thread carries `repeatsSuppressed` (how many were held back) and `repeatsSince`, even after a restart. |
@@ -124,6 +129,8 @@ Each POST can start work on the receiving side, so `listen.json` has a few optio
 ```json
 { "url": "https://...", "headers": { "Authorization": "..." }, "catchUpMinutes": 2, "failureWaveSeconds": 20, "failureWaveMaxSeconds": 120, "repeatFailureHours": 6 }
 ```
+
+A `thread.missed.summary` event carries `machine`, `count`, `firstAt`/`firstAtLocal`, `lastAt`/`lastAtLocal`, `threads` (up to 20 thread titles), `text` and `eventId`. Update the t3-phone-answers skill with the listener: an older routine ignores events it doesn't know, so it would say nothing about those run ends.
 
 A `thread.failed.batch` event looks like this. Each entry in `failures` has the same fields as a `thread.failed` event, without `event`, `kind`, `machine`, `text`, `sentAt` and `eventId`:
 

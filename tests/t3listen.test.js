@@ -721,8 +721,9 @@ test("state, live: a save Windows refuses while another process has listen-state
     assert.equal(f.posts[0].runId, "w1"); assert.ok(!/EPERM|error:/.test(f.out), f.out);
   } finally { await f.close(); }
 });
-test("reliability settings: off unless listen.json sets them; bad values fall back to the defaults", () => {
-  assert.deepEqual(l.reliability({}), { catchUpMinutes: null, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+test("reliability settings: catch-up is capped at 30 minutes by default, the rest are off; bad values fall back to the defaults", () => {
+  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.equal(l.reliability({ catchUpMinutes: 100000 }).catchUpMinutes, 100000, "a large number brings back the old reach");
   assert.deepEqual(l.reliability({ catchUpMinutes: 2, failureWaveSeconds: 20, failureWaveMaxSeconds: 90, repeatFailureHours: 6 }),
     { catchUpMinutes: 2, failureWaveMs: 20000, failureWaveMaxMs: 90000, repeatFailureMs: 6 * 3600e3 });
   assert.deepEqual(l.reliability({ catchUpMinutes: "x", failureWaveSeconds: -1, repeatFailureHours: null }), l.reliability({}));
@@ -861,7 +862,7 @@ test("catch-up, live: catchUpMinutes caps finishes, but a failure from the outag
     f.start();
     await f.waitFor(() => f.count(/watching 2 threads/) === 1 && f.posts.length >= 1, 9000, "catch-up");
     await fakeT3.sleep(300);
-    assert.deepEqual(f.posts.map((e) => [e.event, e.runId, e.usageLimit, e.autoResumeSet]), [["thread.failed", "f1", true, true]], "the finish is capped, the failure is not");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.runId, e.usageLimit, e.autoResumeSet, e.count]), [["thread.failed", "f1", true, true, undefined], ["thread.missed.summary", undefined, undefined, undefined, 1]], "the finish is capped and only counted, the failure is not");
     assert.deepEqual(f.commands.map((c) => [c.payload.type, c.payload.limitRecovery && c.payload.limitRecovery.runId]), [["thread.metadata.update", "f1"]]);
   } finally { await f.close(); }
 });
@@ -1034,7 +1035,6 @@ test("macOS presence: exact T3 bundle family, bounded command, unknown on failur
   };
   assert.deepEqual(l.readPresence("darwin", exec), { t3: true, idleSeconds: 5 });
   assert.equal(l.readPresence("linux", exec), null);
-  assert.equal(l.readPresence("win32", exec), null);
   assert.equal(calls, 1);
   assert.equal(l.readPresence("darwin", () => { throw new Error("timeout"); }), null);
   assert.equal(l.readPresence("darwin", () => "invalid"), null);
@@ -1219,5 +1219,128 @@ for (const resolved of [true, false]) test(`presence, live: delivered question c
     f.update({ ...busy("Q", "rq"), pendingRuntimeRequest: null }, { runs: [presenceRun("rq")], turnItems: [item], runtimeRequests: [{ ...req, status: "resolved", resolvedAt: now() }] });
     await f.waitFor(() => !f.state()?.sent[req.id]);
     assert.deepEqual(f.posts.map(e => e.event), resolved ? ["request.opened", "request.resolved"] : ["request.opened"]);
+  } finally { await f.close(); }
+});
+
+test("Windows presence: T3 Code and its Nightly build count, other apps don't; bounded command, unknown on failure", () => {
+  const seen = [];
+  const exec = (app) => (file, args, options) => { seen.push([file, args.slice(0, 3), options.timeout, options.windowsHide]); return JSON.stringify({ app, idleSeconds: 7.5 }); };
+  for (const [app, t3] of [["T3 Code", true], ["T3 Code (Nightly)", true], ["t3 code (nightly)", true], ["T3 Codex", false], ["explorer", false], ["Code", false]]) {
+    assert.deepEqual(l.readPresence("win32", exec(app)), { t3, idleSeconds: 7.5 }, app);
+  }
+  assert.deepEqual(seen[0], ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command"], 5000, true]);
+  assert.equal(l.readPresence("win32", () => { throw new Error("timeout"); }), null);
+  assert.equal(l.readPresence("win32", () => "not json"), null);
+  assert.equal(l.presentInT3(l.readPresence("win32", exec("T3 Code (Nightly)"))), true);
+});
+test("Windows presence, real probe: on Windows it names the foreground app's state and a non-negative idle time", { skip: process.platform !== "win32" && "Windows only" }, () => {
+  const p = l.readPresence();
+  assert.equal(typeof p.t3, "boolean");
+  assert.ok(Number.isFinite(p.idleSeconds) && p.idleSeconds >= 0, JSON.stringify(p));
+});
+test("presence cache: a burst of events shares one probe; a later event probes again", () => {
+  let now = 1000, calls = 0;
+  const presence = l.cachedPresence(() => ({ t3: true, idleSeconds: ++calls }), () => now);
+  assert.equal(presence().idleSeconds, 1);
+  now += l.PRESENCE_CACHE_MS - 1; assert.equal(presence().idleSeconds, 1);
+  now += 1; assert.equal(presence().idleSeconds, 2);
+  assert.equal(calls, 2);
+});
+test("settingsLine: active-use suppression is named without an OS, and says when this OS has no probe", () => {
+  const line = l.settingsLine({ suppressWhileActive: true });
+  assert.match(line, /^active-use suppression \(15 min idle window\)/);
+  assert.equal(/no effect on this OS/.test(line), !["darwin", "win32"].includes(process.platform));
+  assert.equal(l.settingsLine({ catchUpMinutes: 30 }), "defaults");
+});
+test("rate limit: 429 or a rate-limit body pauses sending for Retry-After, or 15 minutes; other refusals don't pause", () => {
+  const now = Date.parse("2026-11-13T10:00:00Z");
+  assert.equal(l.rateLimitPause(200, "", null, now), 0);
+  assert.equal(l.rateLimitPause(400, "bad request", null, now), 0);
+  assert.equal(l.rateLimitPause(503, "busy", null, now), 0);
+  assert.equal(l.rateLimitPause(429, "", null, now), l.RATE_LIMIT_PAUSE_MS);
+  assert.equal(l.rateLimitPause(400, '{"error":"Automation run rate limit exceeded: 200 per hour"}', null, now), l.RATE_LIMIT_PAUSE_MS);
+  assert.equal(l.rateLimitPause(429, "", "1800", now), 1800e3);
+  assert.equal(l.rateLimitPause(429, "", "Fri, 13 Nov 2026 10:40:00 GMT", now), 40 * 60000);
+  assert.equal(l.rateLimitPause(429, "", "1", now), 60000, "never hammer: at least a minute");
+  assert.equal(l.rateLimitPause(429, "", "9999999", now), 864e5, "never silent for more than a day");
+  assert.equal(l.rateLimitPause(429, "", "soon", now), l.RATE_LIMIT_PAUSE_MS);
+});
+test("stale run ends: a finish or cancel older than an hour is counted, a failure or question never is", () => {
+  const now = Date.now(), old = now - l.RUN_END_KEEP_MS - 1;
+  assert.equal(l.staleRunEnd({ event: "thread.finished" }, old, now), true);
+  assert.equal(l.staleRunEnd({ event: "thread.cancelled" }, old, now), true);
+  assert.equal(l.staleRunEnd({ event: "thread.finished" }, now - 60000, now), false);
+  for (const event of ["thread.failed", "thread.failed.batch", "request.opened", "request.resolved", "thread.missed.summary"]) assert.equal(l.staleRunEnd({ event }, old, now), false, event);
+});
+test("missed summary: counts every run end, lists each thread once (20 at most), spans first to last", () => {
+  const m = l.newMissed();
+  l.noteMissed(m, { title: "B", completedAt: "2026-11-13T09:00:00Z" });
+  l.noteMissed(m, { title: "A", completedAt: "2026-11-13T07:00:00Z" });
+  l.noteMissed(m, { title: "B", completedAt: "2026-11-13T08:00:00Z" });
+  for (let i = 0; i < 30; i++) l.noteMissed(m, { title: `T${i}` });
+  const e = l.missedEvent(m, "laptop");
+  assert.deepEqual([e.event, e.kind, e.machine, e.count, e.firstAt, e.lastAt, e.threads.length, e.threads.slice(0, 2)],
+    ["thread.missed.summary", "thread-missed-summary", "laptop", 33, "2026-11-13T07:00:00Z", "2026-11-13T09:00:00Z", 20, ["B", "A"]]);
+  assert.match(l.summary(e), /^T3 on laptop: 33 run end\(s\) between .+ were too old to send one by one\nThreads: "B", "A", .+, \.\.\.$/);
+});
+const doneT = (id, runId) => ({ id, title: `Thread ${id}`, status: "idle", activeRunId: null, latestRunId: runId });
+const doneRun = (id, completedAt = isoNow()) => ({ runs: [{ id, status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt }], turnItems: [{ type: "assistant_message", runId: id, text: "Done." }] });
+test("issue 40, live: finishes from a long outage arrive as one summary, once, and never as one message each", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    for (const id of ["A", "B", "C"]) f.setThread(doneT(id, `${id}1`), doneRun(`${id}1`));
+    await fakeT3.sleep(50);
+    f.start(); await f.waitFor(() => f.posts.length >= 1, 9000, "summary"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count, [...e.threads].sort()]), [["thread.missed.summary", 3, ["Thread A", "Thread B", "Thread C"]]]);
+    assert.match(f.posts[0].text, /3 run end\(s\)/);
+    await f.stop(); f.start(); await f.waitFor(() => f.count(/watching 3 threads/) === 2, 9000, "second restart"); await fakeT3.sleep(300);
+    assert.equal(f.posts.length, 1, "counted once: a second restart sends nothing more");
+  } finally { await f.close(); }
+});
+test("issue 40, live: with filters.finished false, old finishes aren't even counted", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0, filters: { finished: false } });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    f.setThread(doneT("A", "a1"), doneRun("a1")); await fakeT3.sleep(50);
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 9000, "restart"); await fakeT3.sleep(400);
+    assert.deepEqual(f.posts, []);
+  } finally { await f.close(); }
+});
+test("issue 40, live: after a rate-limit reply nothing more is posted, and the held events are kept", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => ({ status: 400, body: '{"error":"Automation run rate limit exceeded: 200 per hour"}', headers: { "retry-after": "3600" } }));
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    for (const id of ["A", "B", "C"]) {
+      f.update(busyT(id, `${id}1`), { runs: [{ id: `${id}1`, status: "running", startedAt: isoNow() }], turnItems: [] });
+      await fakeT3.sleep(150);
+      f.update(doneT(id, `${id}1`), doneRun(`${id}1`));
+    }
+    await f.waitFor(() => Object.values((f.state() || {}).finished || {}).filter((x) => x.e).length === 3, 9000, "three finishes saved");
+    await fakeT3.sleep(400);
+    assert.equal(f.hits, 1, "one refused post, then silence: no in-line retries and no posts for the next events");
+    assert.equal(f.count(/webhook is rate limited; nothing is sent until/), 1);
+    assert.deepEqual(f.posts, []);
+  } finally { await f.close(); }
+});
+test("issue 40, live: a finish the webhook refused more than an hour ago isn't resent after a restart; it goes into the summary", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 400);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(busyT("A", "a1"), { runs: [{ id: "a1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    await fakeT3.sleep(150);
+    f.update(doneT("A", "a1"), doneRun("a1"));
+    await f.waitFor(() => ((f.state() || {}).finished || {}).a1 && f.state().finished.a1.e, 9000, "finish saved");
+    await f.stop();
+    const file = path.join(f.dir, "listen-state.json"), st = f.state();
+    st.finished.a1.at -= 2 * 3600e3; require("fs").writeFileSync(file, JSON.stringify(st));
+    f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.length >= 1, 9000, "summary"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count, e.threads]), [["thread.missed.summary", 1, ["Thread A"]]]);
+    assert.equal(f.state().finished.a1.e, undefined, "the stale finish is settled, so no later restart sends it");
   } finally { await f.close(); }
 });

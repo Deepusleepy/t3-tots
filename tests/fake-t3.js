@@ -32,10 +32,14 @@ async function startFake(config = {}) {
   copyTools(dir);
   fs.writeFileSync(path.join(dir, "token"), "test-fixture");
   const posts = [], commands = [], projects = [{ id: "p1", title: "proj" }], threads = new Map(), projections = new Map(), sockets = new Set();
-  let hookStatus = () => 200;
+  let hookStatus = () => 200, hits = 0; // hookStatus returns a status, or { status, body, headers } for a custom refusal
   const hook = http.createServer((req, res) => {
     let b = ""; req.on("data", (c) => (b += c));
-    req.on("end", () => { const e = JSON.parse(b), st = hookStatus(e); if (st === 200) posts.push(e); res.statusCode = st; res.end(st === 200 ? "ok" : "busy"); });
+    req.on("end", () => {
+      hits++; const e = JSON.parse(b), answer = hookStatus(e), st = typeof answer === "number" ? answer : answer.status;
+      if (st === 200) posts.push(e);
+      res.writeHead(st, (typeof answer === "object" && answer.headers) || {}); res.end((typeof answer === "object" && answer.body) || (st === 200 ? "ok" : "busy"));
+    });
   });
   const t3 = http.createServer((req, res) => {
     const u = decodeURIComponent(req.url.split("?")[0]);
@@ -72,6 +76,7 @@ async function startFake(config = {}) {
   const f = {
     dir, posts, commands, threads, projections,
     get out() { return out; },
+    get hits() { return hits; },
     setHookStatus(fn) { hookStatus = fn; },
     setThread(t, projection) { threads.set(t.id, { updatedAt: new Date().toISOString(), projectId: "p1", ...t }); if (projection) projections.set(t.id, projection); },
     push(values) { for (const s of sockets) s.sock.write(frame({ _tag: "Chunk", requestId: s.sub, values })); },

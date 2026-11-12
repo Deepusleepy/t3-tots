@@ -4,7 +4,7 @@ description: >-
   Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", the T3 Tots weekly update routine, during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
 ---
 
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.31` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.32` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
@@ -31,12 +31,12 @@ Installs tools only. Live Grok Bot skills are applied by the main agent with Upd
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.31"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.32"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "9706ab44a2d6b43dcd4013e8a759590de5f7d8de6dcaa7bfe35c285e3e73c27b"],
  "tools/t3ctl": ["t3ctl", "a87ed1a77c37f8e91c199d483a1d1e92a370f4c2ae049695aa0ef6b0da213842"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "1cda72c3ed499e441b921346dcecbc5716c927cc670ebf86aeedc222a13e7c79"],
+ "tools/t3listen": ["t3listen", "37d78662a8e076c0525d6133d9daac9911ac6e8f1c916848309d4ac24caf229f"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
