@@ -102,8 +102,8 @@ const numOr = (v, d) => (v === undefined || v === null || v === "" || !Number.is
 // catchUpMinutes: after a restart or a lost connection, report finishes and cancels from at most this many minutes back; older ones are counted in one thread.missed.summary
 // failureWaveSeconds / failureWaveMaxSeconds: hold a thread.failed this long for more failures; two or more post as one thread.failed.batch
 // repeatFailureHours: hold back a thread's failure with the same error as its last post within this many hours
-const CATCH_UP_MINUTES = 30;
-const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_MINUTES), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
+const CATCH_UP_MINUTES = 30, RUN_ENDS_PER_MINUTE = 10;
+const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_MINUTES), runEndsPerMinute: numOr(c.runEndsPerMinute, RUN_ENDS_PER_MINUTE), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
   failureWaveMaxMs: numOr(c.failureWaveMaxSeconds, 120) * 1000, repeatFailureMs: numOr(c.repeatFailureHours, 0) * 3600e3 });
 function loadConfig() {
   const c = readJSON(CONF, null);
@@ -370,13 +370,13 @@ async function flushWave() {
 // Every POST starts work on the receiving side, so a finish or cancel gets its own message only when it is fresh and few
 // are going out. It is counted instead, and sent with the others as one thread.missed.summary, when it is older than the
 // catch-up window, when the webhook is rate limited, when it could not be delivered for an hour, or when more than
-// RUN_ENDS_PER_MINUTE went out in the last minute. Failures and questions are never combined.
-const RUN_END_KEEP_MS = 3600e3, RUN_ENDS_PER_MINUTE = 10;
+// runEndsPerMinute (default 10) went out in the last minute. Failures and questions are never combined.
+const RUN_END_KEEP_MS = 3600e3;
 const perishable = (e) => e.event === "thread.finished" || e.event === "thread.cancelled";
 const staleRunEnd = (e, since, now = Date.now()) => perishable(e) && now - since > RUN_END_KEEP_MS;
-function runEndBudget(sentAt, now = Date.now()) { // -> true and notes the send when another run end may go out on its own
+function runEndBudget(sentAt, now = Date.now(), limit = RUN_ENDS_PER_MINUTE) { // -> true and notes the send when another run end may go out on its own
   while (sentAt.length && now - sentAt[0] >= 60000) sentAt.shift();
-  if (sentAt.length >= RUN_ENDS_PER_MINUTE) return false;
+  if (sentAt.length >= limit) return false;
   sentAt.push(now); return true;
 }
 const recentRunEnds = [];
@@ -417,7 +417,7 @@ async function deliver(e, opts = {}) { // opts.now: send without the failure-wav
   stamp(e);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   if (perishable(e) && paused()) { combine(e, "webhook is rate limited"); return true; }
-  if (perishable(e) && !runEndBudget(recentRunEnds)) { combine(e, `more than ${RUN_ENDS_PER_MINUTE} run ends in a minute`); return true; }
+  if (perishable(e) && !runEndBudget(recentRunEnds, Date.now(), C.runEndsPerMinute)) { combine(e, `more than ${C.runEndsPerMinute} run ends in a minute`); return true; }
   for (let i = 0; i < 3 && !paused(); i++) {
     const r = await post(e);
     if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)`); markDelivered(e, true); return true; }
@@ -436,7 +436,7 @@ setInterval(async () => {
   for (const item of q) {
     const { e } = item;
     if (perishable(e)) {
-      const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : paused() ? "webhook is rate limited" : !runEndBudget(recentRunEnds) ? `more than ${RUN_ENDS_PER_MINUTE} run ends in a minute` : null;
+      const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : paused() ? "webhook is rate limited" : !runEndBudget(recentRunEnds, Date.now(), C.runEndsPerMinute) ? `more than ${C.runEndsPerMinute} run ends in a minute` : null;
       if (why) { combine(e, why); continue; }
     }
     if (paused()) { retryLater(item); continue; }
@@ -524,13 +524,15 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   const event = END[run.status] || (!isBusy(t) && END[t.status]); if (!event) return { skip: `run status ${run.status}` };
   const delegated = t.id.startsWith(DELEGATED);
   if (delegated && event !== "thread.failed") return { skip: "sub-task thread that didn't fail" };
-  if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
-  if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run",
-    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, title: t.title || t.id, completedAt: run.completedAt } : null };
   const items = p.turnItems || [], txt = (x) => x.text ?? x.content ?? (x.message && x.message.text);
   const said = items.filter((x) => x.type === "assistant_message" && typeof txt(x) === "string" && txt(x).trim());
   const own = said.filter((x) => x.runId === run.id).at(-1), reply = own || said.at(-1);
   const filterReply = own || (!items.some((x) => x.runId) && (ended.at(-1) || {}).id === run.id ? said.at(-1) : null); // T3 without run ids on items: the newest run's reply is the newest reply
+  const replyText = filterReply ? String(txt(filterReply)) : null; // the run's whole own reply, for listen.json filters only (never sent or saved)
+  // an old run is counted even when its thread has since started another one; only a fresh finish is dropped for a thread that is going on
+  if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run",
+    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, title: t.title || t.id, completedAt: run.completedAt, replyText } : null };
+  if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
   const errItem = items.filter((x) => x.type === "error" && x.runId === run.id).at(-1);
   const errText = errItem ? (txt(errItem) || errItem.message || errItem.title) : t.lastError ? (t.lastError.message || "error") : null;
   const done = run.completedAt || new Date().toISOString(), m = meta.threads.get(t.id) || {};
@@ -538,7 +540,7 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
     delegated, runId: run.id, status: run.status, threadStatus: t.status || null, startedAt: run.startedAt, completedAt: done, completedAtLocal: localTime(done),
     durationSec: run.startedAt ? Math.max(0, Math.round((Date.parse(done) - Date.parse(run.startedAt)) / 1000)) : null,
     lastReply: reply ? trim(txt(reply), 600) : null, ...(event === "thread.failed" && errText ? { error: trim(String(errText), 300) } : {}) };
-  return { e, run, replyText: filterReply ? String(txt(filterReply)) : null }; // replyText: the run's whole own reply, for listen.json filters only (never sent or saved)
+  return { e, run, replyText };
 }
 // ---------- usage-limit auto-resume ----------
 // When a run fails on a usage limit in a watched project (autoresume.json "projects", none by default) or in a thread
@@ -622,7 +624,7 @@ async function armResume(ep, threadId, run) { // -> { usageLimit, autoResumeSet,
 }
 function countLate(t, late) { // a finish or cancel from the outage, before the catch-up window: counted once, never sent on its own
   if (S.finished[late.runId]) return;
-  if (!filterDecision(C.filters, late.event, null).skip) noteMissed(S.missed, { title: clean(late.title), completedAt: late.completedAt });
+  if (!filterDecision(C.filters, late.event, late.replyText).skip) noteMissed(S.missed, { title: clean(late.title), completedAt: late.completedAt });
   S.finished[late.runId] = { threadId: t.id, at: Date.now() }; saveState();
 }
 async function reportEnd(ep, t, runId, opts = {}) {
@@ -790,9 +792,15 @@ function systemdUnit(node, args, dir, env = {}) {
   const pct = (s) => String(s).replace(/%/g, "%%"), q = (s) => `"${pct(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return `[Unit]\nDescription=T3 Tots listener (T3 Code questions to webhook)\n\n[Service]\nExecStart=${[node, ...args].map((a) => q(a).replace(/\$/g, "$$$$")).join(" ")}\nWorkingDirectory=${pct(dir)}\nRestart=on-failure\nRestartSec=30\n${Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}\n`).join("")}\n[Install]\nWantedBy=default.target\n`;
 }
+// Homebrew deletes node's versioned Cellar folder on every upgrade, which stopped a listener that autostart pointed there.
+// Its opt/<formula> link stays, so autostart uses that when it exists.
+function stableNode(execPath, exists = fs.existsSync) {
+  const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/.exec(execPath), link = m && `${m[1]}/opt/${m[2]}/bin/node`;
+  return link && exists(link) ? link : execPath;
+}
 function install() {
   if (!fs.existsSync(CONF) && !extra.includes("--dry-run")) die("NO_LISTEN_CONFIG", `run setup first: node "${SELF}" setup`);
-  const node = process.execPath, args = [SELF, "run", "--log", ...extra];
+  const node = stableNode(process.execPath), args = [SELF, "run", "--log", ...extra];
   if (process.platform === "darwin") {
     const env = ["T3_HOME", "T3CODE_HOME"].filter((k) => process.env[k]).map((k) => `<key>${k}</key><string>${xml(process.env[k])}</string>`).join("");
     const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>Label</key><string>${LABEL}</string>\n<key>ProgramArguments</key><array>${[node, ...args].map((a) => `<string>${xml(a)}</string>`).join("")}</array>\n<key>WorkingDirectory</key><string>${xml(DIR)}</string>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>30</integer>\n<key>ProcessType</key><string>Background</string>\n<key>StandardErrorPath</key><string>${xml(path.join(DIR, "listen.err.log"))}</string>\n${env ? `<key>EnvironmentVariables</key><dict>${env}</dict>\n` : ""}</dict></plist>\n`;
@@ -837,6 +845,7 @@ function serviceArgs() { // what the autostart entry runs, to tell whether it wa
 // the optional reliability settings listen.json turns on, for status
 function settingsLine(c) {
   const r = reliability(c || {}), on = [];
+  if (r.runEndsPerMinute !== RUN_ENDS_PER_MINUTE) on.push(`run ends combined above ${r.runEndsPerMinute} a minute`);
   if (r.catchUpMinutes !== CATCH_UP_MINUTES) on.push(`catch-up of finishes and cancels capped at ${r.catchUpMinutes} min`);
   if (r.failureWaveMs > 0) on.push(`failure waves ${r.failureWaveMs / 1000}s (up to ${r.failureWaveMaxMs / 1000}s)`);
   if (r.repeatFailureMs > 0) on.push(`repeat holds ${+(r.repeatFailureMs / 3600e3).toFixed(4)}h`);
@@ -911,5 +920,5 @@ t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value
 t3listen test [--dry-run]         send one test event to the webhook
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
+if (require.main !== module) module.exports = { stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
 else ({ run, setup, test, "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

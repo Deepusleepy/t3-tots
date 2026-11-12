@@ -1,0 +1,46 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax
+        shell: bash
+        run: |
+          for f in tools/t3ctl tools/t3listen tools/thread-match.js tools/export.js tools/survey.js; do node --check "$f"; done
+      - name: Node tests
+        shell: bash
+        run: node --test tests/*.test.js
+      - name: Install and scan tests
+        shell: bash
+        run: |
+          python tests/install_test.py
+          python tests/scan_test.py
+      - name: Manifest matches the files
+        shell: bash
+        run: python scripts/make-manifest.py --check

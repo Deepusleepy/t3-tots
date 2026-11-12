@@ -350,7 +350,7 @@ class T3uiQuoting(unittest.TestCase):
         with open(stub, "w") as f: f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > "$(dirname "$0")/args"\n')
         os.chmod(stub, 0o755)
         subprocess.run([BASH, "-c", self.ks_line() + '\nks "$1"', "ks", self.PAYLOAD], cwd=d, env={**os.environ, "PATH": d + os.pathsep + os.environ["PATH"]}, check=True)
-        args = open(os.path.join(d, "args")).read().split("\0")[:-1]
+        with open(os.path.join(d, "args")) as f: args = f.read().split("\0")[:-1]
         self.assertEqual(args[-1], self.PAYLOAD); self.assertEqual(args[-2], "--")
         self.assertFalse(any(self.PAYLOAD in a for a in args[:-1]))
         self.assertFalse(os.path.exists(os.path.join(d, "PWNED1")) or os.path.exists(os.path.join(d, "PWNED2")))
