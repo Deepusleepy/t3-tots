@@ -227,7 +227,7 @@ test("restart catch-up: reportEnd with since and no run id reports every ended r
   const end = src.indexOf("\n}\n", start);
   const body = src.slice(start, end);
   assert.ok(body.includes("!runId && opts.since"), body);
-  assert.ok(body.includes("for (const run of ended) await reportEnd(ep, t, run.id, opts)"), body);
+  assert.ok(body.includes("for (const run of ended) await reportEnd(ep, t, run.id, { ...opts, snap: p })"), body);
   assert.ok(!/ended\.at\(-1\)/.test(body), body);
 });
 
@@ -1404,5 +1404,20 @@ test("issue 40, live: a burst of finishes sends 10 on their own and the rest as 
     assert.deepEqual(by("thread.missed.summary").map((e) => [e.count, e.threads.length]), [[4, 4]]);
     assert.deepEqual(by("thread.failed").map((e) => e.runId), ["f1"]);
     assert.equal(f.posts.length, 12, "14 finishes and a failure cost 12 posts, not 15");
+  } finally { await f.close(); }
+});
+
+test("catch-up, live: a thread with many old runs is read once, not once per run", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    const runs = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, ordinal: i, status: "completed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow() }));
+    f.setThread(doneT("A", "r11"), { runs, turnItems: [] });
+    await fakeT3.sleep(50);
+    const before = f.reads("A");
+    f.start(); await f.waitFor(() => f.posts.length >= 1, 9000, "summary"); await fakeT3.sleep(300);
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 12]]);
+    assert.equal(f.reads("A") - before, 1, "one read of the thread for its 12 runs");
   } finally { await f.close(); }
 });

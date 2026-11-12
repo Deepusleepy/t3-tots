@@ -396,13 +396,13 @@ function pauseSending(ms) {
   const until = Date.now() + ms; if (until <= (S.pausedUntil || 0)) return;
   S.pausedUntil = until; saveState(); log(`webhook is rate limited; nothing is sent until ${localTime(new Date(until).toISOString())}`);
 }
-let flushTimer = null, flushing = false;
+let flushTimer = null, flushing = false, catchingUp = false; // catch-up counts first and sends one summary at its end
 function combine(e, why) { // count a finish or cancel instead of sending it; the summary follows within a few seconds
   noteMissed(S.missed, e); markDelivered(e); log(`combined into the next thread.missed.summary (${why}): ${e.event} ${ref(e).slice(-12)}`);
   if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = null; flushMissed().catch((err) => log("error:", err.message)); }, 5000).unref();
 }
 async function flushMissed() { // the count is cleared only once the webhook took the summary; until then each round tries again
-  if (DRY || flushing || !S.missed.count || paused()) return;
+  if (DRY || flushing || catchingUp || !S.missed.count || paused()) return;
   const e = missedEvent(S.missed, C.machine); stamp(e);
   flushing = true; let r; try { r = await post(e); } finally { flushing = false; }
   if (r.pauseMs) pauseSending(r.pauseMs);
@@ -510,8 +510,8 @@ const noteRun = (t) => { const prev = runSeen.get(t.id); runSeen.set(t.id, { sta
 const isActive = (t) => !!(t && (t.activeRunId || ACTIVE.has(t.status)));
 const isBusy = (t) => isActive(t) || (t && t.status === "queued"); // a queued message is about to start
 async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason }
-  let p = null;
-  for (let i = 0; i < 3; i++) { // the projection can trail the shell update by a moment
+  let p = opts.snap || null; // catch-up already read the thread once for all of its runs
+  for (let i = 0; i < 3 && !opts.snap; i++) { // the projection can trail the shell update by a moment
     try { p = await threadSnap(ep, t.id); } catch (err) { return { skip: `couldn't read thread: ${err.message}` }; }
     if (!p) return { skip: "thread gone" };
     const r = runId && (p.runs || []).find((x) => x.id === runId);
@@ -632,7 +632,7 @@ async function reportEnd(ep, t, runId, opts = {}) {
     try { p = await threadSnap(ep, t.id); } catch (err) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: couldn't read thread: ${err.message}`); return; }
     if (!p) { if (VERBOSE) log(`run end in "${clean(t.title)}" not reported: thread gone`); return; }
     const ended = (p.runs || []).filter((r) => r.startedAt && END[r.status]).sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
-    for (const run of ended) await reportEnd(ep, t, run.id, opts);
+    for (const run of ended) await reportEnd(ep, t, run.id, { ...opts, snap: p });
     return;
   }
   const { e, skip, run, replyText, late } = await buildEnd(ep, t, runId, opts);
@@ -711,6 +711,7 @@ async function onItem(ep, v, full, ctx = {}) {
     for (const t of v.snapshot.threads || []) noteRun(t);
     if (!DRY) {
       pruneFinished();
+      catchingUp = true; try {
       if (!resentSaved) { resentSaved = true; for (const f of Object.values(S.finished)) {
         if (!f.e || Date.now() - f.at >= 864e5) continue;
         if (staleRunEnd(f.e, f.at)) combine(f.e, "not delivered for an hour"); else await deliver(f.e);
@@ -719,6 +720,7 @@ async function onItem(ep, v, full, ctx = {}) {
       // idle finished threads have status like "idle", not completed/failed; buildEnd skips runs completed before since
       // look at busy threads too so a failed end from downtime is still reported (failed always fires)
       if (failedSince) for (const t of catchUpThreads(v.snapshot.threads, failedSince)) await reportEnd(ep, t, null, { since, failedSince });
+      } finally { catchingUp = false; }
       await flushMissed();
       const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
       listening = next.listening;
