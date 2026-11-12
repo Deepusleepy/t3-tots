@@ -1236,7 +1236,7 @@ test("Windows presence: T3 Code and its Nightly build count, other apps don't; b
   assert.equal(l.readPresence("win32", () => "not json"), null);
   assert.equal(l.presentInT3(l.readPresence("win32", exec("T3 Code (Nightly)"))), true);
 });
-test("Windows presence, real probe: on Windows it names the foreground app's state and a non-negative idle time", { skip: process.platform !== "win32" && "Windows only" }, () => {
+test("Windows presence, real probe: on Windows it names the foreground app's state and a non-negative idle time", { skip: process.platform !== "win32" ? "Windows only" : process.env.CI ? "needs a desktop session; a cold CI runner takes longer than the probe's 5 s limit" : false }, () => {
   const p = l.readPresence();
   assert.equal(typeof p.t3, "boolean");
   assert.ok(Number.isFinite(p.idleSeconds) && p.idleSeconds >= 0, JSON.stringify(p));
