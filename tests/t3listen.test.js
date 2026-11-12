@@ -1461,3 +1461,33 @@ test("issue 40, live: old finishes of a thread that is running again are counted
     assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 2]]);
   } finally { await f.close(); }
 });
+
+test("catch-up, live: a failure that happens while catch-up is still reading old threads is sent first, not after it", async () => {
+  const f = await fakeT3.startFake({ catchUpMinutes: 0 });
+  try {
+    f.setThread(busyT("L", "l1"), { runs: [{ id: "l1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    await f.stop();
+    for (const id of ["A", "B", "C", "D"]) f.setThread(doneT(id, `${id}1`), doneRun(`${id}1`));
+    f.setReadDelay((id) => (id === "L" ? 0 : 700)); await fakeT3.sleep(50);
+    f.start(); await f.waitFor(() => f.count(/connected to T3/) === 2, 8000, "restart"); await fakeT3.sleep(300);
+    f.update(failedT("L", "l1"), { runs: [failRun("l1")], turnItems: [errItem("l1", "boom")] });
+    await f.waitFor(() => f.posts.length === 2, 12000, "failure and summary");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.failed", undefined], ["thread.missed.summary", 4]]);
+  } finally { await f.close(); }
+});
+test("unreachable webhook, live: the first event finds it down, the next ones don't each try again, and all arrive once it is back", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 503);
+    for (const id of ["A", "B", "C"]) f.setThread(busyT(id, `${id}1`), { runs: [{ id: `${id}1`, status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(); await f.waitFor(() => /watching 3 threads/.test(f.out), 8000, "first snapshot");
+    for (const id of ["A", "B", "C"]) f.update(failedT(id, `${id}1`), { runs: [failRun(`${id}1`)], turnItems: [errItem(`${id}1`, `boom ${id}`)] });
+    await f.waitFor(() => Object.values((f.state() || {}).finished || {}).filter((x) => x.e).length === 3, 8000, "three failures kept");
+    await fakeT3.sleep(300);
+    assert.equal(f.hits, 1, "one attempt for three events");
+    f.setHookStatus(() => 200);
+    await f.waitFor(() => f.posts.length === 3, 12000, "all three after the short retry");
+    assert.deepEqual(f.posts.map((e) => e.runId).sort(), ["A1", "B1", "C1"]);
+  } finally { await f.close(); }
+});

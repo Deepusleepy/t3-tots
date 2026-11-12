@@ -32,6 +32,7 @@ async function startFake(config = {}) {
   copyTools(dir);
   fs.writeFileSync(path.join(dir, "token"), "test-fixture");
   const posts = [], commands = [], projects = [{ id: "p1", title: "proj" }], threads = new Map(), projections = new Map(), sockets = new Set(), threadReads = new Map();
+  let readDelay = () => 0; // ms to hold a thread read, to stand in for a large thread
   let hookStatus = () => 200, hits = 0; // hookStatus returns a status, or { status, body, headers } for a custom refusal
   const hook = http.createServer((req, res) => {
     let b = ""; req.on("data", (c) => (b += c));
@@ -46,7 +47,7 @@ async function startFake(config = {}) {
     if (u === "/api/orchestration/shell") return res.end(JSON.stringify({ projects, threads: [...threads.values()] }));
     const m = u.match(/^\/api\/orchestration\/threads\/(.+)$/);
     if (m) threadReads.set(m[1], (threadReads.get(m[1]) || 0) + 1);
-    if (m && projections.has(m[1])) return res.end(JSON.stringify({ projection: { thread: threads.get(m[1]), ...projections.get(m[1]) } }));
+    if (m && projections.has(m[1])) return setTimeout(() => res.end(JSON.stringify({ projection: { thread: threads.get(m[1]), ...projections.get(m[1]) } })), readDelay(m[1]));
     res.statusCode = 404; res.end("{}");
   });
   t3.on("upgrade", (req, sock) => {
@@ -80,6 +81,7 @@ async function startFake(config = {}) {
     get hits() { return hits; },
     reads(id) { return threadReads.get(id) || 0; },
     setHookStatus(fn) { hookStatus = fn; },
+    setReadDelay(fn) { readDelay = fn; },
     setThread(t, projection) { threads.set(t.id, { updatedAt: new Date().toISOString(), projectId: "p1", ...t }); if (projection) projections.set(t.id, projection); },
     push(values) { for (const s of sockets) s.sock.write(frame({ _tag: "Chunk", requestId: s.sub, values })); },
     update(t, projection) { f.setThread(t, projection); f.push([{ kind: "thread.updated", thread: threads.get(t.id) }]); },
