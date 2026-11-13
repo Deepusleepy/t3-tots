@@ -28,9 +28,12 @@ If it prints `REPO_PRIVATE_OR_MISSING`, the repo is private or the tag doesn't e
                             short copies. --diff ID: one skill's diff, and for a "both" skill the owner's edit and the release's
                             change. --base TAG: the release a skill with no record yet was last in step with (else the box
                             VERSION); ignored when it is the release being checked. --base-from DIR: read that release from DIR (or DIR/<tag>) when --from is used
-  sign ID                   for a bot template: read the short copy of skill ID from stdin and print it with its seal, the last
-                            line "[T3 Tots template copy, check <sha256>]". A copy whose seal fits is a placeholder; an edited
-                            one is the owner's
+  sign ID [--description TEXT]  for a bot template: read the short copy of skill ID from stdin (its body with --description,
+                            or a whole SKILL.md with its header) and print the body with its seal, the last line
+                            "[T3 Tots template copy, check <sha256>]". The seal covers the id, the description and the body:
+                            a copy whose seal fits is a placeholder, an edited one is the owner's
+  recheck DIR [ID...]       right before applying the PLAN.json in DIR: OK when no live skill changed since it was made, else
+                            CHANGED with their ids (and a backup of how they are now); those must be prepared again
   rebase ID TAG             after saving a hand-merged skill: its owner's edit now sits on TAG
   keep ID TAG               the owner chose "keep mine" at release TAG: not asked again until a later release changes that skill
   hashes <macos|linux|windows>                  'sha256  file' lines for that OS's tools folder (with manifest.json)
@@ -41,7 +44,7 @@ GitHub CLI, which works for a private repo on a computer where `gh auth status` 
 Installs tools only. Live Grok Bot skills are applied by the main agent with UpdateSkill from `skills --write`;
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
-import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, urllib.error, urllib.request
+import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.34"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "01ff4476b33f3623b4e7c36a696e1fcc89f3b6101ef11c464235bc29d1fadc1b"],
@@ -132,12 +135,14 @@ def latest():
         if e.code != 404: sys.exit(f"DOWNLOAD_FAILED releases/latest: {e}")
         sys.exit(f"REPO_PRIVATE_OR_MISSING: the box can't see releases. On a computer where gh is signed in run: "
                  f"gh release view -R {REPO} --json tagName,publishedAt,body")
+# The three places t3-install-tools names its release: written once, used to set them (pin_fix) and to blank them (unpin).
+PIN_RE, PINNED_RE, PINS_RE = re.compile(r'PIN = "[^"]*"'), re.compile(r"PINNED = \{\n.*?\n\}", re.S), re.compile(r"pins release `v[0-9][^`]*`")
 def pin_fix(t, m, tag):  # make t3-install-tools pin <tag> and its manifest hashes, so the synced skill matches the box
     rows = ",\n".join(f' "{f["path"]}": ["{f["dest"]}", "{f["sha256"]}"]' for f in tools(m))
-    t2 = re.sub(r'PIN = "[^"]*"', f'PIN = "{tag}"', t, count=1)
-    t2 = re.sub(r"PINNED = \{\n.*?\n\}", lambda _: "PINNED = {\n" + rows + "\n}", t2, count=1, flags=re.S)
-    t2 = re.sub(r"pins release `v[0-9][^`]*`", f"pins release `{tag}`", t2)
-    return t2
+    t = PIN_RE.sub(lambda _: f'PIN = "{tag}"', t, count=1); t = PINNED_RE.sub(lambda _: "PINNED = {\n" + rows + "\n}", t, count=1)
+    return PINS_RE.sub(lambda _: f"pins release `{tag}`", t)
+def unpin(t):  # t3-install-tools without the release tag and tool hashes it carries, so only real edits count
+    return PINS_RE.sub("pins release ``", PINNED_RE.sub("PINNED = {\n}", PIN_RE.sub('PIN = ""', t, count=1), count=1))
 IT = "t3-install-tools"
 # One record per live skill: {"tag": the release its text was last in step with, "sha": the hash of that release's copy}.
 # A live skill whose hash equals its record was not edited by the owner, so a new release may replace it. One that differs
@@ -160,33 +165,36 @@ def load_state():
     return s
 def save_state(s):
     STATE.parent.mkdir(parents=True, exist_ok=True); t = STATE.with_name(STATE.name + ".part"); t.write_text(json.dumps(s, indent=1), "utf-8"); os.replace(t, STATE)
-def unpin(t):  # t3-install-tools without the release tag and tool hashes it carries, so only real edits count
-    t = re.sub(r'PIN = "[^"]*"', 'PIN = ""', t, count=1); t = re.sub(r"PINNED = \{\n.*?\n\}", "PINNED = {\n}", t, count=1, flags=re.S)
-    return re.sub(r"pins release `v[0-9][^`]*`", "pins release ``", t)
 # A bot template ships short copies of the skills: each points at the full skill on GitHub, which is then downloaded on every
-# use until the full copy is saved. A template seals every copy it ships with a last line that holds a checksum of the text
-# above it (`sign`). A copy whose seal still fits is exactly what the template shipped, so it can be replaced with the full
-# skill. Change one character and the seal no longer fits: then it is the owner's, and it is asked about like any other edit.
-SEAL = re.compile(r"\n\[T3 Tots template copy, check ([0-9a-f]{64})\]$")
-plain = lambda body: "\n".join(l.rstrip() for l in body.replace("\r\n", "\n").split("\n")).strip("\n")  # line ends and outer blank lines don't count
-check = lambda sid, text: sha((sid + "\n" + text.rstrip("\n")).encode("utf-8"))  # the skill's id is part of it: a seal doesn't carry over to another skill
-seal = lambda sid, body: (lambda text: f"{text}\n[T3 Tots template copy, check {check(sid, text)}]")(plain(body))
-def sealed(sid, body):
-    b = plain(body); m = SEAL.search(b)
-    return bool(m) and check(sid, b[:m.start()]) == m.group(1)
+# use until the full copy is saved. A template seals every copy it ships with a last line that holds a checksum of the skill's
+# id, its description and the text above the line (`sign`). A copy whose seal still fits is exactly what the template shipped,
+# so it can be replaced with the full skill. Change one character of the description or the text and the seal no longer fits:
+# then it is the owner's, and it is asked about like any other edit. Only the words are sealed, so an importing platform that
+# changes line ends, blank lines or how a character is stored doesn't break a genuine copy.
+SEAL = re.compile(r"\[T3 Tots template copy, check ([0-9a-f]{64})\]\s*$")
+words = lambda t: " ".join(unicodedata.normalize("NFC", t).split())  # the words alone: layout and Unicode spelling don't count
+check = lambda sid, desc, text: sha("\n".join([sid, words(desc), words(text)]).encode("utf-8"))
+seal = lambda sid, desc, body: f"{body.strip()}\n[T3 Tots template copy, check {check(sid, desc, body)}]"
+def sealed(sid, desc, body):
+    m = SEAL.search(body)
+    return bool(m) and check(sid, desc, body[:m.start()]) == m.group(1)
 # Templates made before v1.4.34 had no seal. What they shipped is known and will not change: two placeholder texts, and the
-# hand-shortened t3-tots-rules, t3-getting-started and t3-install-tools bodies (sha256 of each). Nothing is ever added here.
-OLD_STUBS = [re.compile(r"Follow t3-tots-rules\.\n\nFull skill \(pinned release (v\d+\.\d+\.\d+)\): https://raw\.githubusercontent\.com/Deepusleepy/t3-tots/\1/skills/(?P<id>t3-[a-z-]+)/SKILL\.md\nFetch and follow it before running any step not shown here\."),
-             re.compile(r"Follow t3-tots-rules\.\n\nFull skill: skills/(?P<id>t3-[a-z-]+)/SKILL\.md in github\.com/Deepusleepy/t3-tots release v\d+\.\d+\.\d+\.")]
+# hand-shortened t3-tots-rules, t3-getting-started and t3-install-tools bodies (sha256 of each, with its release). Nothing is
+# ever added here.
+OLD_STUBS = [re.compile(r"Follow t3-tots-rules\.\n\nFull skill \(pinned release (?P<tag>v\d+\.\d+\.\d+)\): https://raw\.githubusercontent\.com/Deepusleepy/t3-tots/(?P=tag)/skills/(?P<id>t3-[a-z-]+)/SKILL\.md\nFetch and follow it before running any step not shown here\."),
+             re.compile(r"Follow t3-tots-rules\.\n\nFull skill: skills/(?P<id>t3-[a-z-]+)/SKILL\.md in github\.com/Deepusleepy/t3-tots release (?P<tag>v\d+\.\d+\.\d+)\.")]
 OLD_SHORTENED = {
- "43a479f07679b6112468c302bc5330721e64bf077c567b34dff2598ccbe0cfbb", "5bd237f54dfd32d231ac2975be51de37859ecb815cef695700052e64388e5a02", "a4cb47ef7e0b394478455c63241dbdea547842a22d1a19da3d75f3eaf859b893",  # v1.4.28
- "cfbf2b1aabbd5022c3811e8b56be23fdc5a0b48b6822ce7102e28b6531f8e61c", "783ac25f68253cde36969dffbdcac1b6603912d6d3414a2a1dae1a9b0c9aa1ba", "9b72dc50d294dc3185e48bb11ddb82366502ff0dc0f3953f7d27bfa31dfdcac7",  # v1.4.29
- "dcb7ee2e7b87833712b5a6f377938ba15262fdeaa8edc6b682f619654f3bc79f",
- "b086dcb5da91f6302e5b12f5c61b99248bf395e48e3616f2a48aadaf7f05fe9c", "e15120096d49e4948c9e58ff528b400a2b91cb77fc49ba6b9482351c6a4c03b3", "8ee3c76ef096d44ee41da6cfa87dfa2cb62150f38c8e4262b05af7a2cf7b9b24",  # v1.4.30
- "5876699a7ac5ca6d5d0e0246fd2719261568c5d411b1b5cd7603d8752abc81cd", "dc364756e47b10f9f5adf06210551ccad1de49e253ab2ebcb1ca76b536e41f93", "4efbc58b47d7c89c02a8b7f0881f30a0fb81c3befef094ebe317e49a16f6e832",  # v1.4.33
+ "43a479f07679b6112468c302bc5330721e64bf077c567b34dff2598ccbe0cfbb": "v1.4.28", "5bd237f54dfd32d231ac2975be51de37859ecb815cef695700052e64388e5a02": "v1.4.28", "a4cb47ef7e0b394478455c63241dbdea547842a22d1a19da3d75f3eaf859b893": "v1.4.28",
+ "cfbf2b1aabbd5022c3811e8b56be23fdc5a0b48b6822ce7102e28b6531f8e61c": "v1.4.29", "783ac25f68253cde36969dffbdcac1b6603912d6d3414a2a1dae1a9b0c9aa1ba": "v1.4.29", "9b72dc50d294dc3185e48bb11ddb82366502ff0dc0f3953f7d27bfa31dfdcac7": "v1.4.29",
+ "dcb7ee2e7b87833712b5a6f377938ba15262fdeaa8edc6b682f619654f3bc79f": "v1.4.29",
+ "b086dcb5da91f6302e5b12f5c61b99248bf395e48e3616f2a48aadaf7f05fe9c": "v1.4.30", "e15120096d49e4948c9e58ff528b400a2b91cb77fc49ba6b9482351c6a4c03b3": "v1.4.30", "8ee3c76ef096d44ee41da6cfa87dfa2cb62150f38c8e4262b05af7a2cf7b9b24": "v1.4.30",
+ "5876699a7ac5ca6d5d0e0246fd2719261568c5d411b1b5cd7603d8752abc81cd": "v1.4.33", "dc364756e47b10f9f5adf06210551ccad1de49e253ab2ebcb1ca76b536e41f93": "v1.4.33", "4efbc58b47d7c89c02a8b7f0881f30a0fb81c3befef094ebe317e49a16f6e832": "v1.4.33",
 }
-def placeholder(sid, body):
-    return sealed(sid, body) or any((m := r.fullmatch(body)) and m.group("id") == sid for r in OLD_STUBS) or sha(body.encode("utf-8")) in OLD_SHORTENED
+def old_template_tag(sid, body):  # the release an unsealed template copy was made for, or None when the body isn't one
+    for r in OLD_STUBS:
+        m = r.fullmatch(body)
+        if m and m.group("id") == sid: return m.group("tag")
+    return OLD_SHORTENED.get(sha(body.encode("utf-8")))
 same = lambda sid, parts: [parts[0], parts[1], unpin(parts[2]) if sid == IT else parts[2]]  # what is compared: name, description, body
 digest = lambda sid, parts: sha(json.dumps(same(sid, parts)).encode())
 def merge3(base, yours, theirs):  # your edit and the release's change in one text, or None when they touch the same lines
@@ -199,6 +207,15 @@ def merge3(base, yours, theirs):  # your edit and the release's change in one te
     for i1, i2, new in sorted(hy + ht, key=lambda h: (h[0], h[1])): out += base[pos:i1] + new; pos = i2
     return out + base[pos:]
 pick = lambda o, a, b: (b, True) if a == o else (a, True) if b == o or a == b else (None, False)  # one field, three ways
+def backup(tag, files):  # copies of live skills in a folder of their own -> that folder, or None when there was nothing to copy
+    if not files: return None
+    root = SYNC / "backups"; root.mkdir(parents=True, exist_ok=True); stamp = f"{tag}-{time.strftime('%Y%m%d-%H%M%S')}"
+    for n in range(1000):
+        d = root / (stamp if not n else f"{stamp}-{n}")
+        try: d.mkdir(); break
+        except FileExistsError: continue
+    for f in files: shutil.copy(f, d / f"{f.parent.name}.SKILL.md")
+    return d
 def rel_skills(tag, src=None):  # the tag's t3-* skills, each verified against that tag's manifest.json
     if src and (src / tag).is_dir(): src = src / tag  # a folder that holds several releases, one per tag
     rd = (lambda p: (src / p).read_bytes()) if src else (lambda p: fetch(tag, p))
@@ -236,6 +253,10 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
             except (SystemExit, OSError, ValueError): cache[t] = {}
         return cache[t].get(sid)
     repin = lambda sid, text: pin_fix(text, m, tag) if sid == IT else text  # its pins must be this release's in whatever is saved
+    def template_copy(sid, a, b):  # a is exactly what a template shipped: its body, and the description that came with it
+        if sealed(sid, a[1], a[2]): return True
+        t = old_template_tag(sid, a[2])  # unsealed copies came with the description of their own release
+        return bool(t) and (a[1] == b[1] or (lambda c: c is not None and norm(c)[1] == a[1])(copy_at(t, sid)))
     shown = lambda p: f"name: {p[0]}\ndescription: {p[1]}\n\n{p[2]}".splitlines()
     udiff = lambda x, y, fx, fy: "\n".join(difflib.unified_diff(shown(x), shown(y), fx, fy, lineterm=""))
     count = lambda x, y: (lambda d: f"+{sum(l[0] == '+' for l in d)}/-{sum(l[0] == '-' for l in d)} lines")([l for l in difflib.unified_diff(shown(x), shown(y), lineterm="", n=0) if l[:1] in "+-" and l[:3] not in ("+++", "---")])
@@ -245,37 +266,35 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         lt = live[sid].read_text("utf-8"); a, b = norm(lt), norm(t)
         if a == b: st[sid] = "unchanged"; state[sid] = {"tag": tag, "sha": digest(sid, b)}; continue
         # the bot template ships short copies that point at the full skill on GitHub and download it on every use
-        if placeholder(sid, a[2]): st[sid] = f"placeholder (full copy is {len(b[2])} characters)"; prepared[sid] = t; continue
+        if a[0] == b[0] and template_copy(sid, a, b): st[sid] = f"placeholder (full copy is {len(b[2])} characters)"; prepared[sid] = t; continue
         rec = state.get(sid) or {}; mine = digest(sid, a)
         off = rec.get("offered") or {}
-        if mine in (off.get("shas") or []): rec = {"tag": off["tag"], "sha": off["base"]}  # a copy the last --write prepared was saved: it sits on that release
-        bt = rec.get("tag") or boot; braw = None
-        if not rec.get("sha"):  # no record yet: the release it should match is read once, then remembered
-            braw = copy_at(bt, sid) if bt else None
-            if braw is not None: rec = {**rec, "tag": bt, "sha": digest(sid, norm(braw))}
-        if rec.get("sha"): state[sid] = rec
-        if rec.get("sha") == mine: st[sid] = f"changed ({count(a, b)})"; prepared[sid] = t; continue  # the owner didn't touch it
-        # From here the skill is the owner's edit, or its history is unknown. Either way it is never replaced on our own.
-        if braw is None and rec.get("sha") and bt: braw = copy_at(bt, sid)
-        o = norm(braw) if braw is not None else None
-        if o is not None and same(sid, o) == same(sid, b):  # the release didn't change it
-            rec.pop("kept", None)
-            if norm(repin(sid, lt)) != a: st[sid] = f"changed (your edit is kept; only the release tag and tool hashes in it move to {tag})"; prepared[sid] = repin(sid, lt); continue
-            st[sid] = f"yours ({count(o, a)} by you; the release didn't change it)"; continue
-        k = rec.get("kept")
+        if mine in (off.get("shas") or []): rec = state[sid] = {"tag": off["tag"], "sha": off["base"]}  # a copy the last --write prepared was saved: it sits on that release
+        k = rec.get("kept")  # the owner said to leave this skill as it is at some release: quiet until a later release differs from that one
         if k and sid != IT:
             if not k.get("sha") and k.get("tag") == tag: k["sha"] = digest(sid, b)
-            if k.get("sha") == digest(sid, b): st[sid] = "yours (kept by your choice; the release has a newer version of it)"; continue
-        mg = None
-        if o is not None:
-            o2, a2 = norm(repin(sid, braw)), norm(repin(sid, lt))
-            (n, ok1), (d, ok2) = pick(o2[0], a2[0], b[0]), pick(o2[1], a2[1], b[1]); body = merge3(o2[2].split("\n"), a2[2].split("\n"), b[2].split("\n"))
-            if ok1 and ok2 and body is not None: mg = (n, d, "\n".join(body))
-            st[sid] = f"both ({count(o2, a2)} by you, {count(o2, b)} by the release since {bt}; " + ("they don't overlap" if mg else "they overlap") + ")"
-            both[sid] = {"base": bt, "o": o2, "a": a2, "b": b, "merged": mg}
-        else:
+            if k.get("sha") == digest(sid, b): st[sid] = "yours (left as it is by your choice; the release has another version)"; continue
+        known = bool(rec.get("sha"))  # its history is on record; otherwise the release it came from is only assumed (boot)
+        bt = rec.get("tag") if known else boot
+        if known and rec["sha"] == mine: st[sid] = f"changed ({count(a, b)})"; prepared[sid] = t; continue  # the owner didn't touch it
+        braw = copy_at(bt, sid) if bt else None; o = norm(braw) if braw is not None else None
+        if not known and o is not None and digest(sid, o) == mine:  # it is that release's copy, untouched: now on record
+            state[sid] = {**rec, "tag": bt, "sha": mine}; st[sid] = f"changed ({count(a, b)})"; prepared[sid] = t; continue
+        # From here the skill is the owner's edit, or its history is unknown. Either way it is never replaced on our own.
+        if o is None:
             st[sid] = "both (it differs from the release and the copy it started from can't be read, so your lines can't be told apart)"
-            both[sid] = {"base": None, "o": None, "a": a, "b": b, "merged": None}
+            both[sid] = {"base": None, "o": None, "a": a, "b": b, "merged": None}; continue
+        o2, a2 = norm(repin(sid, braw)), norm(repin(sid, lt))
+        if same(sid, o) == same(sid, b) and (known or sid == IT):  # the release didn't change it, and it is known to be the owner's edit
+            if a2 != a: st[sid] = f"changed (your edit is kept; only the release tag and tool hashes in it move to {tag})"; prepared[sid] = repin(sid, lt); continue
+            st[sid] = f"yours ({count(o, a)} by you; the release didn't change it)"; continue
+        if same(sid, o) == same(sid, b):  # nothing on record: it may be the owner's edit, or a copy an earlier update left behind
+            st[sid] = f"both (it differs from {tag}, and nothing on record says whether you edited it or an earlier update left it behind)"
+            both[sid] = {"base": bt, "o": o2, "a": a2, "b": b, "merged": None}; continue
+        (n, ok1), (d, ok2) = pick(o2[0], a2[0], b[0]), pick(o2[1], a2[1], b[1]); body = merge3(o2[2].split("\n"), a2[2].split("\n"), b[2].split("\n"))
+        mg = (n, d, "\n".join(body)) if ok1 and ok2 and body is not None else None
+        st[sid] = f"both ({count(o2, a2)} by you, {count(o2, b)} by the release since {bt}{'' if known else ' (assumed)'}; " + ("they don't overlap" if mg else "they overlap") + ")"
+        both[sid] = {"base": bt, "o": o2, "a": a2, "b": b, "merged": mg}
     gone = sorted(set(live) - set(rel))
     if show:
         if show not in rel: sys.exit(f"NO_SUCH_SKILL {show} in {tag}")
@@ -290,7 +309,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
     for sid, v in st.items():
         if v != "unchanged": print(f"skill {v.split(' ')[0]}: {sid} {v[len(v.split(' ')[0]):].strip()}".rstrip())
     for sid in gone: print(f"skill not in release (kept unless the user says delete): {sid}")
-    if c("both"): print(f"ASK: {c('both')} skill(s) were edited by the owner and also changed by the release. Never replace one without the owner's choice (t3-install-tools \"Skills you edited\").")
+    if c("both") and not placeholders: print(f"ASK: {c('both')} skill(s) were edited by the owner and also changed by the release. Never replace one without the owner's choice (t3-install-tools \"Skills you edited\").")
     if c("placeholder") and not write:
         print(f"NEXT: {c('placeholder')} skill(s) are still template placeholders, downloaded from GitHub every time they are used. Save the full copies now: "
               f"python3 {pathlib.Path(sys.argv[0]).as_posix()} skills {tag} --write --placeholders, then UpdateSkill each entry of PLAN.json in order. Needs no yes: they are the owner's own T3 Tots skills.")
@@ -300,9 +319,8 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         out.mkdir(parents=True)
         todo = sorted((s for s, v in st.items() if v.startswith("placeholder" if placeholders else ("new", "changed", "placeholder"))), key=lambda s: (s != "t3-tots-rules", s == IT, s))
         asked = [] if placeholders else sorted(both)
-        back = SYNC / "backups" / f"{tag}-{time.strftime('%Y%m%d-%H%M%S')}"
-        for sid in todo + asked:  # the live copy of everything this run may replace
-            if sid in live: back.mkdir(parents=True, exist_ok=True); shutil.copy(live[sid], back / f"{sid}.SKILL.md")
+        back = backup(tag, [live[sid] for sid in todo + asked if sid in live])  # the live copy of everything this run may replace
+        seen = lambda sid: {"live": digest(sid, norm(live[sid].read_text("utf-8")))} if sid in live else {}
         put = lambda name, sid, n, d, b, new=False: (out / name).write_text(json.dumps({"id": sid, "new": new, "name": n or sid, "description": d, "body": b}, indent=1), "utf-8")
         offer = lambda sid, *copies: state.setdefault(sid, {}).update(offered={"tag": tag, "base": digest(sid, norm(rel[sid])), "shas": [digest(sid, c) for c in copies]})
         for sid in todo:
@@ -311,7 +329,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         ask = []
         for sid in asked:
             x = both[sid]; put(f"{sid}.new.json", sid, *front(rel[sid]))
-            e = {"id": sid, "base": x["base"], "overlap": x["merged"] is None, "keep_mine_allowed": sid != IT, "take_new": f"{sid}.new.json"}
+            e = {"id": sid, "base": x["base"], "overlap": x["merged"] is None, "keep_mine_allowed": sid != IT, "take_new": f"{sid}.new.json", **seen(sid)}
             if x["o"] is not None:
                 (out / f"{sid}.yours.diff").write_text(udiff(x["o"], x["a"], f"{x['base']}/{sid}", f"live/{sid}"), "utf-8"); e["your_edit"] = f"{sid}.yours.diff"
                 (out / f"{sid}.release.diff").write_text(udiff(x["o"], x["b"], f"{x['base']}/{sid}", f"{tag}/{sid}"), "utf-8"); e["release_change"] = f"{sid}.release.diff"
@@ -324,9 +342,9 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         if IT in todo:
             q = "`" * 4; f = re.search(q + r"python\n(.*?)" + q, prepared[IT], re.S)
             if f: (out / "t3tots_fetch.py").write_text(f.group(1), "utf-8")
-        (out / "PLAN.json").write_text(json.dumps({"tag": tag, "apply_in_order": [{"id": s, "new": st[s] == "new", "file": f"{s}.json"} for s in todo], "ask_the_owner": ask,
-            "yours_kept": sorted(s for s, v in st.items() if v.startswith("yours")), "backups": back.as_posix() if back.exists() else None, "not_in_release_ask_default_keep": gone}, indent=1), "utf-8")
-        print(f"OK skills {tag}: {len(todo)} prepared in {out} (apply in PLAN.json order, t3-install-tools last)" + (f"; {len(ask)} to ask the owner about (ask_the_owner in PLAN.json)" if ask else "") + (f"; live copies backed up in {back}" if back.exists() else ""))
+        (out / "PLAN.json").write_text(json.dumps({"tag": tag, "apply_in_order": [{"id": s, "new": st[s] == "new", "file": f"{s}.json", **seen(s)} for s in todo], "ask_the_owner": ask,
+            "yours_kept": sorted(s for s, v in st.items() if v.startswith("yours")), "backups": back.as_posix() if back else None, "not_in_release_ask_default_keep": gone}, indent=1), "utf-8")
+        print(f"OK skills {tag}: {len(todo)} prepared in {out} (apply in PLAN.json order, t3-install-tools last)" + (f"; {len(ask)} to ask the owner about (ask_the_owner in PLAN.json)" if ask else "") + (f"; live copies backed up in {back}" if back else ""))
     if state: save_state({s: r for s, r in state.items() if s in live})
 cmd = args[0] if args else "box"
 if cmd == "box":
@@ -360,8 +378,22 @@ elif cmd == "skills":
     if "--base" in args: i = args.index("--base"); base = args[i + 1]; del args[i:i + 2]
     if "--base-from" in args: i = args.index("--base-from"); bsrc = pathlib.Path(args[i + 1]).expanduser(); del args[i:i + 2]
     skills(args[1] if len(args) > 1 else latest()["tag_name"], w, show, ph, base, bsrc)
-elif cmd == "sign":  # for whoever builds a bot template: seal the short copy of skill ID read from stdin, print it sealed
-    sys.stdout.buffer.write((seal(args[1], sys.stdin.buffer.read().decode("utf-8")) + "\n").encode("utf-8"))
+elif cmd == "sign":  # for whoever builds a bot template: seal the short copy of skill ID read from stdin, print the sealed body
+    text = sys.stdin.buffer.read().decode("utf-8"); desc = None
+    if "--description" in args: i = args.index("--description"); desc = args[i + 1]; del args[i:i + 2]
+    n, d, body = front(text) if text.startswith("---") else ("", "", text)
+    if desc is None and not text.startswith("---"): sys.exit("USAGE: sign ID --description TEXT < body, or sign ID < a whole SKILL.md with its header")
+    sys.stdout.buffer.write((seal(args[1], d if desc is None else desc, body) + "\n").encode("utf-8"))
+elif cmd == "recheck":  # right before applying a plan: was any live skill changed since the plan was made?
+    out = pathlib.Path(args[1]); plan = json.loads((out / "PLAN.json").read_text("utf-8")); only = set(args[2:]); moved = []
+    for e in plan["apply_in_order"] + plan["ask_the_owner"]:
+        f = LIVE / e["id"] / "SKILL.md"
+        if (only and e["id"] not in only) or "live" not in e: continue
+        if not f.is_file() or digest(e["id"], norm(f.read_text("utf-8"))) != e["live"]: moved.append(f)
+    if not moved: print(f"OK nothing changed since this plan was made ({out})"); sys.exit(0)
+    back = backup(plan["tag"], [f for f in moved if f.is_file()])
+    print("CHANGED " + " ".join(f.parent.name for f in moved) + ": edited since this plan was made. Don't apply " + ("it" if len(moved) == 1 else "them") + f" from this plan; run skills {plan['tag']} --write again." + (f" Current copies backed up in {back}" if back else ""))
+    sys.exit(1)
 elif cmd in ("rebase", "keep"):
     sid, t = args[1], args[2]; f = SYNC / t / f"{sid}.new.json"  # the release's copy of this skill, as --write prepared it
     try: e = json.loads(f.read_text("utf-8")); new = digest(sid, (e["name"], e["description"], e["body"].strip("\n")))
@@ -449,12 +481,12 @@ Hash its files (step 3 commands) and compare with `python3 /workspace/t3tots_fet
 ## Update T3 Tots (scripts and skills)
 Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots") or when a script prints `T3_SCHEMA_CHANGED`. The T3 Tots weekly update routine runs it without asking ("Weekly update run"). "Update T3" or "update gh" means T3 Code or dev tools: that's t3-update. One check and one yes cover the box, every T3 computer and the live skills.
 1. **Check** (read-only, no approval). Save the fetcher from "Box copy" if `/workspace/t3tots_fetch.py` is missing or differs, then run `python3 /workspace/t3tots_fetch.py check`. It prints installed vs latest tag, the changed tool files, the release notes, then one skills line (`new`, `changed (+a/-b lines)`, `placeholder`, `yours`, `both`, `unchanged`, `not in release`) and one line per skill that isn't unchanged. Only `t3-*` skills are compared; frontmatter is compared by name and description text, so reflowed YAML doesn't count as a change. If the user asks what changed in one skill, run `skills <tag> --diff <id>` and summarize it.
-2. **Show and ask once.** One short message: installed and latest tag, 2 to 4 lines of the notes, changed scripts, new and changed skills, and any live t3-* skill the release no longer has. Nothing changed in scripts or skills: say it's up to date and stop. A skill listed as `yours` was edited by the user and the release didn't change it: name it as "your edit, kept" and never offer to replace it; they can say "reset <skill>" to take the release copy. A skill listed as `both` was edited by the user and also changed by the release: name it and say it is handled one by one ("Skills you edited"). Scripts current but skills differ: still offer the skills. Skills the check calls `placeholder` are the short copies a bot template ships: don't ask about those, save the full copies ("After an update") and say "saved the full copies of N skills". Ask "Update to <tag>?". The user can answer "yes, but skip <skill>"; leave that skill out.
+2. **Show and ask once.** One short message: installed and latest tag, 2 to 4 lines of the notes, changed scripts, new and changed skills, and any live t3-* skill the release no longer has. Nothing changed in scripts or skills: say it's up to date and stop. A skill listed as `yours` was edited by the user and the release didn't change it: name it as "your edit, kept" and never offer to replace it; they can say "reset <skill>" to take the release copy. A skill listed as `both` was edited by the user and also changed by the release: name it and say it is handled one by one ("Skills you edited"). Scripts current but skills differ: still offer the skills. Skills the check calls `placeholder` are the short copies a bot template ships: don't ask about those, save the full copies ("After an update") and say "saved the full copies of N skills". Ask "Update to <tag>?". The user can answer "yes, but skip <skill>": leave that skill out, and after step 3c run `python3 /workspace/t3tots_fetch.py keep <skill> <tag>` so later checks leave it alone until another release changes it.
 3. **On yes**, in this order:
    a. Box: `python3 /workspace/t3tots_fetch.py update <tag>` (skip if `VERSION` already says that tag). It verifies against that tag's `manifest.json` and replaces the box manifest.
    b. Computers: for each T3 computer in memory (ListMachines; offline ones are listed and offered later), run "Install on a computer" steps 1 and 2 with its OS and tools folder. Update the version line in its `README.md`. If `node t3listen status` there shows it running, run `node t3listen install` again so it restarts on the new version; add `--approvals` only if status showed "installed with --approvals" before the update (tools before v1.4.1 don't print that line, so use memory or ask). `listen.json` is kept.
    c. Skills: `python3 /workspace/t3tots_fetch.py skills <tag> --write --base <the tag that was installed before step a>`. It downloads each `skills/<id>/SKILL.md` of the tag (or reads it with `--from`), checks its sha256 against the tag's `manifest.json` (any mismatch writes nothing), and fills `/workspace/t3-tots-skill-sync/<tag>/` with `PLAN.json` (apply order, t3-tots-rules first and t3-install-tools last), one `<id>.json` per new or changed skill (`id`, `new` true|false, `name`, `description`, `body` without frontmatter), the full verified `<id>.SKILL.md`, and `t3tots_fetch.py` when t3-install-tools changed.
-   d. Apply: skills under `ask_the_owner` in `PLAN.json` are handled as "Skills you edited" says, after the rest, and skills under `yours_kept` stay as they are. For each entry of `apply_in_order`, in order, the main Grok Bot agent calls UpdateSkill once with that json's name, description and body (action write; pass id to rewrite an existing skill, omit id to create a new one). Skip skills the user excluded. A subagent can't call UpdateSkill: it stops after step c and hands the main agent the folder path and the plan.
+   d. Apply: skills under `ask_the_owner` in `PLAN.json` are handled as "Skills you edited" says, after the rest, and skills under `yours_kept` stay as they are. First run `python3 /workspace/t3tots_fetch.py recheck /workspace/t3-tots-skill-sync/<tag>`: it must print `OK`. If it prints `CHANGED <ids>`, those skills were edited after the plan was made: apply none of them and run step c again. Then for each entry of `apply_in_order`, in order, the main Grok Bot agent calls UpdateSkill once with that json's name, description and body (action write; pass id to rewrite an existing skill, omit id to create a new one). Skip skills the user excluded. A subagent can't call UpdateSkill: it stops after step c and hands the main agent the folder path and the plan.
    e. t3-install-tools goes last. If it is under `ask_the_owner` (the user edited it and hasn't answered yet), skip this step for now: the box tools from step a stay as they are, and this step is done right after their answer. Its prepared body already pins `<tag>` and that tag's tool hashes (the fetcher rewrites `PIN` and `PINNED` from the manifest, and keeps the live body if that release's copy has no skill sync). After its UpdateSkill, copy the folder's `t3tots_fetch.py` over `/workspace/t3tots_fetch.py` (or save the fetcher from the updated skill), then run `python3 /workspace/t3tots_fetch.py box`. It must print `OK <tag>`; a `HASH_MISMATCH` means the pin and the box disagree, so stop and report.
    f. Skills listed under `not_in_release_ask_default_keep`: list them and ask "Delete <ids>?". Default keep; delete only after a separate yes.
    g. Do every check under "After an update" below, reading that section from the skill as it is after step e, not from what you read before the update.
@@ -463,7 +495,7 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
 5. **Private repo**: `check` can't see releases, so get the tag with `gh release view` (see "Private repo"), unpack that release on the box, and pass `--from <folder>` to `update` and `skills <tag>`. Unpack the release that was installed before too and pass `--base-from <that folder>` to `skills`; without it a skill that differs can't be told from an edit, so it is asked about, never replaced.
 
 ## Building a bot template
-A template may ship a short copy of a skill in place of the full one, in any wording. Every such copy must be sealed: `python3 /workspace/t3tots_fetch.py sign <id> < short.md` prints it with a last line `[T3 Tots template copy, check ...]`. Ship that output unchanged. The fetcher replaces a sealed copy with the full skill at first setup, and treats a copy whose seal doesn't fit as the owner's edit. A full release copy needs no seal.
+A template may ship a short copy of a skill in place of the full one, in any wording. Every such copy must be sealed: `python3 /workspace/t3tots_fetch.py sign <id> --description '<the description the template gives that skill>' < body.md` prints the body with a last line `[T3 Tots template copy, check ...]`. Ship that body unchanged, with that same description. The seal covers the id, the description and the body, so the fetcher replaces a sealed copy with the full skill at first setup and treats a copy whose seal doesn't fit as the owner's edit. A full release copy needs no seal.
 
 ## Skills you edited
 UpdateSkill saves into the user's skill library, which every bot of theirs shares. So only one of their T3 Tots bots should run updates (the one whose box holds `/workspace/t3-tots-skill-sync/skills-state.json`); another T3 Tots bot of the same user points them to that one.
@@ -472,12 +504,12 @@ The user may edit a t3-* skill. An update never replaces such an edit on its own
 - `yours`: only the user changed it. Keep it. No question. "Reset <skill>" takes the release copy instead: download `skills/<id>/SKILL.md` of the installed tag, check its sha256 against that tag's `manifest.json`, copy the live one into the backups folder, then UpdateSkill.
 - `changed`: only the release changed it. Update it. No question.
 - `changed` with "your edit is kept": only for t3-install-tools. The user edited it, the release didn't, and only the release tag and tool hashes inside it move. Apply it like any other entry; no question.
-- `both`: the user edited it and the release changed it too, or its earlier copy can't be read so the two can't be told apart (then the plan entry has no `your_edit` and only choices 1 and 2 apply). Ask, once per skill, as a card. First show what they changed in two or three lines (from `<id>.yours.diff`, or `skills <tag> --diff <id>`) and in one line what the release changed (`<id>.release.diff`). Then the choices:
+- `both`: the user edited it and the release changed it too, or nothing on record says whether it is their edit (then the plan entry has no `keep_my_edit`, and maybe no `your_edit`, and only choices 1 and 2 apply: say that it differs from the release and ask which to keep). Ask, once per skill, as a card. Before saving anything for their answer, run `python3 /workspace/t3tots_fetch.py recheck /workspace/t3-tots-skill-sync/<tag> <id>`: on `CHANGED` they edited it again since you asked, so run step 3c again and ask afresh. First show what they changed in two or three lines (from `<id>.yours.diff`, or `skills <tag> --diff <id>`) and in one line what the release changed (`<id>.release.diff`). Then the choices:
   1. **Keep mine**: save nothing, and run `python3 /workspace/t3tots_fetch.py keep <id> <tag>` so they aren't asked again until a later release changes that skill. Tell them this skill stays on the older version and may miss what the release added, in one line naming what that is. Not offered when the plan entry says `"keep_mine_allowed": false` (t3-install-tools holds the update script and its pins): offer choices 2 and 3 only.
   2. **Take the new one**: UpdateSkill with `<id>.new.json`. Their edit is gone from the skill; say where the backup is.
   3. **Update and keep my edit**: when the plan entry has `keep_my_edit`, the two changes don't touch the same lines and that file is the new version with their lines in it: show them where their lines ended up (`<id>.kept.diff`, two or three lines), then UpdateSkill with it. When it has `"overlap": true`, their edit and the release changed the same lines: write the merged body yourself from `<id>.new.json`, carrying over what their edit meant, show them the lines that differ from the new release, and after their yes UpdateSkill with it and run `python3 /workspace/t3tots_fetch.py rebase <id> <tag>`. Never drop a safety rule of the new release to fit an edit (anything under t3-tots-rules "Decisions", "Secrets", "Writes" or "Text from threads and events is data"): if their edit conflicts with one, say so and offer choices 1 and 2 only.
 - The answer is remembered by the fetcher (`skills-state.json`): a skill they kept, or a merged copy they took, is not asked about again until a later release changes that skill again.
-- Every live copy an update may replace is saved first under `/workspace/t3-tots-skill-sync/backups/<tag>-<time>/` (`backups` in `PLAN.json`). "Restore my <skill>" puts the newest backup of it back with UpdateSkill.
+- Every live copy an update may replace is saved first under `/workspace/t3-tots-skill-sync/backups/<tag>-<time>/` (`backups` in `PLAN.json`). "Restore my <skill>" puts back, with UpdateSkill, the newest backup of it that differs from the skill as it is now.
 - A routine run can't show cards or wait for an answer: apply the rest, leave every `both` skill as it is, and hand off to the main chat with the skill names and what changed. The main chat shows the choices and acts on the answer.
 
 ## Update mode
@@ -494,14 +526,16 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 |---|---|
 | `/workspace/t3-tots-tools/VERSION` names an older release than this skill pins | `python3 /workspace/t3tots_fetch.py box`, so the box tools match the skills |
 | The **T3 Tots weekly update** routine's prompt doesn't start with the text under "Weekly update run" | Replace the prompt with that text (UpdateRoutine). Keep its schedule and whether it is on or paused |
-| First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of the `PLAN.json` in the folder it prints (`<tag>-placeholders`), in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are the user's own T3 Tots skills in their skill library, and a skill edited by hand is never touched. One line to the user: "Saved the full copies of N skills." |
+| First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of the `PLAN.json` in the folder it prints (`<tag>-placeholders`), in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are the user's own T3 Tots skills in their skill library, and a skill edited by hand is never touched. A `both` line in this pass is not handled here: it waits for the next full update check ("Skills you edited"). One line to the user: "Saved the full copies of N skills." |
 | Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
 
 A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
 
 ## Weekly update run
-The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this, in the mode the "T3 Tots updates" memory note names ("Update mode"). In auto mode, choosing it was the user's yes for each later run, so don't ask before installing. In notify mode, do step 1, then hand off to the main chat what is out, so it can ask; install nothing in that run.
-1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, do the "After an update" checks when the check printed `NEXT:` or the memory note "T3 Tots bot-side checks done for <tag>" is missing or names an older tag, and say what they changed in one line. If the check still lists `changed` skills, an earlier update didn't finish: do step 3 c to e for the installed tag. If it lists `both` skills still waiting for the user's choice, remind them once per release (note it in memory). Otherwise send nothing and stop. A skill the check calls `yours` is the user's edit and stays.
+The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this, in the mode the "T3 Tots updates" memory note names ("Update mode"). In auto mode, choosing it was the user's yes for each later run, so don't ask before installing.
+
+**Notify mode changes nothing but placeholders.** Run "Update T3 Tots" step 1 (the check) and stop there: no step 3, no UpdateSkill for a `changed`, `yours` or `both` skill, whatever the steps below say. Hand off to the main chat what the check found (a newer release with 2 to 4 lines of its notes, `changed` skills an earlier update left behind, `both` skills waiting for a choice), once per release, so it can ask "Update to <tag>?". The one thing it still does is the placeholder row of "After an update", which needs no yes. The steps below are for auto mode.
+1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, do the "After an update" checks when the check printed `NEXT:` or the memory note "T3 Tots bot-side checks done for <tag>" is missing or names an older tag, and say what they changed in one line. If the check still lists `changed` or `both` skills, name them once per release in a hand-off (note it in memory): the main chat finishes it. A routine run never applies leftovers at the installed tag, since the user may have skipped one on purpose. Otherwise send nothing and stop. A skill the check calls `yours` is the user's edit and stays.
 2. If a newer tag exists (auto mode), run step 3 a to e, g and h for it. Skills under `ask_the_owner` are never replaced in this run: name them in the message with the three choices ("Skills you edited"). Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, don't restart it; it runs the new version from its next login.
 3. Send one short message: the old and new tag, 2 to 4 lines of the notes, what was updated where, and anything left for the user (offline computers, listeners not restarted yet, skills the release no longer has, skills they edited that are waiting for their choice).
 4. `HASH_MISMATCH`, `REPO_PRIVATE_OR_MISSING` or a failed step installs nothing more. Say what was and wasn't updated, once per tag and error, and note it in memory so later runs stay quiet until the tag or the error changes.

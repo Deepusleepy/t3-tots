@@ -417,17 +417,22 @@ class SkillSync(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def sign(self, sid, body):  # what a template build does: seal a short copy with the real command
-        r = subprocess.run([sys.executable, str(self.f), "sign", sid], input=body, capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stderr); return r.stdout
+    def desc(self, sid):  # the description the release gives this skill, on one line, as a template carries it
+        head = self.now[sid].split("\n---\n", 1)[0]; lines = head.split("\n"); i = next(k for k, l in enumerate(lines) if l.startswith("description:"))
+        first = lines[i][len("description:"):].strip()
+        return " ".join(([] if first in (">-", ">", "|", "|-") else [first.strip("'\"")]) + [l.strip() for l in lines[i + 1:] if l.startswith(" ")])
 
-    def header(self, sid, body):
-        return f"---\nname: {sid}\ndescription: Short live answer. Use for status.\n---\n{body}"
+    def sign(self, sid, body, *how):  # what a template build does: seal a short copy with the real command
+        r = subprocess.run([sys.executable, str(self.f), "sign", sid, *(how or ("--description", self.desc(sid)))], input=body.encode("utf-8"), capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr.decode()); return r.stdout.decode("utf-8").replace("\r\n", "\n")
+
+    def header(self, sid, body, desc=None):
+        return f"---\nname: {sid}\ndescription: {desc or self.desc(sid)}\n---\n{body}"
 
     def stub(self, sid, tag=None, extra=""):  # the placeholder a template before v1.4.34 shipped, as the importing bot stores it
         tag = tag or self.ver
-        return (f"---\nname: {sid}\ndescription: Short live answer. Use for status.\n---\nFollow t3-tots-rules.\n\nFull skill (pinned release {tag}): "
-                f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{tag}/skills/{sid}/SKILL.md\nFetch and follow it before running any step not shown here.\n{extra}")
+        return self.header(sid, f"Follow t3-tots-rules.\n\nFull skill (pinned release {tag}): "
+                           f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{tag}/skills/{sid}/SKILL.md\nFetch and follow it before running any step not shown here.\n{extra}")
 
     def put(self, n, t):
         (self.live / n / "SKILL.md").write_bytes(t.encode("utf-8"))
@@ -457,10 +462,11 @@ class SkillSync(unittest.TestCase):
 
     def test_check_tells_a_placeholder_an_owner_edit_and_a_clash_apart(self):
         r = self.skills(); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("0 changed, 1 placeholders, 1 yours, 2 both", r.stdout)
-        self.assertIn("skill placeholder: t3-status", r.stdout); self.assertIn("skill yours: t3-waiting", r.stdout)
+        self.assertIn("0 changed, 1 placeholders, 0 yours, 3 both", r.stdout)
+        self.assertIn("skill placeholder: t3-status", r.stdout)
+        self.assertRegex(r.stdout, r"skill both: t3-waiting .*nothing on record", "no history yet: it may be an edit or a copy left behind, so it is asked about")
         self.assertRegex(r.stdout, r"skill both: t3-digest .*they don't overlap"); self.assertRegex(r.stdout, r"skill both: t3-usage .*they overlap")
-        self.assertIn("ASK: 2 skill(s) were edited by the owner", r.stdout)
+        self.assertIn("ASK: 3 skill(s) were edited by the owner", r.stdout)
         self.assertIn("NEXT: 1 skill(s) are still template placeholders", r.stdout)
         self.assertFalse((self.sync / self.ver).exists(), "a check prepares nothing")
 
@@ -468,15 +474,16 @@ class SkillSync(unittest.TestCase):
         r = self.skills("--write"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         p = self.plan(); out = self.sync / self.ver
         self.assertEqual([e["id"] for e in p["apply_in_order"]], ["t3-status"])
-        self.assertEqual(p["yours_kept"], ["t3-waiting"])
-        ask = {e["id"]: e for e in p["ask_the_owner"]}; self.assertEqual(sorted(ask), ["t3-digest", "t3-usage"])
+        self.assertEqual(p["yours_kept"], [])
+        ask = {e["id"]: e for e in p["ask_the_owner"]}; self.assertEqual(sorted(ask), ["t3-digest", "t3-usage", "t3-waiting"])
+        self.assertNotIn("keep_my_edit", ask["t3-waiting"]); self.assertIn("My own extra rule.", (out / ask["t3-waiting"]["your_edit"]).read_text())
         self.assertFalse(ask["t3-digest"]["overlap"]); self.assertTrue(ask["t3-usage"]["overlap"]); self.assertNotIn("keep_my_edit", ask["t3-usage"])
         self.assertTrue(ask["t3-usage"]["keep_mine_allowed"])
         merged = json.loads((out / ask["t3-digest"]["keep_my_edit"]).read_text())["body"]
         self.assertIn("My note at the top.", merged); self.assertNotIn(self.old_line.strip(), merged)
         self.assertIn("My note at the top.", (out / ask["t3-digest"]["your_edit"]).read_text()); self.assertIn("-" + self.old_line.strip(), (out / ask["t3-digest"]["release_change"]).read_text())
         backed = sorted(f.name for f in pathlib.Path(p["backups"]).iterdir())
-        self.assertEqual(backed, ["t3-digest.SKILL.md", "t3-status.SKILL.md", "t3-usage.SKILL.md"], "every live copy this run may replace")
+        self.assertEqual(backed, ["t3-digest.SKILL.md", "t3-status.SKILL.md", "t3-usage.SKILL.md", "t3-waiting.SKILL.md"], "every live copy this run may replace")
         self.assertIn("I rewrote this line myself.", (pathlib.Path(p["backups"]) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
 
     def test_placeholders_only_prepares_just_the_full_copy(self):
@@ -487,20 +494,22 @@ class SkillSync(unittest.TestCase):
         shutil.copy(self.sync / ph / "t3-status.SKILL.md", self.live / "t3-status" / "SKILL.md")
         again = self.skills(); self.assertIn("0 placeholders", again.stdout); self.assertNotIn("NEXT:", again.stdout)
 
-    def settle(self):  # the owner answers: digest "update and keep my edit", usage "keep mine"
+    def settle(self):  # the owner answers: digest "update and keep my edit", usage and waiting "keep mine"
         self.skills("--write"); ask = {e["id"]: e for e in self.plan()["ask_the_owner"]}
         self.save("t3-status", "t3-status.json"); self.save("t3-digest", ask["t3-digest"]["keep_my_edit"])
-        k = self.fetch("keep", "t3-usage", self.ver); self.assertIn("OK t3-usage", k.stdout, k.stdout + k.stderr)
+        for n in ("t3-usage", "t3-waiting"):
+            k = self.fetch("keep", n, self.ver); self.assertIn("OK " + n, k.stdout, k.stdout + k.stderr)
         return ask
 
     def test_each_choice_is_remembered_so_the_owner_is_not_asked_again(self):
         ask = self.settle()
         r = self.skills(); self.assertIn("0 changed, 0 placeholders, 3 yours, 0 both", r.stdout, r.stdout + r.stderr); self.assertNotIn("ASK:", r.stdout)
-        self.assertRegex(r.stdout, r"skill yours: t3-usage .*kept by your choice")
+        self.assertRegex(r.stdout, r"skill yours: t3-usage .*left as it is by your choice")
         self.assertEqual(self.skills().stdout, r.stdout, "a second check says the same")
         self.put("t3-usage", (self.live / "t3-usage" / "SKILL.md").read_text(encoding="utf-8") + "\nA hand-merged copy.\n")
         rb = self.fetch("rebase", "t3-usage", self.ver); self.assertIn("OK t3-usage", rb.stdout, rb.stdout + rb.stderr)
-        r = self.skills(); self.assertIn("3 yours, 0 both", r.stdout, r.stdout + r.stderr); self.assertNotIn("kept by your choice", r.stdout)
+        r = self.skills(); self.assertIn("3 yours, 0 both", r.stdout, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"skill yours: t3-usage \(\+\d+/-\d+ lines by you; the release didn't change it\)", "its history is on record now")
         self.save("t3-usage", ask["t3-usage"]["take_new"])        # "take the new one"
         r = self.skills(); self.assertIn("2 yours, 0 both", r.stdout, r.stdout + r.stderr)
 
@@ -516,7 +525,7 @@ class SkillSync(unittest.TestCase):
         same = dict(self.now); same["t3-new-thread"] += "\nA new rule in the next release.\n"
         self.release(self.tmp / "quiet", "v9.9.8", same)
         q = self.skills(tag="v9.9.8", src=self.tmp / "quiet")
-        self.assertRegex(q.stdout, r"skill yours: t3-usage .*kept by your choice", "a release that didn't touch the kept skill doesn't ask"); self.assertNotIn("ASK:", q.stdout)
+        self.assertRegex(q.stdout, r"skill yours: t3-usage .*left as it is by your choice", "a release that didn't touch the kept skill doesn't ask"); self.assertNotIn("ASK:", q.stdout)
 
     def test_the_update_skill_itself_is_never_taken_for_an_owner_edit_because_of_its_pins_and_cannot_be_kept(self):
         rows = re.search(r"PINNED = \{\n(.*?)\n\}", self.now["t3-install-tools"], re.S).group(1).split(",\n")
@@ -526,7 +535,7 @@ class SkillSync(unittest.TestCase):
         k = self.fetch("keep", "t3-install-tools", self.ver); self.assertNotEqual(k.returncode, 0); self.assertIn("CANNOT_KEEP", k.stdout + k.stderr)
 
     def test_an_edited_update_skill_keeps_the_edit_and_only_its_pins_move_with_no_question(self):
-        for n in ("t3-status", "t3-digest", "t3-usage"): self.put(n, self.now[n])
+        for n in ("t3-status", "t3-digest", "t3-usage", "t3-waiting"): self.put(n, self.now[n])
         self.put("t3-install-tools", self.now["t3-install-tools"] + "\nMy own note about installing.\n")
         r = self.skills(); self.assertIn("skill yours: t3-install-tools", r.stdout, r.stdout + r.stderr); self.assertNotIn("ASK:", r.stdout)
         self.release(self.tmp / "next", "v9.9.9", dict(self.now))
@@ -564,7 +573,7 @@ class SkillSync(unittest.TestCase):
             (self.sync / "skills-state.json").write_text(junk)
             r = self.skills("--write"); self.assertEqual(r.returncode, 0, junk + r.stdout + r.stderr)
             self.assertEqual([e["id"] for e in self.plan()["apply_in_order"]], ["t3-status"], junk)
-            self.assertEqual(sorted(e["id"] for e in self.plan()["ask_the_owner"]), ["t3-digest", "t3-usage"], junk)
+            self.assertEqual(sorted(e["id"] for e in self.plan()["ask_the_owner"]), ["t3-digest", "t3-usage", "t3-waiting"], junk)
 
     def test_skipping_one_update_never_makes_another_skill_look_edited(self):
         for n in ("t3-status", "t3-digest", "t3-usage", "t3-waiting"): self.put(n, self.now[n])
@@ -603,18 +612,17 @@ class SkillSync(unittest.TestCase):
     def test_only_the_exact_template_text_is_a_placeholder_so_one_the_owner_added_to_is_asked_about(self):
         for n in ("t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
         self.put("t3-status", self.stub("t3-status", "v1.4.30"))                                        # an older template's placeholder
-        self.put("t3-watch", "---\nname: t3-watch\ndescription: Watch things.\n---\nFollow t3-tots-rules.\n\nFull skill: skills/t3-watch/SKILL.md in github.com/Deepusleepy/t3-tots release v1.4.28.\n")
+        self.put("t3-watch", self.header("t3-watch", "Follow t3-tots-rules.\n\nFull skill: skills/t3-watch/SKILL.md in github.com/Deepusleepy/t3-tots release v1.4.28.\n"))
         self.put("t3-usage", self.stub("t3-usage", extra="MY RULE: always answer in Spanish.\n"))         # the owner added a line to theirs
         self.put("t3-sync", self.stub("t3-update"))                                                     # it names another skill
         self.put("t3-templates", "---\nname: t3-templates\ndescription: Mine.\n---\nMy own short version. See skills/t3-templates/SKILL.md.\n")
         r = self.skills("--write", "--placeholders"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("skill placeholder: t3-status", r.stdout); self.assertIn("skill placeholder: t3-watch", r.stdout)
-        self.assertRegex(r.stdout, "skill both: t3-usage", r.stdout)   # the release changed this skill too, so the owner is asked
-        for mine in ("t3-sync", "t3-templates"): self.assertRegex(r.stdout, "skill yours: " + mine, r.stdout)   # theirs, and the release didn't change it: kept
+        for mine in ("t3-usage", "t3-sync", "t3-templates"): self.assertRegex(r.stdout, "skill both: " + mine, r.stdout)   # not a template's text: asked about
         self.assertEqual(sorted(e["id"] for e in self.plan(self.ver + "-placeholders")["apply_in_order"]), ["t3-status", "t3-watch"])
         self.skills("--write"); p = self.plan()
         self.assertEqual(sorted(e["id"] for e in p["apply_in_order"]), ["t3-status", "t3-watch"])
-        self.assertEqual([e["id"] for e in p["ask_the_owner"]], ["t3-usage"]); self.assertEqual(p["yours_kept"], ["t3-sync", "t3-templates"])
+        self.assertEqual(sorted(e["id"] for e in p["ask_the_owner"]), ["t3-sync", "t3-templates", "t3-usage"]); self.assertEqual(p["yours_kept"], [])
         self.assertIn("MY RULE", (pathlib.Path(p["backups"]) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
 
     def test_a_sealed_template_copy_is_a_placeholder_in_any_wording_until_one_character_changes(self):
@@ -636,8 +644,48 @@ class SkillSync(unittest.TestCase):
         kept = set(p["yours_kept"]) | {e["id"] for e in p["ask_the_owner"]}
         self.assertEqual(kept, {"t3-templates", "t3-new-thread", "t3-handoff", "t3-checkup"}, "each is the owner's: kept or asked about, never replaced")
 
+    def test_a_template_copy_with_an_edited_description_is_the_owners_sealed_or_not(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        short = "A short copy.\n"
+        self.put("t3-watch", self.header("t3-watch", self.sign("t3-watch", short), "MINE: only watch on weekdays."))           # sealed body, edited description
+        self.put("t3-sync", self.header("t3-sync", self.stub("t3-sync").split("\n---\n", 1)[1], "MINE: never sync on Fridays."))  # an old template's text, edited description
+        self.put("t3-update", self.header("t3-update", self.sign("t3-update", short)))                                          # sealed and untouched
+        r = self.skills("--write", "--placeholders"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("skill placeholder: t3-update", r.stdout, r.stdout)
+        for mine in ("t3-watch", "t3-sync"): self.assertNotIn(f"skill placeholder: {mine}", r.stdout, r.stdout)
+        self.assertEqual([e["id"] for e in self.plan(self.ver + "-placeholders")["apply_in_order"]], ["t3-update"])
+
+    def test_sign_gives_one_seal_for_a_body_or_a_whole_skill_file_and_it_survives_how_a_platform_stores_text(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        body = "Caf\u00e9 rules.\nSecond line.\n"
+        signed = self.sign("t3-watch", body)
+        self.assertEqual(self.sign("t3-watch", self.header("t3-watch", body)), signed, "the header's description is used when no --description is given")
+        import unicodedata
+        self.put("t3-watch", self.header("t3-watch", unicodedata.normalize("NFD", signed)))   # the same characters, spelled the other way
+        self.assertIn("skill placeholder: t3-watch", self.skills().stdout)
+        r = subprocess.run([sys.executable, str(self.f), "sign", "t3-watch"], input=b"a body with no header and no description\n", capture_output=True)
+        self.assertNotEqual(r.returncode, 0); self.assertIn("USAGE", (r.stdout + r.stderr).decode())
+
+    def test_a_skill_edited_after_the_plan_was_made_is_caught_before_it_is_applied_and_backed_up(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting"): self.put(n, self.now[n])
+        self.put("t3-usage", (self.rels / self.OLD / "skills" / "t3-usage" / "SKILL.md").read_text(encoding="utf-8"))   # untouched, on the older release
+        self.skills("--write"); self.assertIn("t3-usage", [e["id"] for e in self.plan()["apply_in_order"]])
+        ok = self.fetch("recheck", str(self.sync / self.ver)); self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr); self.assertIn("OK nothing changed", ok.stdout)
+        self.put("t3-usage", (self.live / "t3-usage" / "SKILL.md").read_text(encoding="utf-8") + "\nA rule I added while the plan was waiting.\n")
+        r = self.fetch("recheck", str(self.sync / self.ver)); self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("CHANGED t3-usage", r.stdout); folder = pathlib.Path(re.search(r"backed up in (.+)$", r.stdout.strip()).group(1))
+        self.assertIn("A rule I added while the plan was waiting.", (folder / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
+        one = self.fetch("recheck", str(self.sync / self.ver), "t3-digest"); self.assertEqual(one.returncode, 0, "only the named skill is looked at")
+
+    def test_two_runs_in_the_same_second_never_share_a_backup_folder(self):
+        a = self.skills("--write"); first = self.plan()["backups"]
+        self.put("t3-usage", (self.live / "t3-usage" / "SKILL.md").read_text(encoding="utf-8") + "\nEdited between the two runs.\n")
+        b = self.skills("--write"); second = self.plan()["backups"]
+        self.assertNotEqual(first, second); self.assertNotIn("Edited between", (pathlib.Path(first) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
+        self.assertIn("Edited between", (pathlib.Path(second) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
+
     def test_a_placeholders_only_run_leaves_the_choices_still_waiting_for_the_owner(self):
-        self.skills("--write"); before = self.plan()["ask_the_owner"]; self.assertEqual(len(before), 2)
+        self.skills("--write"); before = self.plan()["ask_the_owner"]; self.assertEqual(len(before), 3)
         self.skills("--write", "--placeholders")
         self.assertEqual(self.plan()["ask_the_owner"], before); self.assertTrue((self.sync / self.ver / before[0]["take_new"]).exists())
 
@@ -652,7 +700,7 @@ class SkillSync(unittest.TestCase):
         same = dict(self.now); same["t3-new-thread"] += "\nA new rule in the next release.\n"
         self.release(self.tmp / "quiet", "v9.9.8", same)
         q = self.skills(tag="v9.9.8", src=self.tmp / "quiet")
-        self.assertRegex(q.stdout, r"skill yours: t3-usage .*kept by your choice", q.stdout + q.stderr); self.assertNotRegex(q.stdout, r"skill both: t3-usage")
+        self.assertRegex(q.stdout, r"skill yours: t3-usage .*left as it is by your choice", q.stdout + q.stderr); self.assertNotRegex(q.stdout, r"skill both: t3-usage")
 
     def test_state_records_of_the_wrong_shape_are_dropped_not_crashed_on(self):
         self.skills()
@@ -660,6 +708,25 @@ class SkillSync(unittest.TestCase):
             (self.sync / "skills-state.json").write_text(junk)
             r = self.skills(); self.assertEqual(r.returncode, 0, junk + r.stdout + r.stderr); self.assertNotIn("Traceback", r.stderr, junk)
             self.assertRegex(r.stdout, r"skill both: t3-usage", junk)
+
+    def test_yes_but_skip_is_remembered_so_a_later_check_leaves_the_skipped_skill_alone(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        self.skills()
+        v2 = dict(self.now); v2["t3-watch"] += "\nNew in v2.\n"
+        self.release(self.tmp / "v2", "v9.9.2", v2); self.skills("--write", tag="v9.9.2", src=self.tmp / "v2")
+        k = self.fetch("keep", "t3-watch", "v9.9.2"); self.assertIn("OK t3-watch", k.stdout, k.stdout + k.stderr)   # "yes, but skip t3-watch"
+        r = self.skills("--write", tag="v9.9.2", src=self.tmp / "v2")
+        self.assertRegex(r.stdout, r"skill yours: t3-watch .*left as it is by your choice"); self.assertNotIn("t3-watch", [e["id"] for e in self.plan("v9.9.2")["apply_in_order"]])
+        v3 = dict(v2); v3["t3-watch"] += "\nNew in v3.\n"
+        self.release(self.tmp / "v3", "v9.9.3", v3)
+        self.assertIn("skill changed: t3-watch", self.skills(tag="v9.9.3", src=self.tmp / "v3").stdout, "a later release changed it again, and it was never edited: it updates")
+
+    def test_a_sealed_copy_survives_a_platform_that_reflows_blank_lines(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        signed = self.sign("t3-watch", "First line.\n\nSecond line.\n")
+        self.put("t3-watch", self.header("t3-watch", signed.replace("\n\n", "\n")))     # a blank line was dropped
+        self.put("t3-sync", self.header("t3-sync", self.sign("t3-sync", "First line.\n\nSecond line.\n").replace("Second", "2nd")))   # a word was changed
+        r = self.skills(); self.assertIn("skill placeholder: t3-watch", r.stdout, r.stdout); self.assertNotIn("skill placeholder: t3-sync", r.stdout)
 
     def test_keep_my_edit_carries_an_edited_name_or_description_too(self):
         for n in ("t3-status", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
@@ -682,7 +749,7 @@ class SkillSync(unittest.TestCase):
     def test_an_edit_that_only_changes_indentation_counts_as_an_edit(self):
         lines = self.now["t3-templates"].split("\n"); i = max(k for k, l in enumerate(lines) if l.startswith("- "))
         lines[i] = "  " + lines[i]; self.put("t3-templates", "\n".join(lines))
-        self.assertIn("skill yours: t3-templates", self.skills().stdout)
+        self.assertRegex(self.skills().stdout, r"skill both: t3-templates", "it is not taken for an untouched copy")
 
 
 if __name__ == "__main__":
