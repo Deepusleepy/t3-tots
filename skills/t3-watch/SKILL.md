@@ -48,7 +48,7 @@ In delegated mode, act first and report after:
 | `queue-stuck` | `t3ctl queue --thread <t> --resume` once. |
 | `queue-held` | Leave it. Someone held it on purpose. Tell the user. |
 | `limit` | If `autoResume` isn't set, run `t3ctl resume-at-reset --thread <t>`. |
-| `stalled` | Read the last reply. If it is waiting on a background job, check the job. Send one nudge, for example "The capture finished; continue." Don't nudge the same stall twice. |
+| `stalled` | Read the last reply. If it is waiting on a background job, check the job. Send one nudge, for example "The capture finished; continue." Don't nudge the same stall twice, and never more than two nudges to one thread in one watch: after the second, report it and leave it for the user. A nudge changes the thread's last reply, so count the nudges you sent, not the stalls reported. |
 | `quiet` | Check `t3ctl subtasks --thread <t>` and `t3ctl read --thread <t> --last 2`. If it is truly stuck, tell the user. Don't interrupt it yourself. |
 | `stale-request` | Clear it in T3 if it belongs to a finished run, else tell the user. |
 | `error` | Tell the user with the error text. |

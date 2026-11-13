@@ -69,7 +69,7 @@ test("bots, live: an unreachable bot keeps its own events and delivers them late
     f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
     await finish(f, "A", "p1", "failed"); await finish(f, "B", "p1", "failed");
     await f.waitFor(() => f.posts.length === 2, 6000, "the main bot got both at once");
-    await f.waitFor(() => Object.keys(((f.state().bots || {}).site || {}).pending || {}).length === 2, 6000, "the bot's two events are kept");
+    await f.waitFor(() => Object.keys(((f.state().bots || {}).site || {}).pending || {}).length === 2 && !Object.values(f.state().finished).some((x) => x.e), 6000, "the bot's two events are kept, and the main bot's are settled");
     assert.equal(site.hits, 1, "the second event didn't try the dead webhook again");
     await f.stop(); site.status = () => 200; f.start();
     await f.waitFor(() => site.posts.length === 2, 9000, "kept events are sent right after a restart");

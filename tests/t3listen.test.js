@@ -1533,3 +1533,23 @@ test("summary, live: run ends combined while a summary is being sent are counted
     await f.waitFor(() => f.state().missed.count === 0 && !f.state().sending, 9000, "the second summary to be accepted");
   } finally { await f.close(); }
 });
+
+test("post: a timeout is reported as possibly delivered, so the event isn't retried for a day", async () => {
+  const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  const r = await l.post({ event: "thread.failed", runId: "r1" }, { send: async () => { throw timeout; }, config: { url: "https://x.example/h", headers: {} }, state: { sent: {} } });
+  assert.deepEqual([r.ok, r.retry, r.timedOut], [false, true, true]);
+  const refused = Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  const r2 = await l.post({ event: "thread.failed", runId: "r1" }, { send: async () => { throw refused; }, config: { url: "https://x.example/h", headers: {} }, state: { sent: {} } });
+  assert.deepEqual([r2.ok, r2.retry, r2.timedOut, r2.body], [false, true, false, "ECONNREFUSED"]);
+});
+test("summary counts merge: nothing is lost when a count taken for sending is put back", () => {
+  const a = { count: 2, titles: ["A", "B"], firstAt: "2026-11-13T08:00:00Z", lastAt: "2026-11-13T09:00:00Z" }, b = { count: 3, titles: ["B", "C"], firstAt: "2026-11-13T07:00:00Z", lastAt: "2026-11-13T08:30:00Z" };
+  assert.deepEqual(l.mergeMissed(a, b), { count: 5, titles: ["A", "B", "C"], firstAt: "2026-11-13T07:00:00Z", lastAt: "2026-11-13T09:00:00Z" });
+  assert.deepEqual(l.mergeMissed(a, l.newMissed()), a);
+});
+test("listen.pid: a leftover pid that now belongs to another program doesn't count as a running listener", { skip: process.platform === "win32" && "the Windows check reads this listener's own processes" }, () => {
+  const ps = (out, ok = true) => () => ({ ok, out });
+  assert.equal(l.pidIsListener(4242, "linux", ps("/usr/bin/node /home/u/t3-tots/t3listen run --log\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", ps("/usr/lib/firefox/firefox -contentproc\n")), false);
+  assert.equal(l.pidIsListener(4242, "darwin", ps("", false)), false, "no such process");
+});
