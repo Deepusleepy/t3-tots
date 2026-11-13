@@ -28,6 +28,9 @@ If it prints `REPO_PRIVATE_OR_MISSING`, the repo is private or the tag doesn't e
                             short copies. --diff ID: one skill's diff, and for a "both" skill the owner's edit and the release's
                             change. --base TAG: the release a skill with no record yet was last in step with (else the box
                             VERSION); ignored when it is the release being checked. --base-from DIR: read that release from DIR (or DIR/<tag>) when --from is used
+  sign ID                   for a bot template: read the short copy of skill ID from stdin and print it with its seal, the last
+                            line "[T3 Tots template copy, check <sha256>]". A copy whose seal fits is a placeholder; an edited
+                            one is the owner's
   rebase ID TAG             after saving a hand-merged skill: its owner's edit now sits on TAG
   keep ID TAG               the owner chose "keep mine" at release TAG: not asked again until a later release changes that skill
   hashes <macos|linux|windows>                  'sha256  file' lines for that OS's tools folder (with manifest.json)
@@ -160,20 +163,30 @@ def save_state(s):
 def unpin(t):  # t3-install-tools without the release tag and tool hashes it carries, so only real edits count
     t = re.sub(r'PIN = "[^"]*"', 'PIN = ""', t, count=1); t = re.sub(r"PINNED = \{\n.*?\n\}", "PINNED = {\n}", t, count=1, flags=re.S)
     return re.sub(r"pins release `v[0-9][^`]*`", "pins release ``", t)
-# What the bot template ships in place of a full skill. Only these exact texts count as a placeholder; a short skill that is
-# anything else, such as a placeholder with a line the owner added, is the owner's and is asked about like any other edit.
-STUBS = [re.compile(r"Follow t3-tots-rules\.\n\nFull skill \(pinned release (v\d+\.\d+\.\d+)\): https://raw\.githubusercontent\.com/Deepusleepy/t3-tots/\1/skills/(?P<id>t3-[a-z-]+)/SKILL\.md\nFetch and follow it before running any step not shown here\."),
-         re.compile(r"Follow t3-tots-rules\.\n\nFull skill: skills/(?P<id>t3-[a-z-]+)/SKILL\.md in github\.com/Deepusleepy/t3-tots release v\d+\.\d+\.\d+\.")]
-SHORTENED = {  # sha256 of the hand-shortened t3-tots-rules, t3-getting-started and t3-install-tools bodies the templates shipped
+# A bot template ships short copies of the skills: each points at the full skill on GitHub, which is then downloaded on every
+# use until the full copy is saved. A template seals every copy it ships with a last line that holds a checksum of the text
+# above it (`sign`). A copy whose seal still fits is exactly what the template shipped, so it can be replaced with the full
+# skill. Change one character and the seal no longer fits: then it is the owner's, and it is asked about like any other edit.
+SEAL = re.compile(r"\n\[T3 Tots template copy, check ([0-9a-f]{64})\]$")
+plain = lambda body: "\n".join(l.rstrip() for l in body.replace("\r\n", "\n").split("\n")).strip("\n")  # line ends and outer blank lines don't count
+check = lambda sid, text: sha((sid + "\n" + text.rstrip("\n")).encode("utf-8"))  # the skill's id is part of it: a seal doesn't carry over to another skill
+seal = lambda sid, body: (lambda text: f"{text}\n[T3 Tots template copy, check {check(sid, text)}]")(plain(body))
+def sealed(sid, body):
+    b = plain(body); m = SEAL.search(b)
+    return bool(m) and check(sid, b[:m.start()]) == m.group(1)
+# Templates made before v1.4.34 had no seal. What they shipped is known and will not change: two placeholder texts, and the
+# hand-shortened t3-tots-rules, t3-getting-started and t3-install-tools bodies (sha256 of each). Nothing is ever added here.
+OLD_STUBS = [re.compile(r"Follow t3-tots-rules\.\n\nFull skill \(pinned release (v\d+\.\d+\.\d+)\): https://raw\.githubusercontent\.com/Deepusleepy/t3-tots/\1/skills/(?P<id>t3-[a-z-]+)/SKILL\.md\nFetch and follow it before running any step not shown here\."),
+             re.compile(r"Follow t3-tots-rules\.\n\nFull skill: skills/(?P<id>t3-[a-z-]+)/SKILL\.md in github\.com/Deepusleepy/t3-tots release v\d+\.\d+\.\d+\.")]
+OLD_SHORTENED = {
  "43a479f07679b6112468c302bc5330721e64bf077c567b34dff2598ccbe0cfbb", "5bd237f54dfd32d231ac2975be51de37859ecb815cef695700052e64388e5a02", "a4cb47ef7e0b394478455c63241dbdea547842a22d1a19da3d75f3eaf859b893",  # v1.4.28
  "cfbf2b1aabbd5022c3811e8b56be23fdc5a0b48b6822ce7102e28b6531f8e61c", "783ac25f68253cde36969dffbdcac1b6603912d6d3414a2a1dae1a9b0c9aa1ba", "9b72dc50d294dc3185e48bb11ddb82366502ff0dc0f3953f7d27bfa31dfdcac7",  # v1.4.29
  "dcb7ee2e7b87833712b5a6f377938ba15262fdeaa8edc6b682f619654f3bc79f",
  "b086dcb5da91f6302e5b12f5c61b99248bf395e48e3616f2a48aadaf7f05fe9c", "e15120096d49e4948c9e58ff528b400a2b91cb77fc49ba6b9482351c6a4c03b3", "8ee3c76ef096d44ee41da6cfa87dfa2cb62150f38c8e4262b05af7a2cf7b9b24",  # v1.4.30
  "5876699a7ac5ca6d5d0e0246fd2719261568c5d411b1b5cd7603d8752abc81cd", "dc364756e47b10f9f5adf06210551ccad1de49e253ab2ebcb1ca76b536e41f93", "4efbc58b47d7c89c02a8b7f0881f30a0fb81c3befef094ebe317e49a16f6e832",  # v1.4.33
- "69a224a60096766b9010fd587d8b0893afbe2deaceaff09fe34b4810c001c600", "e3444df646e060ad8304b2bb77ee38a73d2cb603a01f0ad6dc9e8d45a9a07368", "cb902443ccb10a84705b99fd28b4b20ec8fd65291da108f0310acbee7c9771a5",  # v1.4.34
 }
 def placeholder(sid, body):
-    return any((m := r.fullmatch(body)) and m.group("id") == sid for r in STUBS) or sha(body.encode("utf-8")) in SHORTENED
+    return sealed(sid, body) or any((m := r.fullmatch(body)) and m.group("id") == sid for r in OLD_STUBS) or sha(body.encode("utf-8")) in OLD_SHORTENED
 same = lambda sid, parts: [parts[0], parts[1], unpin(parts[2]) if sid == IT else parts[2]]  # what is compared: name, description, body
 digest = lambda sid, parts: sha(json.dumps(same(sid, parts)).encode())
 def merge3(base, yours, theirs):  # your edit and the release's change in one text, or None when they touch the same lines
@@ -347,6 +360,8 @@ elif cmd == "skills":
     if "--base" in args: i = args.index("--base"); base = args[i + 1]; del args[i:i + 2]
     if "--base-from" in args: i = args.index("--base-from"); bsrc = pathlib.Path(args[i + 1]).expanduser(); del args[i:i + 2]
     skills(args[1] if len(args) > 1 else latest()["tag_name"], w, show, ph, base, bsrc)
+elif cmd == "sign":  # for whoever builds a bot template: seal the short copy of skill ID read from stdin, print it sealed
+    sys.stdout.buffer.write((seal(args[1], sys.stdin.buffer.read().decode("utf-8")) + "\n").encode("utf-8"))
 elif cmd in ("rebase", "keep"):
     sid, t = args[1], args[2]; f = SYNC / t / f"{sid}.new.json"  # the release's copy of this skill, as --write prepared it
     try: e = json.loads(f.read_text("utf-8")); new = digest(sid, (e["name"], e["description"], e["body"].strip("\n")))
@@ -446,6 +461,9 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
    h. Update the T3 Tots version in memory. Finish in one line: tag, where the scripts were installed, skills updated and created, skills kept or skipped, and where t3listen restarted.
 4. **Rollback**: the same steps with the previous tag (`update <previous tag>`, then `skills <previous tag> --write` and apply). Older tags stay on GitHub.
 5. **Private repo**: `check` can't see releases, so get the tag with `gh release view` (see "Private repo"), unpack that release on the box, and pass `--from <folder>` to `update` and `skills <tag>`. Unpack the release that was installed before too and pass `--base-from <that folder>` to `skills`; without it a skill that differs can't be told from an edit, so it is asked about, never replaced.
+
+## Building a bot template
+A template may ship a short copy of a skill in place of the full one, in any wording. Every such copy must be sealed: `python3 /workspace/t3tots_fetch.py sign <id> < short.md` prints it with a last line `[T3 Tots template copy, check ...]`. Ship that output unchanged. The fetcher replaces a sealed copy with the full skill at first setup, and treats a copy whose seal doesn't fit as the owner's edit. A full release copy needs no seal.
 
 ## Skills you edited
 UpdateSkill saves into the user's skill library, which every bot of theirs shares. So only one of their T3 Tots bots should run updates (the one whose box holds `/workspace/t3-tots-skill-sync/skills-state.json`); another T3 Tots bot of the same user points them to that one.

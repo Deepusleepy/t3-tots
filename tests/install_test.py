@@ -417,7 +417,14 @@ class SkillSync(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def stub(self, sid, tag=None, extra=""):  # the placeholder a template ships, as the importing bot stores it
+    def sign(self, sid, body):  # what a template build does: seal a short copy with the real command
+        r = subprocess.run([sys.executable, str(self.f), "sign", sid], input=body, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr); return r.stdout
+
+    def header(self, sid, body):
+        return f"---\nname: {sid}\ndescription: Short live answer. Use for status.\n---\n{body}"
+
+    def stub(self, sid, tag=None, extra=""):  # the placeholder a template before v1.4.34 shipped, as the importing bot stores it
         tag = tag or self.ver
         return (f"---\nname: {sid}\ndescription: Short live answer. Use for status.\n---\nFollow t3-tots-rules.\n\nFull skill (pinned release {tag}): "
                 f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{tag}/skills/{sid}/SKILL.md\nFetch and follow it before running any step not shown here.\n{extra}")
@@ -609,6 +616,25 @@ class SkillSync(unittest.TestCase):
         self.assertEqual(sorted(e["id"] for e in p["apply_in_order"]), ["t3-status", "t3-watch"])
         self.assertEqual([e["id"] for e in p["ask_the_owner"]], ["t3-usage"]); self.assertEqual(p["yours_kept"], ["t3-sync", "t3-templates"])
         self.assertIn("MY RULE", (pathlib.Path(p["backups"]) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
+
+    def test_a_sealed_template_copy_is_a_placeholder_in_any_wording_until_one_character_changes(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        short = "My own wording for a short copy.\n\nRead the full skill on GitHub before any step.\n"
+        signed = self.sign("t3-watch", short); self.assertRegex(signed, r"\n\[T3 Tots template copy, check [0-9a-f]{64}\]\n$")
+        cases = {"t3-watch": signed,                                                        # as shipped
+                 "t3-sync": self.sign("t3-sync", short).replace("\n", "\r\n"),             # the platform stored other line ends
+                 "t3-update": self.sign("t3-update", short).replace("copy.\n", "copy.  \n") + "\n\n",  # trailing spaces and blank lines
+                 "t3-templates": self.sign("t3-templates", short).replace("My own", "My OWN"),            # the owner changed one word
+                 "t3-new-thread": self.sign("t3-new-thread", short).rsplit("\n[", 1)[0] + "\n",          # the seal line is gone
+                 "t3-handoff": self.sign("t3-watch", short),                                              # another skill's sealed copy
+                 "t3-checkup": self.sign("t3-checkup", short).replace("\n[T3", "\nMY RULE: answer in Spanish.\n[T3")}  # a line added above the seal
+        for sid, body in cases.items(): self.put(sid, self.header(sid, body))
+        r = self.skills("--write"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for sid in ("t3-watch", "t3-sync", "t3-update"): self.assertIn(f"skill placeholder: {sid}", r.stdout, r.stdout)
+        for sid in ("t3-templates", "t3-new-thread", "t3-handoff", "t3-checkup"): self.assertNotIn(f"skill placeholder: {sid}", r.stdout, r.stdout)
+        p = self.plan(); self.assertEqual(sorted(e["id"] for e in p["apply_in_order"]), ["t3-sync", "t3-update", "t3-watch"])
+        kept = set(p["yours_kept"]) | {e["id"] for e in p["ask_the_owner"]}
+        self.assertEqual(kept, {"t3-templates", "t3-new-thread", "t3-handoff", "t3-checkup"}, "each is the owner's: kept or asked about, never replaced")
 
     def test_a_placeholders_only_run_leaves_the_choices_still_waiting_for_the_owner(self):
         self.skills("--write"); before = self.plan()["ask_the_owner"]; self.assertEqual(len(before), 2)
