@@ -27,7 +27,8 @@ function readFrames(state, chunk, onText) {
   }
 }
 
-async function startFake(config = {}) {
+async function startFake(given = {}) {
+  const config = { failureWaveSeconds: 0, ...given };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-fake-"));
   copyTools(dir);
   fs.writeFileSync(path.join(dir, "token"), "test-fixture");
@@ -39,7 +40,7 @@ async function startFake(config = {}) {
     req.on("end", () => {
       hits++; const e = JSON.parse(b), answer = hookStatus(e), st = typeof answer === "number" ? answer : answer.status;
       if (st === 200) posts.push(e);
-      res.writeHead(st, (typeof answer === "object" && answer.headers) || {}); res.end((typeof answer === "object" && answer.body) || (st === 200 ? "ok" : "busy"));
+      setTimeout(() => { res.writeHead(st, (typeof answer === "object" && answer.headers) || {}); res.end((typeof answer === "object" && answer.body) || (st === 200 ? "ok" : "busy")); }, (typeof answer === "object" && answer.delayMs) || 0);
     });
   });
   const t3 = http.createServer((req, res) => {

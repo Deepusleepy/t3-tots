@@ -722,7 +722,8 @@ test("state, live: a save Windows refuses while another process has listen-state
   } finally { await f.close(); }
 });
 test("reliability settings: catch-up is capped at 30 minutes by default, the rest are off; bad values fall back to the defaults", () => {
-  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, runEndsPerMinute: 10, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, runEndsPerMinute: 10, failureWaveMs: 20000, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.equal(l.reliability({ failureWaveSeconds: 0 }).failureWaveMs, 0, "0 turns failure waves off");
   assert.equal(l.reliability({ runEndsPerMinute: 3 }).runEndsPerMinute, 3);
   assert.equal(l.reliability({ runEndsPerMinute: 0 }).runEndsPerMinute, 0, "0 combines every run end");
   assert.equal(l.settingsLine({ runEndsPerMinute: 3 }), "run ends combined above 3 a minute");
@@ -803,15 +804,17 @@ test("retry queue full: a batch keeps each failure it carries in listen-state.js
 });
 test("settingsLine: status names the optional listener settings that are on", () => {
   assert.equal(l.settingsLine({}), "defaults");
-  assert.equal(l.settingsLine({ catchUpMinutes: 2, failureWaveSeconds: 20, repeatFailureHours: 6 }), "catch-up of finishes and cancels capped at 2 min, failure waves 20s (up to 120s), repeat holds 6h");
+  assert.equal(l.settingsLine({ failureWaveSeconds: 20 }), "defaults");
+  assert.equal(l.settingsLine({ failureWaveSeconds: 0 }), "failure waves off");
+  assert.equal(l.settingsLine({ catchUpMinutes: 2, failureWaveSeconds: 45, repeatFailureHours: 6 }), "catch-up of finishes and cancels capped at 2 min, failure waves 45s (up to 120s), repeat holds 6h");
 });
 const isoNow = () => new Date().toISOString();
 const busyT = (id, runId) => ({ id, title: `Thread ${id}`, status: "running", activeRunId: runId, latestRunId: runId });
 const failedT = (id, runId, extra = {}) => ({ id, title: `Thread ${id}`, status: "failed", activeRunId: null, latestRunId: runId, ...extra });
 const failRun = (id, extra = {}) => ({ id, status: "failed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow(), ...extra });
 const errItem = (runId, text) => ({ type: "error", runId, text });
-test("failure waves, live: off by default, a failure is posted once as a plain thread.failed", async () => {
-  const f = await fakeT3.startFake();
+test("failure waves, live: turned off, a failure is posted at once as a plain thread.failed", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 0 });
   try {
     f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
     f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
@@ -1489,5 +1492,167 @@ test("unreachable webhook, live: the first event finds it down, the next ones do
     f.setHookStatus(() => 200);
     await f.waitFor(() => f.posts.length === 3, 12000, "all three after the short retry");
     assert.deepEqual(f.posts.map((e) => e.runId).sort(), ["A1", "B1", "C1"]);
+  } finally { await f.close(); }
+});
+
+const askT = (pending) => ({ id: "Q", title: "Thread Q", status: "running", activeRunId: "Q1", latestRunId: "Q1", pendingRuntimeRequest: pending ? { id: "q1" } : null });
+const askReq = { id: "q1", kind: "user_input", status: "pending", createdAt: new Date().toISOString(), responseCapability: { type: "resumable" } };
+const askItem = { type: "user_input_request", requestId: "q1", questions: [{ id: "a", header: "Go", question: "Ship it?", options: [{ label: "Yes" }, { label: "No" }] }] };
+const askProjection = (withRequest) => ({ runs: [{ id: "Q1", status: "running", startedAt: new Date().toISOString() }], runtimeRequests: withRequest ? [askReq] : [], turnItems: withRequest ? [askItem] : [] });
+test("questions, live: T3 reconnecting while the webhook is down doesn't queue the question again each time; it arrives once", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 503);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(true));
+    await f.waitFor(() => f.hits >= 1, 8000, "the first try");
+    for (let i = 0; i < 3; i++) { f.dropSockets(); await f.waitFor(() => f.count(/connected to T3/) === i + 2, 15000, `reconnect ${i + 1}`); await fakeT3.sleep(300); }
+    f.setHookStatus(() => 200);
+    await f.waitFor(() => f.posts.length >= 1, 70000, "the question once the webhook is back"); await fakeT3.sleep(1500);
+    assert.deepEqual(f.posts.map((e) => e.event), ["request.opened"], "one question, not one per reconnect");
+  } finally { await f.close(); }
+});
+test("questions, live: a question T3 announces before its thread data shows it is still sent", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(false)); // the live update is ahead of the thread read
+    setTimeout(() => f.projections.set("Q", askProjection(true)), 1200); // the read catches up, with no new live update
+    await f.waitFor(() => f.posts.length >= 1, 9000, "the question");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.requestId]), [["request.opened", "q1"]]);
+  } finally { await f.close(); }
+});
+test("summary, live: run ends combined while a summary is being sent are counted in the next one, not lost", async () => {
+  const f = await fakeT3.startFake({ runEndsPerMinute: 0 });
+  try {
+    f.setHookStatus(() => ({ status: 200, delayMs: 2500 }));
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    const finish = async (id) => { f.update(busyT(id, `${id}1`), { runs: [{ id: `${id}1`, status: "running", startedAt: isoNow() }], turnItems: [] }); await fakeT3.sleep(150); f.update(doneT(id, `${id}1`), doneRun(`${id}1`)); };
+    await finish("A");
+    await f.waitFor(() => f.hits === 1, 9000, "the first summary is on its way");
+    await finish("B");
+    await f.waitFor(() => f.posts.length === 2, 20000, "the second summary");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.count]), [["thread.missed.summary", 1], ["thread.missed.summary", 1]]);
+    await f.waitFor(() => f.state().missed.count === 0 && !f.state().sending, 9000, "the second summary to be accepted");
+  } finally { await f.close(); }
+});
+
+test("post: a timeout is reported as possibly delivered, so the event isn't retried for a day", async () => {
+  const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  const r = await l.post({ event: "thread.failed", runId: "r1" }, { send: async () => { throw timeout; }, config: { url: "https://x.example/h", headers: {} }, state: { sent: {} } });
+  assert.deepEqual([r.ok, r.retry, r.timedOut], [false, true, true]);
+  const refused = Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  const r2 = await l.post({ event: "thread.failed", runId: "r1" }, { send: async () => { throw refused; }, config: { url: "https://x.example/h", headers: {} }, state: { sent: {} } });
+  assert.deepEqual([r2.ok, r2.retry, r2.timedOut, r2.body], [false, true, false, "ECONNREFUSED"]);
+});
+test("summary counts merge: nothing is lost when a count taken for sending is put back", () => {
+  const a = { count: 2, titles: ["A", "B"], firstAt: "2026-11-13T08:00:00Z", lastAt: "2026-11-13T09:00:00Z" }, b = { count: 3, titles: ["B", "C"], firstAt: "2026-11-13T07:00:00Z", lastAt: "2026-11-13T08:30:00Z" };
+  assert.deepEqual(l.mergeMissed(a, b), { count: 5, titles: ["A", "B", "C"], firstAt: "2026-11-13T07:00:00Z", lastAt: "2026-11-13T09:00:00Z" });
+  assert.deepEqual(l.mergeMissed(a, l.newMissed()), a);
+});
+test("listen.pid: a leftover pid that now belongs to another program doesn't count as a running listener", () => {
+  const os_ = (out, ok = true) => () => ({ ok, out }), dead = () => false, alive = () => true;
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/bin/node /home/u/t3-tots/t3listen run --log\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/lib/firefox/firefox -contentproc\n")), false);
+  assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\Program Files\\nodejs\\node.exe" t3listen run --log\r\n')), true, "a listener started by hand from its folder counts too");
+  assert.equal(l.pidIsListener(4242, "win32", os_("C:\\Windows\\explorer.exe\r\n")), false);
+  assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\node.exe" "C:\\Users\\u\\t3-tots\\t3listen" "run" "--log"\r\n')), true, "the quoted form the logon task uses");
+  assert.equal(l.pidIsListener(4242, "linux", os_("vim /home/u/t3-tots/t3listen\n")), false, "an editor with the file open is not a listener");
+  assert.equal(l.pidIsListener(4242, "linux", os_("node t3listen status\n")), false);
+  assert.equal(l.pidIsListener(4242, "win32", os_("\r\n")), false, "no such process");
+  assert.equal(l.pidIsListener(4242, "linux", os_("", false), dead), false, "the OS couldn't be asked and the pid is gone");
+  assert.equal(l.pidIsListener(4242, "win32", os_("", false), alive), true, "the OS couldn't be asked: a live pid still blocks a second listener, as before");
+});
+test("timeouts: a finish goes into the summary after 3, a question or failure is kept for an hourly try, nothing is dropped", () => {
+  for (const event of ["thread.finished", "thread.cancelled"]) assert.deepEqual([1, 2, 3, 4].map((n) => l.afterTimeouts({ event }, n)), ["retry", "retry", "combine", "combine"], event);
+  for (const event of ["request.opened", "request.resolved", "thread.failed", "thread.failed.batch"]) assert.deepEqual([1, 2, 3, 9].map((n) => l.afterTimeouts({ event }, n)), ["retry", "retry", "slow", "slow"], event);
+});
+test("questions, live: a question the webhook refused is sent once after a reconnect, by the copy already kept for retry", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 400);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(true));
+    await f.waitFor(() => f.hits >= 1, 8000, "the refused try");
+    f.setHookStatus(() => 200);
+    f.dropSockets(); await f.waitFor(() => f.count(/connected to T3/) === 2, 15000, "reconnect"); await fakeT3.sleep(2500);
+    assert.equal(f.posts.length, 0, "the reconnect doesn't send it beside the kept copy");
+    await f.waitFor(() => f.posts.length >= 1, 70000, "the kept copy at the next retry round"); await fakeT3.sleep(1500);
+    assert.deepEqual(f.posts.map((e) => e.event), ["request.opened"], "one question");
+    assert.match(f.out, /sent request\.opened .*\(retry 1\)/);
+  } finally { await f.close(); }
+});
+test("questions, live: thread data that trails by longer than the first looks is looked at again without a new update", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(false));
+    setTimeout(() => f.projections.set("Q", askProjection(true)), 8000); // after the four quick looks gave up
+    await f.waitFor(() => f.posts.length >= 1, 30000, "the question");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.requestId]), [["request.opened", "q1"]]);
+  } finally { await f.close(); }
+});
+test("questions, live: a question the first snapshot names before its thread data shows it is still sent", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setThread(askT(true), askProjection(false));
+    f.start(); await f.waitFor(() => /connected to T3/.test(f.out), 8000, "connected");
+    setTimeout(() => f.projections.set("Q", askProjection(true)), 1200);
+    await f.waitFor(() => f.posts.length >= 1, 9000, "the question");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.requestId]), [["request.opened", "q1"]]);
+  } finally { await f.close(); }
+});
+test("dry run, live: with failure waves on, a failure is printed and nothing is posted", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 1 });
+  try {
+    f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(["--dry-run"]); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => /DRY-RUN payload .*thread\.failed/.test(f.out), 8000, "the printed failure"); await fakeT3.sleep(2500);
+    assert.equal(f.hits, 0, "a dry run never posts");
+  } finally { await f.close(); }
+});
+test("listen.pid: a listener started without the word run still counts as running", () => {
+  const os_ = (out) => () => ({ ok: true, out });
+  assert.equal(l.pidIsListener(4242, "linux", os_("node /home/u/t3-tots/t3listen\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/bin/node-22 /home/u/t3-tots/t3listen run --log\n")), true, "a versioned node binary");
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/bin/nodejs /home/u/t3-tots/t3listen run\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("/opt/homebrew/opt/node@24/bin/node t3listen --log --approvals\n")), true);
+  assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\u\\t3-tots\\t3listen" "--log"\r\n')), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("node /home/u/t3-tots/t3listen bots\n")), false, "a one-off command is not the listener");
+  assert.equal(l.pidIsListener(4242, "linux", os_("less /home/u/t3-tots/t3listen\n")), false);
+});
+test("retry queue: an event parked while the queue is full keeps its timeout count and its hourly wait", () => {
+  const q = Array.from({ length: l.MAX_RETRY_QUEUE }, (_, i) => ({ e: { event: "thread.finished", runId: `x${i}`, eventId: `x${i}` } }));
+  const st = { sent: { q9: {} }, finished: {} }, item = { e: { event: "request.opened", requestId: "q9", eventId: "e9" }, rounds: 4, since: 5, timeouts: 3, notBefore: 99 };
+  assert.equal(l.keepForRetry(q, st, item), "parked");
+  const back = []; l.refillFromState(back, st, 7);
+  assert.deepEqual(back, [{ e: item.e, rounds: 4, since: 5, timeouts: 3, notBefore: 99 }]);
+});
+test("post: HTTP 504 counts as no answer in time, since the receiver may have taken it", async () => {
+  const answer = (status) => async () => ({ ok: false, status, text: async () => "", headers: null });
+  const opts = { config: { url: "http://127.0.0.1:9/", headers: {} }, state: { sent: {} }, presence: () => null };
+  assert.equal((await l.post({ event: "request.opened", requestId: "q" }, { ...opts, send: answer(504) })).timedOut, true);
+  assert.equal((await l.post({ event: "request.opened", requestId: "q" }, { ...opts, send: answer(503) })).timedOut, false);
+});
+test("post: a close is held back only for the bot that never saw the question", async () => {
+  const sent = []; const send = async (url) => { sent.push(url); return { ok: true, status: 200 }; };
+  const state = { sent: { q: { suppressed: true } } }, e = { event: "request.resolved", requestId: "q" }, config = { url: "http://127.0.0.1:9/", headers: {} };
+  assert.equal((await l.post(e, { send, config, state, presence: () => null })).suppressed, true, "the main bot, which was never told");
+  assert.equal((await l.post(e, { send, config, state, presence: () => null, unseen: false })).suppressed, undefined, "another bot that did get the question");
+  assert.equal(sent.length, 1);
+});
+test("questions, live: a question answered in T3 while its opening still waits for retry sends neither the opening nor the close", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 400);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(true));
+    await f.waitFor(() => f.hits >= 1, 8000, "the refused try");
+    f.setHookStatus(() => 200);
+    f.update(askT(false), { ...askProjection(false), runtimeRequests: [{ ...askReq, status: "resolved", answers: { a: "Yes" }, resolvedAt: new Date().toISOString() }] });
+    await f.waitFor(() => /closed before it could be sent/.test(f.out), 8000, "the drop"); await fakeT3.sleep(2500);
+    assert.equal(f.posts.length, 0, "no card for a closed question, and no close for a question never shown");
+    assert.equal(f.hits, 1);
   } finally { await f.close(); }
 });

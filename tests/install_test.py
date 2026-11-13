@@ -263,6 +263,24 @@ class ScanPrivate(unittest.TestCase):
         for f in ("tools/t3listen", "tools/export.js", "tools/survey.js"):
             m = re.search(r"const SECRET_KEYS = String\.raw`([^`]*)`;", (ROOT / f).read_text())
             self.assertTrue(m, f); self.assertEqual(m.group(1), self.m.SECRET_KEYS, f)
+        m = re.search(r'^SECRET_KEYS = r"(.*)"$', (ROOT / "tools/t3q.py").read_text(encoding="utf-8"), re.M)
+        self.assertTrue(m, "tools/t3q.py"); self.assertEqual(m.group(1), self.m.SECRET_KEYS, "tools/t3q.py")
+
+    def test_t3q_redacts_what_it_prints(self):
+        src = (ROOT / "tools/t3q.py").read_text(encoding="utf-8"); ns = {"re": re, "os": os}
+        exec(src[src.index("SECRET_KEYS = r"):src.index("def env_int")], ns)
+        out = ns["flat"]("key sk-ant-api03-" + "abcdefghijklmnopqrstuvwxyz012345" + " then ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " then Bearer " + "abcdefghijklmnop1234" + " done", 400)
+        self.assertEqual(out, "key [redacted] then [redacted] then [redacted] done")
+        self.assertEqual(ns["flat"]("nothing secret here, just words", 400), "nothing secret here, just words")
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):  # titles, git remotes and commit subjects are printed without flat()
+            ns["print"]("THREAD Use ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " for CI | remote https://deploy:" + "s3cretpass" + "@github.com/a/b.git | head 1a2b3c fix basic auth | Authorization: Basic " + "dXNlcjpwYXNzd29yZDEyMw==")
+        self.assertEqual(buf.getvalue(), "THREAD Use [redacted] for CI | remote https://[redacted]@github.com/a/b.git | head 1a2b3c fix basic auth | Authorization: Basic [redacted]\n")
+        for plain in ("Add basic IPv4-and-IPv6-support", "http://localhost:3000?user=a@b.com"):
+            self.assertEqual(ns["RED"].sub("[redacted]", plain), plain)
+        for plain in ("Fix task-scheduler-retry-backoff-logic", "C:\\worktrees\\risk-assessment-for-payments-v2", "desk-booking-system-redesign", "Bearer authentication-middleware", "thread:project:20b7dd6b-aecd-42a3-a4dc-85fbcdee5f59"):
+            self.assertEqual(ns["flat"](plain, 400), plain, plain)
 
     def test_secret_patterns_catch_base64_webhook_secrets_and_underscored_stripe_keys(self):
         keys = re.compile(self.m.SECRET_KEYS)
