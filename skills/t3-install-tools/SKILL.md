@@ -204,8 +204,9 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         bt, braw = base_of(sid); braw = pinned(sid, braw); o = norm(braw) if braw is not None else None
         raw_a = a; a = norm(pinned(sid, live[sid].read_text("utf-8")))
         if o is None or a == o: st[sid] = f"changed ({count(diffn(raw_a[2], b[2]))}" + (", description" if raw_a[1] != b[1] else "") + ")"; continue
-        own = sid != "t3-install-tools"  # this skill holds the update script and its pins: it can't stay on an old release
-        if o == b and own: bs["kept"].pop(sid, None); st[sid] = f"yours ({count(diffn(o[2], a[2]))} by you; the release didn't change it)"; continue
+        own = sid != "t3-install-tools"  # this skill holds the update script and its pins: it can't stay on an old release,
+        # so an edited copy that still pins an older release is asked about. One that already pins this release is just "yours".
+        if o == b and (own or raw_a == a): bs["kept"].pop(sid, None); st[sid] = f"yours ({count(diffn(o[2], a[2]))} by you; the release didn't change it)"; continue
         kt = bs["kept"].get(sid)  # the owner chose "keep mine" at release kt: quiet until a later release changes this skill again
         if own and kt and (kt == tag or (copy_at(kt, sid) is not None and norm(copy_at(kt, sid)) == b)):
             st[sid] = f"yours ({count(diffn(o[2], a[2]))} by you; kept by your choice, the release moved on since {bt})"; continue

@@ -517,6 +517,20 @@ class SkillSync(unittest.TestCase):
         self.assertIn("My own note about installing.", body); self.assertIn(f'PIN = "{self.ver}"', body, "the merged copy carries this release's pins")
         k = self.fetch("keep", "t3-install-tools", self.ver); self.assertNotEqual(k.returncode, 0); self.assertIn("CANNOT_KEEP", k.stdout + k.stderr)
 
+    def test_an_edited_update_skill_is_asked_about_once_per_release_not_on_every_check(self):
+        self.put("t3-status", self.now["t3-status"]); self.put("t3-digest", self.now["t3-digest"]); self.put("t3-usage", self.now["t3-usage"])
+        self.put("t3-install-tools", self.now["t3-install-tools"] + "\nMy own note about installing.\n")
+        r = self.skills(); self.assertIn("skill yours: t3-install-tools", r.stdout, r.stdout + r.stderr); self.assertNotIn("ASK:", r.stdout)
+        self.release(self.tmp / "next", "v9.9.9", dict(self.now))
+        r = self.skills("--write", tag="v9.9.9", src=self.tmp / "next")
+        self.assertRegex(r.stdout, r"skill both: t3-install-tools", "its pins must move to the new release, so the owner is asked once")
+        e = {x["id"]: x for x in self.plan("v9.9.9")["ask_the_owner"]}["t3-install-tools"]
+        self.save("t3-install-tools", e["keep_my_edit"], "v9.9.9")  # "update and keep my edit"
+        for _ in range(2):
+            r = self.skills(tag="v9.9.9", src=self.tmp / "next")
+            self.assertIn("skill yours: t3-install-tools", r.stdout, r.stdout + r.stderr); self.assertNotIn("ASK:", r.stdout)
+        self.assertIn('PIN = "v9.9.9"', (self.live / "t3-install-tools" / "SKILL.md").read_text(encoding="utf-8"))
+
     def test_an_edit_that_only_changes_indentation_counts_as_an_edit(self):
         lines = self.now["t3-templates"].split("\n"); i = max(k for k, l in enumerate(lines) if l.startswith("- "))
         lines[i] = "  " + lines[i]; self.put("t3-templates", "\n".join(lines))
