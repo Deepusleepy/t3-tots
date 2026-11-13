@@ -263,8 +263,8 @@
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 14359,
-   "sha256": "fdf243707bdec2ba282499711a7c82e7eb455d1109d7011b42eceedbbc650a71"
+   "bytes": 14984,
+   "sha256": "854e0b46ca3a58110c60c9fe97e8fdb9d052c8b1f944eb0ae705266e32cb92eb"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -277,8 +277,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 33005,
-   "sha256": "1eef8baf11b1beed5d711c25bbe6c44525356b00333701d6db4ac2d794a95aae"
+   "bytes": 45316,
+   "sha256": "57c16dc1a8948ebd1d3c77816a6761ec74e33d043bbe159007eb2c660f2f1947"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
