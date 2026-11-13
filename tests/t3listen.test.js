@@ -1615,6 +1615,8 @@ test("dry run, live: with failure waves on, a failure is printed and nothing is 
 test("listen.pid: a listener started without the word run still counts as running", () => {
   const os_ = (out) => () => ({ ok: true, out });
   assert.equal(l.pidIsListener(4242, "linux", os_("node /home/u/t3-tots/t3listen\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/bin/node-22 /home/u/t3-tots/t3listen run --log\n")), true, "a versioned node binary");
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/bin/nodejs /home/u/t3-tots/t3listen run\n")), true);
   assert.equal(l.pidIsListener(4242, "linux", os_("/opt/homebrew/opt/node@24/bin/node t3listen --log --approvals\n")), true);
   assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\u\\t3-tots\\t3listen" "--log"\r\n')), true);
   assert.equal(l.pidIsListener(4242, "linux", os_("node /home/u/t3-tots/t3listen bots\n")), false, "a one-off command is not the listener");
@@ -1639,4 +1641,18 @@ test("post: a close is held back only for the bot that never saw the question", 
   assert.equal((await l.post(e, { send, config, state, presence: () => null })).suppressed, true, "the main bot, which was never told");
   assert.equal((await l.post(e, { send, config, state, presence: () => null, unseen: false })).suppressed, undefined, "another bot that did get the question");
   assert.equal(sent.length, 1);
+});
+test("questions, live: a question answered in T3 while its opening still waits for retry sends neither the opening nor the close", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 400);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(true));
+    await f.waitFor(() => f.hits >= 1, 8000, "the refused try");
+    f.setHookStatus(() => 200);
+    f.update(askT(false), { ...askProjection(false), runtimeRequests: [{ ...askReq, status: "resolved", answers: { a: "Yes" }, resolvedAt: new Date().toISOString() }] });
+    await f.waitFor(() => /closed before it could be sent/.test(f.out), 8000, "the drop"); await fakeT3.sleep(2500);
+    assert.equal(f.posts.length, 0, "no card for a closed question, and no close for a question never shown");
+    assert.equal(f.hits, 1);
+  } finally { await f.close(); }
 });

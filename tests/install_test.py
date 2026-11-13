@@ -275,8 +275,10 @@ class ScanPrivate(unittest.TestCase):
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):  # titles, git remotes and commit subjects are printed without flat()
-            ns["print"]("THREAD Use ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " for CI | remote https://deploy:" + "s3cretpass" + "@github.com/a/b.git | head 1a2b3c fix basic auth")
-        self.assertEqual(buf.getvalue(), "THREAD Use [redacted] for CI | remote https://[redacted]@github.com/a/b.git | head 1a2b3c fix basic auth\n")
+            ns["print"]("THREAD Use ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " for CI | remote https://deploy:" + "s3cretpass" + "@github.com/a/b.git | head 1a2b3c fix basic auth | Authorization: Basic " + "dXNlcjpwYXNzd29yZDEyMw==")
+        self.assertEqual(buf.getvalue(), "THREAD Use [redacted] for CI | remote https://[redacted]@github.com/a/b.git | head 1a2b3c fix basic auth | Authorization: Basic [redacted]\n")
+        for plain in ("Add basic IPv4-and-IPv6-support", "http://localhost:3000?user=a@b.com"):
+            self.assertEqual(ns["RED"].sub("[redacted]", plain), plain)
         for plain in ("Fix task-scheduler-retry-backoff-logic", "C:\\worktrees\\risk-assessment-for-payments-v2", "desk-booking-system-redesign", "Bearer authentication-middleware", "thread:project:20b7dd6b-aecd-42a3-a4dc-85fbcdee5f59"):
             self.assertEqual(ns["flat"](plain, 400), plain, plain)
 
