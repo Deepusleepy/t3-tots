@@ -136,7 +136,7 @@ def latest():
         sys.exit(f"REPO_PRIVATE_OR_MISSING: the box can't see releases. On a computer where gh is signed in run: "
                  f"gh release view -R {REPO} --json tagName,publishedAt,body")
 # The three places t3-install-tools names its release: written once, used to set them (pin_fix) and to blank them (unpin).
-PIN_RE, PINNED_RE, PINS_RE = re.compile(r'PIN = "[^"]*"'), re.compile(r"PINNED = \{\n.*?\n\}", re.S), re.compile(r"pins release `v[0-9][^`]*`")
+PIN_RE, PINNED_RE, PINS_RE = re.compile(r'(?<=REPO = "Deepusleepy/t3-tots"; )PIN = "[^"]*"'), re.compile(r"PINNED = \{\n.*?\n\}", re.S), re.compile(r"pins release `v[0-9][^`]*`")
 def pin_fix(t, m, tag):  # make t3-install-tools pin <tag> and its manifest hashes, so the synced skill matches the box
     rows = ",\n".join(f' "{f["path"]}": ["{f["dest"]}", "{f["sha256"]}"]' for f in tools(m))
     t = PIN_RE.sub(lambda _: f'PIN = "{tag}"', t, count=1); t = PINNED_RE.sub(lambda _: "PINNED = {\n" + rows + "\n}", t, count=1)
@@ -144,6 +144,7 @@ def pin_fix(t, m, tag):  # make t3-install-tools pin <tag> and its manifest hash
 def unpin(t):  # t3-install-tools without the release tag and tool hashes it carries, so only real edits count
     return PINS_RE.sub("pins release ``", PINNED_RE.sub("PINNED = {\n}", PIN_RE.sub('PIN = ""', t, count=1), count=1))
 IT = "t3-install-tools"
+skill_text = lambda f: f.read_text("utf-8-sig", errors="replace")  # a live skill: no byte-order mark; odd bytes don't stop the run, they just make it differ
 # One record per live skill: {"tag": the release its text was last in step with, "sha": the hash of that release's copy}.
 # A live skill whose hash equals its record was not edited by the owner, so a new release may replace it. One that differs
 # was edited and is never replaced without the owner's choice. "kept": the release copy the owner declined (asked again
@@ -191,10 +192,11 @@ OLD_SHORTENED = {
  "5876699a7ac5ca6d5d0e0246fd2719261568c5d411b1b5cd7603d8752abc81cd": "v1.4.33", "dc364756e47b10f9f5adf06210551ccad1de49e253ab2ebcb1ca76b536e41f93": "v1.4.33", "4efbc58b47d7c89c02a8b7f0881f30a0fb81c3befef094ebe317e49a16f6e832": "v1.4.33",
 }
 def old_template_tag(sid, body):  # the release an unsealed template copy was made for, or None when the body isn't one
-    for r in OLD_STUBS:
-        m = r.fullmatch(body)
-        if m and m.group("id") == sid: return m.group("tag")
-    return OLD_SHORTENED.get(sha(body.encode("utf-8")))
+    for text in (body, "\n".join(l.rstrip() for l in body.split("\n")).strip("\n")):  # as stored, then without spaces at line ends
+        for r in OLD_STUBS:
+            m = r.fullmatch(text)
+            if m and m.group("id") == sid: return m.group("tag")
+        if sha(text.encode("utf-8")) in OLD_SHORTENED: return OLD_SHORTENED[sha(text.encode("utf-8"))]
 same = lambda sid, parts: [parts[0], parts[1], unpin(parts[2]) if sid == IT else parts[2]]  # what is compared: name, description, body
 digest = lambda sid, parts: sha(json.dumps(same(sid, parts)).encode())
 def merge3(base, yours, theirs):  # your edit and the release's change in one text, or None when they touch the same lines
@@ -238,7 +240,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
     if IT in rel:
         t = rel[IT]; lv = LIVE / IT / "SKILL.md"
         if 'cmd == "skills"' not in t and lv.is_file():
-            print("skills: this release's t3-install-tools has no skill sync, keeping the live one (pin moved to the tag)"); t = lv.read_text("utf-8")
+            print("skills: this release's t3-install-tools has no skill sync, keeping the live one (pin moved to the tag)"); t = skill_text(lv)
         rel[IT] = pin_fix(t, m, tag)
     live = {p.name: p / "SKILL.md" for p in LIVE.iterdir() if p.name.startswith("t3-") and (p / "SKILL.md").is_file()}
     state = load_state()
@@ -263,7 +265,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
     st, both, prepared = {}, {}, {}
     for sid, t in sorted(rel.items()):
         if sid not in live: st[sid] = "new"; prepared[sid] = t; continue
-        lt = live[sid].read_text("utf-8"); a, b = norm(lt), norm(t)
+        lt = skill_text(live[sid]); a, b = norm(lt), norm(t)
         if a == b: st[sid] = "unchanged"; state[sid] = {"tag": tag, "sha": digest(sid, b)}; continue
         # the bot template ships short copies that point at the full skill on GitHub and download it on every use
         if a[0] == b[0] and template_copy(sid, a, b): st[sid] = f"placeholder (full copy is {len(b[2])} characters)"; prepared[sid] = t; continue
@@ -302,7 +304,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         if x and x["o"] is not None:
             print(f"--- your edit of {show} (compared with {x['base']}) ---\n" + udiff(x["o"], x["a"], f"{x['base']}/{show}", f"live/{show}"))
             print(f"--- what the release changed in {show} ({x['base']} -> {tag}) ---\n" + udiff(x["o"], x["b"], f"{x['base']}/{show}", f"{tag}/{show}")); return
-        old = live[show].read_text("utf-8").splitlines() if show in live else []
+        old = skill_text(live[show]).splitlines() if show in live else []
         print("\n".join(difflib.unified_diff(old, rel[show].splitlines(), f"live/{show}", f"{tag}/{show}", lineterm=""))); return
     c = lambda k: sum(v.startswith(k) for v in st.values())
     print(f"skills vs {tag}: {c('new')} new, {c('changed')} changed, {c('placeholder')} placeholders, {c('yours')} yours, {c('both')} both, {c('unchanged')} unchanged, {len(gone)} not in release")
@@ -320,7 +322,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         todo = sorted((s for s, v in st.items() if v.startswith("placeholder" if placeholders else ("new", "changed", "placeholder"))), key=lambda s: (s != "t3-tots-rules", s == IT, s))
         asked = [] if placeholders else sorted(both)
         back = backup(tag, [live[sid] for sid in todo + asked if sid in live])  # the live copy of everything this run may replace
-        seen = lambda sid: {"live": digest(sid, norm(live[sid].read_text("utf-8")))} if sid in live else {}
+        seen = lambda sid: {"live": digest(sid, norm(skill_text(live[sid])))} if sid in live else {}
         put = lambda name, sid, n, d, b, new=False: (out / name).write_text(json.dumps({"id": sid, "new": new, "name": n or sid, "description": d, "body": b}, indent=1), "utf-8")
         offer = lambda sid, *copies: state.setdefault(sid, {}).update(offered={"tag": tag, "base": digest(sid, norm(rel[sid])), "shas": [digest(sid, c) for c in copies]})
         for sid in todo:
@@ -389,7 +391,7 @@ elif cmd == "recheck":  # right before applying a plan: was any live skill chang
     for e in plan["apply_in_order"] + plan["ask_the_owner"]:
         f = LIVE / e["id"] / "SKILL.md"
         if (only and e["id"] not in only) or "live" not in e: continue
-        if not f.is_file() or digest(e["id"], norm(f.read_text("utf-8"))) != e["live"]: moved.append(f)
+        if not f.is_file() or digest(e["id"], norm(skill_text(f))) != e["live"]: moved.append(f)
     if not moved: print(f"OK nothing changed since this plan was made ({out})"); sys.exit(0)
     back = backup(plan["tag"], [f for f in moved if f.is_file()])
     print("CHANGED " + " ".join(f.parent.name for f in moved) + ": edited since this plan was made. Don't apply " + ("it" if len(moved) == 1 else "them") + f" from this plan; run skills {plan['tag']} --write again." + (f" Current copies backed up in {back}" if back else ""))

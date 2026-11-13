@@ -728,6 +728,25 @@ class SkillSync(unittest.TestCase):
         self.put("t3-sync", self.header("t3-sync", self.sign("t3-sync", "First line.\n\nSecond line.\n").replace("Second", "2nd")))   # a word was changed
         r = self.skills(); self.assertIn("skill placeholder: t3-watch", r.stdout, r.stdout); self.assertNotIn("skill placeholder: t3-sync", r.stdout)
 
+    def test_odd_files_are_read_not_tripped_over(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        (self.live / "t3-watch" / "SKILL.md").write_bytes(b"\xef\xbb\xbf" + self.header("t3-watch", self.sign("t3-watch", "A short copy.\n")).encode("utf-8"))   # a byte-order mark
+        self.put("t3-sync", self.stub("t3-sync", "v1.4.30").replace("Follow t3-tots-rules.\n", "Follow t3-tots-rules.  \n"))                              # an old template's text with spaces at a line end
+        (self.live / "t3-update" / "SKILL.md").write_bytes(self.now["t3-update"].encode("utf-8") + b"\n\xff\xfe not text\n")                               # not valid UTF-8
+        r = self.skills(); self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("skill placeholder: t3-watch", r.stdout, r.stdout); self.assertIn("skill placeholder: t3-sync", r.stdout)
+        self.assertRegex(r.stdout, r"skill both: t3-update", "it differs, so it is asked about; the other skills are still looked at")
+
+    def test_a_note_that_looks_like_the_pin_line_is_left_as_the_owner_wrote_it(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        self.skills()
+        head, _, rest = self.now["t3-install-tools"].partition("\n---\n")
+        self.put("t3-install-tools", head + "\n---\nRemember PIN = \"local-only\".\n" + rest)
+        self.release(self.tmp / "next", "v9.9.9", dict(self.now))
+        self.skills("--write", tag="v9.9.9", src=self.tmp / "next")
+        body = json.loads((self.sync / "v9.9.9" / "t3-install-tools.json").read_text())["body"]
+        self.assertIn('Remember PIN = "local-only".', body); self.assertIn('REPO = "Deepusleepy/t3-tots"; PIN = "v9.9.9"', body)
+
     def test_keep_my_edit_carries_an_edited_name_or_description_too(self):
         for n in ("t3-status", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
         base = (self.rels / self.OLD / "skills" / "t3-digest" / "SKILL.md").read_text(encoding="utf-8")
