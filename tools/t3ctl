@@ -7,7 +7,14 @@ const { pickThread, lookupThread } = (() => { try { return require("./thread-mat
   console.error("TOOLS_INCOMPLETE: thread-match.js must be next to t3ctl. Reinstall the tools (t3-install-tools)."); process.exit(1);
 } })();
 const HOME = os.homedir();
-const die = (code, msg) => { console.error(`${code}: ${msg}`); process.exit(1); };
+const die = (code, msg) => { console.error(`${code}: ${msg}`); writeState(); process.exit(1); };
+// WRITE_STATE: the last line of a failed write command. "none" = no write request left for T3, so trying another way is safe.
+// "unknown" = one left and may have happened (a timeout, a dropped socket), so read the thread before doing anything again.
+// A bot that reaches T3 by more than one route (t3-tots-rules "Routes") must never repeat an "unknown" write another way.
+const WRITE_TAGS = new Set(["orchestration.dispatchCommand", "orchestration.launchThread", "scheduledTasks.upsert", "scheduledTasks.setEnabled", "scheduledTasks.runNow", "scheduledTasks.delete"]);
+const READ_CMDS = ["projects", "models", "threads", "read", "pending", "diff", "files", "status", "raw", "limits", "search", "prs", "pr", "subtasks", "watch", "record"];
+let WROTE = false;
+function writeState() { const c = process.argv[2]; if (typeof CMDS !== "undefined" && CMDS.includes(c) && !READ_CMDS.includes(c)) console.error(`WRITE_STATE: ${WROTE ? "unknown" : "none"}`); }
 function t3Dir() { // same for stable and Nightly; T3_HOME may point at the base or the userdata folder
   for (let v of [process.env.T3_HOME, process.env.T3CODE_HOME]) {
     v = (v || "").trim(); if (!v) continue; if (v.startsWith("~")) v = path.join(HOME, v.slice(1));
@@ -45,7 +52,7 @@ function args(a = process.argv.slice(3)) { const o = {}, stray = []; Object.defi
 // flags that always take a value; "--from --to dir" must not read as --from=true
 const VALUE_FLAGS = new Set(["thread", "project", "prompt", "prompt-file", "model", "effort", "title", "mode", "attach", "timeout", "from", "to", "only", "text", "pick", "answers",
   "decision", "request", "query", "q", "limit", "last", "number", "repo", "state", "stall-min", "until", "every", "at", "days", "id", "subagent", "edit", "move", "before", "steer",
-  "run", "provider", "turn", "reason", "label", "chars", "runtime", "worktree", "include", "enable", "disable", "delete", "copy"]);
+  "run", "provider", "turn", "reason", "label", "chars", "runtime", "worktree", "include", "enable", "disable", "delete", "copy", "started", "answered", "unanswered"]);
 function missingValue(o, cmd) { // --cancel takes a run id only for queue; elsewhere it is a switch
   return Object.keys(o).find((k) => o[k] === true && (VALUE_FLAGS.has(k) || (k === "cancel" && cmd === "queue"))); }
 async function get(p) {
@@ -59,9 +66,9 @@ function rpc(tag, payload) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: H });
     const t = setTimeout(() => { ws.close(); reject(new Error("rpc timeout")); }, 60000);
-    ws.onopen = () => ws.send(JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] }));
+    ws.onopen = () => { if (WRITE_TAGS.has(tag)) WROTE = true; ws.send(JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] })); };
     ws.onmessage = (ev) => {
-      let msgs = JSON.parse(ev.data); if (!Array.isArray(msgs)) msgs = [msgs];
+      let msgs; try { msgs = JSON.parse(ev.data); } catch { clearTimeout(t); ws.close(); return reject(new Error("unreadable reply from T3")); } if (!Array.isArray(msgs)) msgs = [msgs];
       for (const m of msgs) {
         if (m._tag === "Ping") ws.send(JSON.stringify({ _tag: "Pong" }));
         if (m._tag === "Exit" && m.requestId === "1") { clearTimeout(t); ws.close(); m.exit._tag === "Success" ? resolve(m.exit.value) : reject(new Error(JSON.stringify(m.exit.cause || m.exit).slice(0, 1500))); }
@@ -367,7 +374,25 @@ function parseWhen(v) { // ISO | +30m/+2h/+1d | HH:MM (today, or tomorrow if pas
   if ((m = v.match(/^([01]?\d|2[0-3]):([0-5]\d)$/))) { const d = new Date(); d.setHours(+m[1], +m[2], 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d.toISOString(); }
   const t = Date.parse(v); if (!Number.isFinite(t)) throw new Error(`can't read time "${v}" (use ISO, +30m, +2h, +1d or HH:MM)`); return new Date(t).toISOString();
 }
-const isMainThread = (t) => !/^(mcp|provider)$/.test(t.creationSource || ""); // hides threads agents spawned (same rule as t3q.py, export.js, survey.js)
+// hides threads agents spawned (same rule as t3q.py, export.js, survey.js), except the ones T3 Tots started itself and recorded
+const isMainThread = (t, started = {}) => !/^(mcp|provider)$/.test(t.creationSource || "") || !!started[t.id];
+// started-here.json {threadId: ISO}: threads T3 Tots started, here with `new` or through T3's MCP and then `record --started`.
+// They show in the user's lists, and t3listen arms Resume at reset for them.
+const STARTED = path.join(__dirname, "started-here.json");
+const startedIds = () => { try { const m = JSON.parse(fs.readFileSync(STARTED, "utf8")); return m && typeof m === "object" ? m : {}; } catch { return {}; } };
+function addStarted(threadId) {
+  const m = startedIds(), cut = Date.now() - 60 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k];
+  m[threadId] = new Date().toISOString(); const t = `${STARTED}.${process.pid}.part`; fs.writeFileSync(t, JSON.stringify(m)); fs.renameSync(t, STARTED);
+}
+// record: bookkeeping on this computer for something done through T3's MCP, so reports, auto-resume and "answered from chat" still
+// work for it. Needs no T3 and no token.
+function recordCmd(o) {
+  const id = (v, what) => { if (typeof v !== "string" || !v.trim()) throw new Error(`USAGE: ${what} needs an id`); return v.trim(); };
+  if (o.started !== undefined) { addStarted(id(o.started, "--started")); console.log("RECORDED: started"); }
+  else if (o.answered !== undefined) { markHere(id(o.answered, "--answered"), true); console.log("RECORDED: answered"); }
+  else if (o.unanswered !== undefined) { markHere(id(o.unanswered, "--unanswered"), false); console.log("RECORDED: unanswered"); }
+  else throw new Error("USAGE: record --started <threadId> | --answered <requestId> | --unanswered <requestId>");
+}
 // limitLine: one row of `t3ctl limits`, reset time in local time, marked when it has already passed (a stale limit)
 const limitLine = (t, autoResume, now = Date.now()) => { const at = t.usageLimitResetAt, past = at && Date.parse(at) < now;
   return `${t.title}  resets=${at ? localT(at) + (past ? " (passed)" : "") : "?"}  autoResume=${autoResume}  snoozedUntil=${t.snoozedUntil ? localT(t.snoozedUntil) : "-"}  id=${t.id}`; };
@@ -505,10 +530,11 @@ const main = async () => {
   const extra = cmd === "skills" ? o.stray.slice(1) : o.stray;
   if (extra.length && CMDS.concat("skills").includes(cmd)) die("USAGE", `unexpected "${String(extra[0]).slice(0, 40)}": a value with spaces must be quoted as one argument, or use --prompt-file. Nothing was sent.`);
   if (cmd === "skills") return skillsCmd(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "list", args(process.argv.slice(3)));
+  if (cmd === "record") return recordCmd(o);
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
   else if (cmd === "models") { const m = new Map(); for (const t of (await shell()).threads) if (t.modelSelection) m.set(`${t.modelSelection.instanceId} ${t.modelSelection.model}`, (t.modelSelection.options || []).find((x) => /effort|variant/i.test(x.id))?.id || "-"); for (const [k, v] of [...m].sort()) console.log(`${k}  (effort key: ${v})`); }
-  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project !== undefined) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } if (o.main) ts = ts.filter(isMainThread); const top = ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15);
+  else if (cmd === "threads") { const s = await shell(); let ts = s.threads; if (o.project !== undefined) { const p = await findProject(o.project); ts = ts.filter((t) => t.projectId === p.id); } if (o.main) { const started = startedIds(); ts = ts.filter((t) => isMainThread(t, started)); } const top = ts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, +o.limit || 15);
     const ps = await Promise.all(top.map((t) => thread(t.id).then((r) => r.projection, () => null))); top.forEach((t, i) => console.log(threadLine(t, ps[i]))); }
   else if (cmd === "new") {
     const prompt = promptOf(o); if (!o.project || !prompt) throw new Error("usage: new --project <path|name|id> (--prompt <text> | --prompt-file <path>) [--model m] [--effort e] [--title t] [--mode plan] [--worktree base-branch] [--wait [--timeout seconds]]");
@@ -517,8 +543,7 @@ const main = async () => {
     const res = await rpc("orchestration.launchThread", { commandId: uuid(), creationSource: "web", projectId: p.id, title, generateTitle: !o.title,
       modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: workspaceOf(o),
       initialMessage: { messageId: uuid(), text: prompt, attachments: await uploadImages(o.attach) } });
-    try { const sf = path.join(__dirname, "started-here.json"); let m = {}; try { m = JSON.parse(fs.readFileSync(sf, "utf8")) || {}; } catch {} // t3listen auto-resumes threads started here
-      const cut = Date.now() - 60 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k]; m[res.threadId] = new Date().toISOString(); fs.writeFileSync(sf, JSON.stringify(m)); } catch {}
+    try { addStarted(res.threadId); } catch (e) { console.log(`note: couldn't record the new thread for auto-resume (${e.message}); fix with: t3ctl record --started ${res.threadId}`); }
     console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}`);
     if (o.wait) { const t = await wait(res.threadId, +o.timeout || 300); console.log(`title: ${t.title}  status: ${t.status}`); await printLast(res.threadId, 2); }
   }
@@ -675,5 +700,5 @@ const main = async () => {
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
   else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] [--include path,path] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { oneById, skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
-else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });
+if (require.main !== module) module.exports = { addStarted, startedIds, WRITE_TAGS, READ_CMDS, oneById, skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); writeState(); process.exit(1); });

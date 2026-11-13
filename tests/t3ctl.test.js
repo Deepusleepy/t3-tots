@@ -355,6 +355,29 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/); assert.deepEqual(sent, []);
     r = await run("answer", "--thread", thread.id, "--request", "B-42", "--decision", "accept", "--user-approved");
     assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].requestId, "B-42");
+
+    // WRITE_STATE: the last line of a failed write says whether a write request reached T3
+    dispatchMode = "fail"; reset("npm test"); sent = [];
+    r = await run("send", "--thread", thread.id, "--prompt", "continue");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: unknown\n$/, "T3 got the request and refused it: it may have happened");
+    dispatchMode = "ok";
+    r = await run("send", "--thread", "no-such-thread-anywhere", "--prompt", "continue");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: none\n$/, "stopped before any write request left"); assert.equal(sent.filter((x) => x.type === "message.dispatch").length, 1);
+    r = await run("send", "--thread", thread.id, "--prompt", "Fix", "the", "bug");
+    assert.match(r.out, /^USAGE: unexpected "the"[^\n]*\nWRITE_STATE: none\n$/);
+    r = await run("read", "--thread", "no-such-thread-anywhere");
+    assert.equal(r.code, 1, r.out); assert.doesNotMatch(r.out, /WRITE_STATE/, "a read never prints it");
+
+    // record: bookkeeping for something done through T3's MCP; needs no T3 and no token
+    fs.rmSync(path.join(tmp, "token"));
+    r = await run("record", "--started", "mcp:launch:abc123");
+    assert.equal(r.code, 0, r.out); assert.match(r.out, /^RECORDED: started/);
+    assert.ok(Date.parse(JSON.parse(fs.readFileSync(path.join(tmp, "started-here.json"), "utf8"))["mcp:launch:abc123"]) > Date.now() - 60000);
+    const marks = () => Object.keys(JSON.parse(fs.readFileSync(path.join(tmp, "answered-here.json"), "utf8"))).length, before = marks();
+    r = await run("record", "--answered", "req-77"); assert.match(r.out, /^RECORDED: answered/); assert.equal(marks(), before + 1);
+    r = await run("record", "--unanswered", "req-77"); assert.match(r.out, /^RECORDED: unanswered/); assert.equal(marks(), before);
+    r = await run("record"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: record --started/); assert.doesNotMatch(r.out, /WRITE_STATE/);
+    r = await run("record", "--started"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE/);
   } finally { srv.close(); }
 });
 test("tools updates never overwrite the data files t3ctl keeps next to itself", () => {
@@ -597,4 +620,10 @@ test("oneById: a full id or a part that fits one item; a part that fits several 
   assert.throws(() => t.oneById([{ id: "a-sub1" }, { id: "b-sub1" }], "sub1", "subagent", (id, s) => id.endsWith(s)), /AMBIGUOUS: sub1 matches 2 subagents/);
   const o = t.args(["--prompt", "Fix", "the", "bug", "--queue"]);
   assert.deepEqual([o.prompt, o.queue, o.stray], ["Fix", true, ["the", "bug"]], "words that belong to no flag are kept apart so the command can refuse them");
+});
+
+test("threads --main: a thread started through T3's MCP is hidden as agent-spawned until T3 Tots records it as its own", () => {
+  const mcp = { id: "mcp:launch:1", creationSource: "mcp" }, user = { id: "u1", creationSource: "web" }, sub = { id: "s1", creationSource: "provider" };
+  assert.deepEqual([mcp, user, sub].map((x) => t.isMainThread(x)), [false, true, false]);
+  assert.deepEqual([mcp, user, sub].map((x) => t.isMainThread(x, { "mcp:launch:1": "2026-11-13T00:00:00Z" })), [true, true, false]);
 });
