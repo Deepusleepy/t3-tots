@@ -4,7 +4,7 @@ description: >-
   Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", the T3 Tots weekly update routine, during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
 ---
 
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.33` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.34` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
@@ -31,13 +31,13 @@ Installs tools only. Live Grok Bot skills are applied by the main agent with Upd
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.33"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.34"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "01ff4476b33f3623b4e7c36a696e1fcc89f3b6101ef11c464235bc29d1fadc1b"],
+ "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/t3ctl": ["t3ctl", "cafd839cb4275f9b69af6d1ab2d33ba158999a01320b9b47db256d36aeb63191"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8"],
- "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
  "tools/survey.js": ["survey.js", "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f"],
@@ -127,7 +127,7 @@ def pin_fix(t, m, tag):  # make t3-install-tools pin <tag> and its manifest hash
     t2 = re.sub(r"PINNED = \{\n.*?\n\}", lambda _: "PINNED = {\n" + rows + "\n}", t2, count=1, flags=re.S)
     t2 = re.sub(r"pins release `v[0-9][^`]*`", f"pins release `{tag}`", t2)
     return t2
-def skills(tag, write=False, show=None):
+def skills(tag, write=False, show=None, placeholders=False):
     if not LIVE.is_dir():
         print(f"skills: no live skills folder at {LIVE} (not Grok Bot). Other agents: node t3ctl skills install --to <dir>"); return
     mb = fetch(tag, "manifest.json"); m = json.loads(mb)
@@ -155,22 +155,27 @@ def skills(tag, write=False, show=None):
         a, b = norm(live[sid].read_text("utf-8")), norm(t)
         if a == b: st[sid] = "unchanged"; continue
         d = [l for l in difflib.unified_diff(a[2].splitlines(), b[2].splitlines(), lineterm="", n=0) if l[:1] in "+-" and l[:3] not in ("+++", "---")]
-        st[sid] = f"changed (+{sum(l[0] == '+' for l in d)}/-{sum(l[0] == '-' for l in d)} lines" + (", description" if a[1] != b[1] else "") + ")"
+        # the bot template ships short copies that point at the full skill on GitHub and download it on every use
+        ph = len(a[2]) * 2 < len(b[2]) and f"skills/{sid}/SKILL.md" in a[2]
+        st[sid] = (f"placeholder (full copy is {len(b[2])} characters" if ph else f"changed (+{sum(l[0] == '+' for l in d)}/-{sum(l[0] == '-' for l in d)} lines" + (", description" if a[1] != b[1] else "")) + ")"
     gone = sorted(set(live) - set(rel))
     if show:
         if show not in rel: sys.exit(f"NO_SUCH_SKILL {show} in {tag}")
         old = live[show].read_text("utf-8").splitlines() if show in live else []
         print("\n".join(difflib.unified_diff(old, rel[show].splitlines(), f"live/{show}", f"{tag}/{show}", lineterm=""))); return
     c = lambda k: sum(v.startswith(k) for v in st.values())
-    print(f"skills vs {tag}: {c('new')} new, {c('changed')} changed, {c('unchanged')} unchanged, {len(gone)} not in release")
+    print(f"skills vs {tag}: {c('new')} new, {c('changed')} changed, {c('placeholder')} placeholders, {c('unchanged')} unchanged, {len(gone)} not in release")
     for sid, v in st.items():
         if v != "unchanged": print(f"skill {v.split(' ')[0]}: {sid} {v[len(v.split(' ')[0]):].strip()}".rstrip())
     for sid in gone: print(f"skill not in release (kept unless the user says delete): {sid}")
+    if c("placeholder") and not write:
+        print(f"NEXT: {c('placeholder')} skill(s) are still template placeholders, downloaded from GitHub every time they are used. Save the full copies now: "
+              f"python3 {pathlib.Path(sys.argv[0]).as_posix()} skills {tag} --write --placeholders, then UpdateSkill each entry of PLAN.json in order. Needs no yes: they are this bot's own skills.")
     if not write: return
     out = SYNC / tag
     if out.exists(): shutil.rmtree(out)
     out.mkdir(parents=True)
-    todo = sorted((s for s, v in st.items() if v != "unchanged"), key=lambda s: (s != "t3-tots-rules", s == "t3-install-tools", s))
+    todo = sorted((s for s, v in st.items() if (v.startswith("placeholder") if placeholders else v != "unchanged")), key=lambda s: (s != "t3-tots-rules", s == "t3-install-tools", s))
     for sid in todo:
         n, d, b = front(rel[sid])
         (out / f"{sid}.SKILL.md").write_text(rel[sid], "utf-8")
@@ -202,7 +207,9 @@ elif cmd == "skills":
     if "--diff" in args: i = args.index("--diff"); show = args[i + 1]; del args[i:i + 2]
     w = "--write" in args
     if w: args.remove("--write")
-    skills(args[1] if len(args) > 1 else latest()["tag_name"], w, show)
+    ph = "--placeholders" in args
+    if ph: args.remove("--placeholders")
+    skills(args[1] if len(args) > 1 else latest()["tag_name"], w, show, ph)
 elif cmd == "hashes":
     for f in files(args[1])[1]: print(f"{f['sha256']}  {f['dest']}")
 elif cmd == "emit":
@@ -280,7 +287,7 @@ Hash its files (step 3 commands) and compare with `python3 /workspace/t3tots_fet
 ## Update T3 Tots (scripts and skills)
 Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots") or when a script prints `T3_SCHEMA_CHANGED`. The T3 Tots weekly update routine runs it without asking ("Weekly update run"). "Update T3" or "update gh" means T3 Code or dev tools: that's t3-update. One check and one yes cover the box, every T3 computer and the live skills.
 1. **Check** (read-only, no approval). Save the fetcher from "Box copy" if `/workspace/t3tots_fetch.py` is missing or differs, then run `python3 /workspace/t3tots_fetch.py check`. It prints installed vs latest tag, the changed tool files, the release notes, then one skills line (`new`, `changed (+a/-b lines, description)`, `unchanged`, `not in release`) and one line per skill that isn't unchanged. Only `t3-*` skills are compared; frontmatter is compared by name and description text, so reflowed YAML doesn't count as a change. If the user asks what changed in one skill, run `skills <tag> --diff <id>` and summarize it.
-2. **Show and ask once.** One short message: installed and latest tag, 2 to 4 lines of the notes, changed scripts, new and changed skills, and any live t3-* skill the release no longer has. Nothing changed in scripts or skills: say it's up to date and stop. Scripts current but skills differ (for example a skill edited by hand): still offer the skills. Ask "Update to <tag>?". The user can answer "yes, but skip <skill>"; leave that skill out.
+2. **Show and ask once.** One short message: installed and latest tag, 2 to 4 lines of the notes, changed scripts, new and changed skills, and any live t3-* skill the release no longer has. Nothing changed in scripts or skills: say it's up to date and stop. Scripts current but skills differ (for example a skill edited by hand): still offer the skills. Skills the check calls `placeholder` are the short copies a bot template ships: don't ask about those, save the full copies ("After an update") and say "saved the full copies of N skills". Ask "Update to <tag>?". The user can answer "yes, but skip <skill>"; leave that skill out.
 3. **On yes**, in this order:
    a. Box: `python3 /workspace/t3tots_fetch.py update <tag>` (skip if `VERSION` already says that tag). It verifies against that tag's `manifest.json` and replaces the box manifest.
    b. Computers: for each T3 computer in memory (ListMachines; offline ones are listed and offered later), run "Install on a computer" steps 1 and 2 with its OS and tools folder. Update the version line in its `README.md`. If `node t3listen status` there shows it running, run `node t3listen install` again so it restarts on the new version; add `--approvals` only if status showed "installed with --approvals" before the update (tools before v1.4.1 don't print that line, so use memory or ask). `listen.json` is kept.
@@ -298,19 +305,20 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 
 | Check | If so |
 |---|---|
+| `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of `PLAN.json` in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are this bot's own skills, and a skill edited by hand is never touched. One line to the user: "Saved the full copies of N skills." |
 | Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
 
 A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
 
 ## Weekly update run
 The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this. Turning it on is the user's yes for each later run, so don't ask.
-1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, send nothing and stop, even when a skill differs from the release (a hand edit stays until the user asks).
+1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, do the "After an update" checks when the check printed `NEXT:` or the memory note "T3 Tots bot-side checks done for <tag>" is missing or names an older tag, and say what they changed in one line. Otherwise send nothing and stop. A skill the check calls `changed` is a hand edit: it stays until the user asks.
 2. If a newer tag exists, run step 3 a to e, g and h for it. Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, don't restart it; it runs the new version from its next login.
 3. Send one short message: the old and new tag, 2 to 4 lines of the notes, what was updated where, and anything left for the user (offline computers, listeners not restarted yet, skills the release no longer has).
 4. `HASH_MISMATCH`, `REPO_PRIVATE_OR_MISSING` or a failed step installs nothing more. Say what was and wasn't updated, once per tag and error, and note it in memory so later runs stay quiet until the tag or the error changes.
 
 It updates only T3 Tots scripts and t3-* skills. Never update T3 Code, Node, gh or other tools (t3-update), and never change this bot's picture, description or publish settings.
 
-Routine prompt, verbatim:
+The routine's prompt starts with this text. A template may add reminders after it, as long as they repeat this section and change nothing:
 
 > T3 Tots weekly update. Follow t3-install-tools "Weekly update run" and t3-tots-rules. Send nothing when T3 Tots is already on the latest release.

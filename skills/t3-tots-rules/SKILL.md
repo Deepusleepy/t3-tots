@@ -113,7 +113,7 @@ Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows 
 Read-only database queries. It needs no token. Commands: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. Settings: `T3_DAYS`, `T3_ALL=1`, `T3_Q` (thread words or id), `T3_LAST`, `T3_WEEK=1`.
 
 ### t3ctl
-Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Updating". Don't retry other spellings.
+Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Update T3 Tots (scripts and skills)". Don't retry other spellings.
 
 | Area | Commands |
 |---|---|
@@ -171,7 +171,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `T3_NOT_RUNNING`, `T3_NOT_REACHABLE`, `NO_T3` | Open T3 Code |
 | `NO_TOKEN`, `TOKEN_REJECTED` | Issue or reissue the token ("Token" below) |
 | `NODE_TOO_OLD`, `PYTHON_TOO_OLD` | Upgrade (t3-getting-started lists per-OS commands) |
-| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Updating"); use `t3ctl` meanwhile |
+| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Update T3 Tots (scripts and skills)"); use `t3ctl` meanwhile |
 | `T3_DB_BUSY` | Retry in a few seconds |
 | `BAD_SETTING` | A number setting such as `T3_DAYS` or `T3_LAST` isn't a whole number of 1 or more. Fix it and rerun |
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |

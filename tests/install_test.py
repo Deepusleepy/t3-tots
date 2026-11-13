@@ -383,5 +383,48 @@ class T3uiQuoting(unittest.TestCase):
         self.assertEqual(out, self.PAYLOAD); self.assertEqual(os.listdir(d), [])
         shutil.rmtree(d, ignore_errors=True)
 
+
+class SkillPlaceholders(unittest.TestCase):
+    """A bot made from the template starts with short skills that download the full text on every use. The fetcher must tell
+    those from a skill the owner edited, so the full copies are saved without touching the edits."""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-ph-")); self.f = fetcher(self.tmp)
+        self.live = self.tmp / "live"; self.sync = self.tmp / "sync"; self.ver = MANIFEST["version"]
+        for d in sorted((ROOT / "skills").iterdir()):
+            (self.live / d.name).mkdir(parents=True); shutil.copy(d / "SKILL.md", self.live / d.name / "SKILL.md")
+        stub = "---\nname: t3-status\ndescription: >-\n  Short live answer. Use for status.\n---\nFull skill (pinned release): https://raw.githubusercontent.com/Deepusleepy/t3-tots/" + self.ver + "/skills/t3-status/SKILL.md\nFetch and follow it before any step.\n"
+        (self.live / "t3-status" / "SKILL.md").write_text(stub, encoding="utf-8")
+        with open(self.live / "t3-waiting" / "SKILL.md", "a", encoding="utf-8") as h: h.write("\nMy own extra rule.\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def skills(self, *a):
+        env = {"T3TOTS_LIVE_SKILLS": str(self.live), "T3TOTS_SKILL_SYNC": str(self.sync)}
+        return run(self.f, "skills", self.ver, "--from", str(ROOT), *a, dst=self.tmp / "box", env=env)
+
+    def plan(self):
+        return [e["id"] for e in json.loads((self.sync / self.ver / "PLAN.json").read_text())["apply_in_order"]]
+
+    def test_check_names_the_placeholder_apart_from_the_hand_edit_and_says_what_to_do(self):
+        r = self.skills(); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("1 changed, 1 placeholders", r.stdout)
+        self.assertIn("skill placeholder: t3-status", r.stdout); self.assertIn("skill changed: t3-waiting", r.stdout)
+        self.assertIn("NEXT: 1 skill(s) are still template placeholders", r.stdout); self.assertIn("--write --placeholders", r.stdout)
+        self.assertFalse(self.sync.exists(), "a check writes nothing")
+
+    def test_placeholders_only_prepares_the_full_copy_and_leaves_the_hand_edit(self):
+        r = self.skills("--write", "--placeholders"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.plan(), ["t3-status"])
+        full = (ROOT / "skills" / "t3-status" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual((self.sync / self.ver / "t3-status.SKILL.md").read_text(encoding="utf-8"), full)
+        shutil.copy(self.sync / self.ver / "t3-status.SKILL.md", self.live / "t3-status" / "SKILL.md")
+        again = self.skills(); self.assertIn("0 placeholders", again.stdout); self.assertNotIn("NEXT:", again.stdout)
+
+    def test_a_plain_write_still_prepares_everything_that_differs(self):
+        r = self.skills("--write"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(self.plan()), ["t3-status", "t3-waiting"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
