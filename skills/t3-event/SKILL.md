@@ -16,18 +16,18 @@ This file is complete for a webhook run: don't read t3-tots-rules or t3-phone-an
 1. `answerable: false`, or no questions: one line telling the user to answer it in T3. Stop.
 2. One short briefing: what the thread is doing and what it asks about, in one or two sentences from `title`, `project`, `machine` and `context`. No options and no recommendation in it.
 3. Each question as its own card, one at a time, in order; the next one after the user answers. Card title: `header`. Option labels exactly as given, each `description` if it fits, several choices if `multiSelect`, a typed-answer choice only if `allowCustomAnswer`. Nothing pre-selected.
-4. Keep each pick by question `id`. When every required question has one (`required` is true unless it says false), answer once ("Running t3ctl").
+4. Keep each pick by question `id`. When every required question has one (`required` is true unless it says false), answer once with the command under "Commands".
 Never reuse an earlier pick, and never answer a question the user didn't see.
 
 ## An approval (`request.opened` with `approval`)
 Show `approval.prompt`, the reason it asks (`approval.reason`; if missing, `node t3ctl pending --thread '<threadId>' --json` has it) and each option's label and warning, word for word. Never judge it safe from its text.
 - The user's yes for this request: `--request '<requestId>' --decision <option> --user-approved`. Use the option that allows this one request; a wider one (for the session, or always) only when the user asked for exactly that.
 - The user's no: `--request '<requestId>' --decision decline`.
-- Delegated mode: `--request '<requestId>' --decision decline --redirect`, then one line: what was declined and why it asked.
+- Delegated mode: no card. `--request '<requestId>' --decision decline --redirect`, then one line: what was declined and why it asked.
 - `answerable: false`: one line telling the user to handle it in T3.
 
-## Running t3ctl
-Call ListMachines and use the computer whose label equals the event's `machine`; ask if none matches. Run from that computer's tools folder (in memory; else `~/t3-tots`). Use `node t3ctl`, single-quote every value, and pass ids in full. On Windows PowerShell double any `'` inside a value.
+## Commands
+Call ListMachines and use the computer whose label equals the event's `machine`; ask if none matches. Run from that computer's tools folder (in memory; else `~/t3-tots`). Use `node t3ctl`, single-quote every value, and pass ids in full. A `'` inside a value: write `'\''` in zsh or bash, and `''` in Windows PowerShell.
 - One question: `node t3ctl answer --thread '<threadId>' --request '<requestId>' --pick '<exact label>'`, or `--text '<their words>'` for a typed answer.
 - Several questions, or multi-select: one call with `--answers '{"<question id>": "<label>", "<id>": ["<label>", "<label>"], "<id>": "<their words>"}'`.
 - An approval: add the `--decision` flags above to `node t3ctl answer --thread '<threadId>'`.

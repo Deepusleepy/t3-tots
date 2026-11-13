@@ -249,8 +249,8 @@
    "path": "skills/t3-event/SKILL.md",
    "dest": "t3-event/SKILL.md",
    "kind": "skill",
-   "bytes": 5380,
-   "sha256": "06354abccfb98c2531dc612e4994afc0266425ec5d0e08a0d056dde4c48c0ba8"
+   "bytes": 5430,
+   "sha256": "0dc2b8508a86a9b161f2833d1827e24cd769a8fd41b3bdd6bbd942cfa6e75405"
   },
   {
    "path": "skills/t3-get-output/SKILL.md",
@@ -291,8 +291,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 20719,
-   "sha256": "2f96484863afad53e8f5f9b67a473f7fc909f669204127f1cf57a29436f5b73d"
+   "bytes": 20829,
+   "sha256": "b7694f2ab73196abe0da15dd3d62c3137ebc0416ed5ddb37aa8d87afb2f2905f"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
