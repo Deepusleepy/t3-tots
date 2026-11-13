@@ -263,6 +263,15 @@ class ScanPrivate(unittest.TestCase):
         for f in ("tools/t3listen", "tools/export.js", "tools/survey.js"):
             m = re.search(r"const SECRET_KEYS = String\.raw`([^`]*)`;", (ROOT / f).read_text())
             self.assertTrue(m, f); self.assertEqual(m.group(1), self.m.SECRET_KEYS, f)
+        m = re.search(r'^SECRET_KEYS = r"(.*)"$', (ROOT / "tools/t3q.py").read_text(encoding="utf-8"), re.M)
+        self.assertTrue(m, "tools/t3q.py"); self.assertEqual(m.group(1), self.m.SECRET_KEYS, "tools/t3q.py")
+
+    def test_t3q_redacts_what_it_prints(self):
+        src = (ROOT / "tools/t3q.py").read_text(encoding="utf-8"); ns = {"re": re, "os": os}
+        exec(src[src.index("SECRET_KEYS = r"):src.index("def env_int")], ns)
+        out = ns["flat"]("key sk-ant-api03-" + "abcdefghijklmnopqrstuvwxyz012345" + " then ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " then Bearer " + "abcdefghijklmnop1234" + " done", 400)
+        self.assertEqual(out, "key [redacted] then [redacted] then [redacted] done")
+        self.assertEqual(ns["flat"]("nothing secret here, just words", 400), "nothing secret here, just words")
 
     def test_secret_patterns_catch_base64_webhook_secrets_and_underscored_stripe_keys(self):
         keys = re.compile(self.m.SECRET_KEYS)

@@ -307,7 +307,15 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     r = await ask("rm -rf ~", "--decision", "decline");
     assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].type, "runtime-request.respond"); assert.equal(sent[0].decision, "decline");
     r = await ask("rm -rf build", "--decision", "accept", "--user-approved");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: accepting needs --request req-1/, "a yes names the request it was given for"); assert.deepEqual(sent, []);
+    r = await ask("rm -rf build", "--decision", "accept", "--user-approved", "--request", "req-OLD");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^NOT_PENDING/, "the request the user said yes to is gone; the one that opened since is not accepted"); assert.deepEqual(sent, []);
+    r = await ask("rm -rf build", "--decision", "accept", "--user-approved", "--request", "req-1");
     assert.equal(r.code, 0, r.out); assert.equal(sent[0].decision, "accept");
+    reset("npm test"); r = await run("answer", "--thread", thread.id, "--decision", "decline", "extra", "words");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: unexpected "extra"/, "words that belong to no flag stop the command"); assert.deepEqual(sent, []);
+    reset("npm test"); r = await run("send", "--thread", thread.id, "--prompt", "Fix", "the", "login", "bug");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: unexpected "the"/, "a prompt whose quotes were lost is not sent as its first word"); assert.deepEqual(sent, []);
     r = await ask("git status", "--decision", "acceptForSession");
     assert.equal(r.code, 1, r.out); assert.match(r.out, /^NEEDS_USER_APPROVAL/); assert.deepEqual(sent, []);
     r = await ask("git status && rm -rf ~", "--decision", "accept");
@@ -577,4 +585,16 @@ test("findThread: when T3's archived list can't be read, NOT_FOUND says the arch
 test("modelSel: --effort ignores empty option slots and trims the value", () => {
   assert.deepEqual(t.modelSel({ effort: " high " }, { instanceId: "codex", model: "gpt-6.1-sol", options: [null, { id: "reasoningEffort", value: "low" }] }, null).options,
     [{ id: "reasoningEffort", value: "high" }]);
+});
+
+test("oneById: a full id or a part that fits one item; a part that fits several is AMBIGUOUS, never the first or all of them", () => {
+  const runs = [{ id: "run-q1" }, { id: "run-q2" }, { id: "run-q" }], starts = (id, s) => id.startsWith(s);
+  assert.equal(t.oneById(runs, "run-q1", "queued run", starts).id, "run-q1");
+  assert.equal(t.oneById(runs, "run-q", "queued run", starts).id, "run-q", "an exact id wins over the runs it is a prefix of");
+  assert.equal(t.oneById(runs, "run-q2", "queued run", starts).id, "run-q2");
+  assert.throws(() => t.oneById(runs, "run", "queued run", starts), /AMBIGUOUS: run matches 3 queued runs \(run-q1, run-q2, run-q\); pass the full id\. Nothing was changed\./);
+  assert.throws(() => t.oneById(runs, "nope", "queued run", starts), /no queued run matches nope/);
+  assert.throws(() => t.oneById([{ id: "a-sub1" }, { id: "b-sub1" }], "sub1", "subagent", (id, s) => id.endsWith(s)), /AMBIGUOUS: sub1 matches 2 subagents/);
+  const o = t.args(["--prompt", "Fix", "the", "bug", "--queue"]);
+  assert.deepEqual([o.prompt, o.queue, o.stray], ["Fix", true, ["the", "bug"]], "words that belong to no flag are kept apart so the command can refuse them");
 });

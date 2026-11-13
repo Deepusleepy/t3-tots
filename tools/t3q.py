@@ -30,7 +30,11 @@ def loc(s):
 def ago_h(s):
     try: return (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(s.replace("Z", "+00:00"))).total_seconds() / 3600
     except Exception: return 0
-def flat(s, n): s = " ".join((s or "").replace(os.path.expanduser("~"), "~").split()); return s if len(s) <= n else s[:n] + "…"
+# SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks). Thread text can hold a pasted key,
+# and everything this script prints goes into the bot's chat, so every text field is redacted on its way out.
+SECRET_KEYS = r"sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+"
+RED = re.compile(r"(" + SECRET_KEYS + r"|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.-]+|\bbearer\s+[A-Za-z0-9._~+/=-]{16,})", re.I)
+def flat(s, n): s = " ".join(RED.sub("[redacted]", s or "").replace(os.path.expanduser("~"), "~").split()); return s if len(s) <= n else s[:n] + "…"
 def env_int(name, default):  # whole-number settings; anything else stops with BAD_SETTING instead of a traceback
     v = os.environ.get(name, "").strip() or str(default)
     if not v.isdigit() or int(v) < 1: print(f"BAD_SETTING: {name} must be a whole number of 1 or more (got {v!r})"); sys.exit(1)

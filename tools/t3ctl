@@ -30,8 +30,16 @@ function init() {
 const netErr = (e) => new Error(`T3_NOT_REACHABLE: can't reach T3 at ${BASE} (${(e.cause && e.cause.code) || e.message}). Is T3 Code open?`);
 const uuid = () => crypto.randomUUID();
 
+// One item named by its full id, or by a part of it that fits exactly one. A part that fits several is AMBIGUOUS: acting on the
+// first, or on all of them, would cancel, steer or stop something the caller didn't name.
+function oneById(list, q, what, partial) {
+  const s = String(q), exact = list.filter((x) => String(x.id) === s), hits = exact.length ? exact : list.filter((x) => partial(String(x.id), s));
+  if (!hits.length) throw new Error(`no ${what} matches ${s}`);
+  if (hits.length > 1) throw new Error(`AMBIGUOUS: ${s} matches ${hits.length} ${what}s (${hits.map((x) => x.id).join(", ")}); pass the full id. Nothing was changed.`);
+  return hits[0];
+}
 // args: --key value, --flag, or --key=value (use the = form, or --prompt-file, for a value that starts with --)
-function args(a = process.argv.slice(3)) { const o = {}; for (let i = 0; i < a.length; i++) { if (a[i].startsWith("--")) { const eq = a[i].indexOf("=");
+function args(a = process.argv.slice(3)) { const o = {}, stray = []; Object.defineProperty(o, "stray", { value: stray }); for (let i = 0; i < a.length; i++) { if (!a[i].startsWith("--")) stray.push(a[i]); if (a[i].startsWith("--")) { const eq = a[i].indexOf("=");
   if (eq > 2) { o[a[i].slice(2, eq)] = a[i].slice(eq + 1); continue; }
   const k = a[i].slice(2); const v = a[i + 1] !== undefined && !a[i + 1].startsWith("--") ? a[++i] : true; o[k] = v; } } return o; }
 // flags that always take a value; "--from --to dir" must not read as --from=true
@@ -289,8 +297,7 @@ async function pickRequest(t, o, wantApproval) {
   const snap = await thread(t.id), p = snap.projection, open = pendingOf(p).filter((r) => (r.kind === "user_input") !== wantApproval); let pend = open;
   const ambiguous = (why) => new Error(`AMBIGUOUS: ${why} (${pend.map((r) => r.requestId).join(", ")}); pass the full id with --request`);
   if (o.request) { const q = String(o.request), exact = open.filter((r) => r.requestId === q); pend = exact.length ? exact : open.filter((r) => r.requestId.endsWith(q)); if (pend.length > 1) throw ambiguous(`--request ${q} matches several requests`); }
-  else if (wantApproval && pend.length > 1) throw ambiguous("several approvals are open");
-  else if (pend.length > 1 && t.pendingRuntimeRequest) pend = pend.filter((r) => r.requestId === t.pendingRuntimeRequest.id).concat(pend).slice(0, 1);
+  else if (pend.length > 1) throw ambiguous(wantApproval ? "several approvals are open" : "several questions are open");
   if (!pend.length) throw new Error(`NOT_PENDING: no open ${wantApproval ? "approval" : "question"}${o.request ? " with that --request id" : ""} in "${t.title}" (it may have been answered already)`);
   if (!pend[0].answerable) throw new Error(`NOT_ANSWERABLE: that request can't be answered any more (the run ended). Send a follow-up instead.`);
   return pend[0];
@@ -314,6 +321,7 @@ async function answer(o) {
     const r = await pickRequest(t, o, true); const d = String(o.decision);
     if (!r.approval.options.some((x) => x.decision === d)) throw new Error(`--decision must be one of: ${r.approval.options.map((x) => x.decision).join(", ")}`);
     if (o.redirect && d !== "decline") throw new Error("--redirect only goes with --decision decline");
+    if (d !== "decline" && d !== "cancel" && o["user-approved"] === true && !o.request) throw new Error(`USAGE: accepting needs --request ${r.requestId}, so the user's yes applies to the request they saw and not to one that opened since. Nothing was sent.`);
     if (!approvalAllowed(d, o["user-approved"])) throw new Error(`NEEDS_USER_APPROVAL: --decision ${d} lets "${t.title}" run: ${r.approval.prompt || r.approval.requestKind}. Show it to the user. After their yes for this request, add --user-approved. To keep the thread moving without them, use --decision decline --redirect.`);
     await respond(t, r.requestId, { decision: d });
     await confirm(t, r, `decision=${d}`);
@@ -493,6 +501,9 @@ const main = async () => {
   const cmd = process.argv[2], o = args();
   const bare = missingValue(cmd === "skills" ? args(process.argv.slice(3)) : o, cmd);
   if (bare) die("USAGE", `--${bare} needs a value (use --${bare}=<value> for a value that starts with --). Run t3ctl with no arguments for usage.`);
+  // A word that belongs to no flag means quoting was lost on the way ("--prompt Fix the bug" would send just "Fix"). Nothing is sent.
+  const extra = cmd === "skills" ? o.stray.slice(1) : o.stray;
+  if (extra.length && CMDS.concat("skills").includes(cmd)) die("USAGE", `unexpected "${String(extra[0]).slice(0, 40)}": a value with spaces must be quoted as one argument, or use --prompt-file. Nothing was sent.`);
   if (cmd === "skills") return skillsCmd(process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "list", args(process.argv.slice(3)));
   if (CMDS.includes(cmd)) init();
   if (cmd === "projects") { for (const p of (await shell()).projects) console.log(`${p.id}  ${p.title}  ${p.workspaceRoot}`); }
@@ -523,14 +534,15 @@ const main = async () => {
     const all = (Array.isArray(pr.turnItems) ? pr.turnItems : Object.values(pr.turnItems || {}));
     const textOf = (r) => { const m = (pr.messages || []).find((x) => x.id === r.userMessageId) || all.find((x) => x.id === r.userMessageId || x.messageId === r.userMessageId); return m ? String(m.text ?? m.content ?? (m.message && m.message.text) ?? "") : ""; };
     if (o.resume) { await dispatch("queue.resume", t.id); console.log(`resumed the queue of "${t.title}"`); return; }
-    if (o.edit) { const r = runs.find((x) => x.id === o.edit || x.id.startsWith(String(o.edit))); if (!r) throw new Error(`no queued run matches ${o.edit}`); if (o.text === undefined || o.text === true || !String(o.text).trim()) throw new Error("--text <new message> is required with --edit");
+    const one = (q) => oneById(runs, q, "queued run", (id, s) => id.startsWith(s));
+    if (o.edit) { const r = one(o.edit); if (o.text === undefined || o.text === true || !String(o.text).trim()) throw new Error("--text <new message> is required with --edit");
       await dispatch("queued-run.edit", t.id, { runId: r.id, text: String(o.text) }); console.log(`edited queued ${r.id}`); return; }
-    if (o.move) { const r = runs.find((x) => x.id === o.move || x.id.startsWith(String(o.move))); if (!r) throw new Error(`no queued run matches ${o.move}`);
-      let before = null; if (o.before && o.before !== "end") { const b = runs.find((x) => x.id === o.before || x.id.startsWith(String(o.before))); if (!b) throw new Error(`no queued run matches ${o.before}`); if (b.id === r.id) throw new Error("--before is the same run"); before = b.id; }
+    if (o.move) { const r = one(o.move);
+      let before = null; if (o.before && o.before !== "end") { const b = one(o.before); if (b.id === r.id) throw new Error("--before is the same run"); before = b.id; }
       else if (o.first) before = (runs.filter((x) => x.id !== r.id).sort((a, b) => (a.queuePosition || 0) - (b.queuePosition || 0))[0] || {}).id || null;
       await dispatch("queued-run.reorder", t.id, { runId: r.id, beforeRunId: before }); console.log(`moved queued ${r.id} ${before ? "before " + before : "to the end"}`); return; }
     if (o.steer || o.cancel) {
-      const pick = String(o.steer || o.cancel); const targets = pick === "all" ? runs : runs.filter((r) => r.id === pick || r.id.startsWith(pick));
+      const pick = String(o.steer || o.cancel); const targets = pick === "all" ? runs : [one(pick)];
       if (!targets.length) throw new Error(`no queued run matches ${pick}`);
       for (const r of targets) {
         if (o.steer) { if (!t.activeRunId) throw new Error("thread is not running; nothing to steer into"); await dispatch("queued-message.promote-to-steer", t.id, { queuedRunId: r.id, targetRunId: t.activeRunId }); console.log(`steered ${r.id}`); }
@@ -646,7 +658,7 @@ const main = async () => {
     console.log(`"${t.title}"  sub-task threads: ${kids.length}${kids.length > 15 && !o.all ? " (showing 15; --all for every one)" : ""}`); for (const k of o.all ? kids : kids.slice(0, 15)) console.log(`  ${k.id}  ${k.status}  ${k.title}`);
     const subs = p.subagents || []; console.log(`  in-thread subagents: ${subs.length}`); for (const a of subs) console.log(`  ${a.id}  run=${a.runId}  ${a.status || ""}  ${a.origin || ""}/${a.driver || ""}  ${String(a.title || a.prompt || "").replace(/\s+/g, " ").slice(0, 80)}`); }
   else if (cmd === "subagent-stop") { const t = await findThread(o.thread); if (!o.subagent) throw new Error("--subagent <id> is required (list them with: t3ctl subtasks --thread t)");
-    const a = ((await thread(t.id)).projection.subagents || []).find((x) => x.id === o.subagent || String(x.id).endsWith(String(o.subagent))); if (!a) throw new Error(`no subagent ${o.subagent} in "${t.title}"`);
+    const a = oneById((await thread(t.id)).projection.subagents || [], o.subagent, "subagent", (id, s) => id.endsWith(s));
     await dispatch("subagent.stop", t.id, { runId: a.runId, subagentId: a.id }); console.log(`stopped subagent ${a.id} in "${t.title}"`); }
   else if (cmd === "watch") { // change-only report for routines: prints nothing when nothing worth saying changed
     if (!o.thread || o.thread === true) throw new Error("usage: watch --thread a[,b,...] [--state <file>] [--stall-min 20] [--json]");
@@ -663,5 +675,5 @@ const main = async () => {
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
   else console.log("t3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] [--include path,path] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
-if (require.main !== module) module.exports = { skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
+if (require.main !== module) module.exports = { oneById, skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); process.exit(1); });
