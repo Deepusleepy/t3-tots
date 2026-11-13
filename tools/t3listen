@@ -116,6 +116,8 @@ const BOT_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 const hookUrlOk = (u) => /^https:\/\//.test(u || "") || /^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(u || "");
 function compileRule(r, where) {
   if (!r || typeof r !== "object" || Array.isArray(r)) throw new Error(`${where} must be an object with "projects" and/or "events"`);
+  const odd = Object.keys(r).find((k) => k !== "projects" && k !== "events"); if (odd !== undefined) throw new Error(`${where} has "${String(odd).slice(0, 40)}"; a rule takes "projects" and/or "events"`);
+  if (r.projects === undefined && r.events === undefined) throw new Error(`${where} must name "projects" and/or "events"`);
   const projects = r.projects === undefined ? null : [].concat(r.projects).map((x) => (x && typeof x === "object" ? x.id : x));
   if (projects && (!projects.length || projects.some((x) => typeof x !== "string" || !x))) throw new Error(`${where}.projects must list project ids`);
   const events = r.events === undefined ? null : [].concat(r.events);
@@ -293,22 +295,23 @@ function presenceSettings(c) {
 }
 const configPresence = (c) => { try { return presenceSettings(c); } catch (err) { die("BAD_LISTEN_CONFIG", `listen.json ${err.message}`); } };
 const presentInT3 = (p, idleSeconds = PRESENT_IDLE_SECONDS) => !!(p && p.t3 === true && Number.isFinite(p.idleSeconds) && p.idleSeconds >= 0 && p.idleSeconds < idleSeconds);
-async function post(e, { presence = livePresence, send = fetch, config = C, state = S } = {}) { // one attempt
+async function post(e, { presence = livePresence, send = fetch, config = C, state = S, unseen = state.sent[e.requestId]?.suppressed } = {}) { // one attempt; unseen: this bot was never shown the question
   // Check at the last boundary before EVERY attempt (live, catch-up and retries).
   // Never send a resolution for a question the phone was not told about.
-  if ((e.event === "request.resolved" && state.sent[e.requestId]?.suppressed)
+  if ((e.event === "request.resolved" && unseen)
       || (config.suppressWhileActive && PRESENT_EVENTS.has(e.event) && presentInT3(presence(), config.activeIdleSeconds))) return { ok: true, suppressed: true };
 
   try {
     const r = await send(config.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "t3listen", ...config.headers }, body: JSON.stringify(e), signal: AbortSignal.timeout(20000) });
     if (r.ok) return { ok: true, status: r.status };
     let body = ""; try { body = await r.text(); } catch {}
-    return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body), pauseMs: rateLimitPause(r.status, body, r.headers ? r.headers.get("retry-after") : null) };
+    return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body), pauseMs: rateLimitPause(r.status, body, r.headers ? r.headers.get("retry-after") : null), timedOut: r.status === 504 };
   } catch (err) { return { ok: false, status: 0, body: (err.cause && err.cause.code) || err.name, retry: true, timedOut: err.name === "TimeoutError" || err.name === "AbortError" }; }
 }
 // A POST that timed out may have been taken: the receiver can start its run and answer too late, and each retry may start
 // another. After MAX_TIMEOUTS a finish or cancel goes into the summary. A question or failure is never dropped: it is kept and
-// tried once an hour, since a timeout can also mean nothing arrived at all.
+// tried once an hour for a day, since a timeout can also mean nothing arrived at all. HTTP 504 (a gateway that gave up
+// waiting) counts as a timeout.
 const MAX_TIMEOUTS = 3, SLOW_RETRY_MS = 3600e3;
 const afterTimeouts = (e, timeouts) => (timeouts < MAX_TIMEOUTS ? "retry" : perishable(e) ? "combine" : "slow");
 const ref = (e) => String(e.requestId || e.runId || "");
@@ -333,23 +336,26 @@ function markDelivered(e, suppressed = false) {
 const MAX_RETRY_QUEUE = 100;
 const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.finished[e.runId] : null);
 const roundHeld = new Set(); // events the main bot's retry round took out of the queue and hasn't got to yet
+let posting = null; // the event the main bot's retry round is sending right now
+const waitingForRetry = (q, eventId) => !!eventId && (posting === eventId || roundHeld.has(eventId) || q.some((x) => x.e.eventId === eventId));
 function keepForRetry(q, st, item) {
   if (item.e.eventId && (roundHeld.has(item.e.eventId) || q.some((x) => x.e.eventId === item.e.eventId))) return "queued"; // already waiting: a reconnect found it undelivered again
+  const park = { e: item.e, rounds: item.rounds || 0, since: item.since, ...(item.timeouts ? { timeouts: item.timeouts } : {}), ...(item.notBefore ? { notBefore: item.notBefore } : {}) };
   if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
   if (item.e.failures) {
     let kept = 0;
-    for (const f of item.e.failures) { const s = st.finished[f.runId]; if (s && s.e) { (s.parked = s.parked || {})["thread.failed"] = { e: s.e, rounds: item.rounds || 0, since: item.since }; kept++; } }
+    for (const f of item.e.failures) { const s = st.finished[f.runId]; if (s && s.e) { (s.parked = s.parked || {})["thread.failed"] = { ...park, e: s.e }; kept++; } }
     return kept ? "parked" : "dropped";
   }
   const s = stateFor(st, item.e); if (!s) return "dropped";
-  (s.parked = s.parked || {})[item.e.event] = { e: item.e, rounds: item.rounds || 0, since: item.since }; return "parked";
+  (s.parked = s.parked || {})[item.e.event] = park; return "parked";
 }
 function refillFromState(q, st, now) {
   let moved = 0;
   for (const s of [...Object.values(st.sent), ...Object.values(st.finished)]) {
     for (const [name, p] of Object.entries(s.parked || {})) {
       if (q.length >= MAX_RETRY_QUEUE) return moved;
-      q.push({ e: p.e, rounds: p.rounds || 0, since: p.since || now }); delete s.parked[name]; moved++;
+      q.push({ ...p, rounds: p.rounds || 0, since: p.since || now }); delete s.parked[name]; moved++;
     }
     if (s.parked && !Object.keys(s.parked).length) delete s.parked;
   }
@@ -394,6 +400,7 @@ function batchEvent(items, machine) { // thread.failed events -> one thread.fail
 let wave = null;
 function holdFailure(e, needsYou) { // -> true when the failure was held back or queued in a wave (it is sent later or not at all)
   const now = Date.now();
+  if (DRY) return false; // a dry run prints each failure as it comes; nothing is held for a wave, so nothing is sent later
   if (wave && wave.items.some((x) => x.runId === e.runId)) return true;
   if (C.repeatFailureMs > 0) {
     const r = repeatCheck(S.failRepeat[e.threadId], e, now, C.repeatFailureMs, needsYou);
@@ -464,7 +471,7 @@ class Bot {
   }
   paused(now = Date.now()) { return now < (this.st.pausedUntil || 0); }
   down(now = Date.now()) { return now < this.downUntil; }
-  post(e) { return post(e, { config: { ...C, url: this.hook.url, headers: this.hook.headers } }); }
+  post(e) { return post(e, { config: { ...C, url: this.hook.url, headers: this.hook.headers }, ...(this.main ? {} : { unseen: !!S.sent[e.requestId]?.quietFor?.includes(this.name) }) }); }
   pause(ms) {
     const until = Date.now() + ms; if (until <= (this.st.pausedUntil || 0)) return;
     this.st.pausedUntil = until; saveState(); log(`webhook is rate limited; nothing is sent until ${localTime(new Date(until).toISOString())}${this.tag}`);
@@ -477,15 +484,16 @@ class Bot {
   }
   settle(e, suppressed = false) {
     if (this.main) return markDelivered(e, suppressed);
-    if (suppressed && e.event === "request.opened" && S.sent[e.requestId]) S.sent[e.requestId].suppressed = true; // its close stays quiet too
+    const s = S.sent[e.requestId];
+    if (suppressed && e.event === "request.opened" && s) s.quietFor = [...new Set([...(s.quietFor || []), this.name])]; // its close stays quiet too, for this bot only
     delete this.st.pending[e.eventId]; saveState();
   }
   // How an event reaches a bot other than the main one: saved in the bot's own list first, so a crash or restart can't lose
   // it, then sent in the bot's own order. The live stream doesn't wait, so a slow bot delays nobody else.
-  hand(e) {
+  hand(e, save = true) {
     const copy = structuredClone(e);
     if (perishable(copy) && Object.keys(this.st.pending).length >= MAX_BOT_PENDING) return this.combine(copy, "too many kept for this bot");
-    this.st.pending[copy.eventId] = { e: copy, rounds: 0, since: Date.now() }; saveState();
+    this.st.pending[copy.eventId] = { e: copy, rounds: 0, since: Date.now() }; if (save) saveState();
     this.inFlight.add(copy.eventId);
     this.chain = this.chain.then(() => this.deliver(copy)).catch((err) => log("error:", err.message)).finally(() => this.inFlight.delete(copy.eventId));
   }
@@ -498,7 +506,7 @@ class Bot {
     if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; this.flushMissed().catch((err) => log("error:", err.message)); }, 5000).unref();
   }
   async flushMissed() { // the count is cleared only once the webhook took the summary; until then each round tries again
-    if (DRY || this.flushing || catchingUp || !this.st.missed.count || this.paused() || this.down()) return;
+    if (DRY || this.flushing || catchingUp || !this.st.missed.count || this.paused() || this.down() || Date.now() < (this.summaryNotBefore || 0)) return;
     const st = this.st, taken = (st.sending = st.missed); st.missed = newMissed(); // "sending" is saved too, so a crash mid-POST keeps the count
     const e = missedEvent(taken, C.machine); stamp(e);
     const back = () => { st.missed = mergeMissed(taken, st.missed); delete st.sending; saveState(); };
@@ -506,6 +514,8 @@ class Bot {
     this.flushing = true; let r = null; try { r = await this.post(e); } finally { this.flushing = false; if (!r || !r.ok) back(); }
     if (r.pauseMs) this.pause(r.pauseMs);
     if (transportFailure(r)) this.markDown();
+    this.summaryTimeouts = r.timedOut ? (this.summaryTimeouts || 0) + 1 : 0; // each try that timed out may have arrived: after MAX_TIMEOUTS, once an hour
+    if (this.summaryTimeouts >= MAX_TIMEOUTS) this.summaryNotBefore = Date.now() + SLOW_RETRY_MS;
     if (!r.ok) { log(`thread.missed.summary (${e.count} run ends) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}; it is tried again${this.tag}`); return; }
     delete st.sending; saveState();
     if (r.suppressed) log(`suppressed thread.missed.summary (${e.count} run ends, active in T3)${this.tag}`);
@@ -513,6 +523,8 @@ class Bot {
   }
   async deliver(e) { // one stamped event -> true when nothing is left to keep for this bot
     let timeouts = 0;
+    if (this.gone) return true; // removed from listen.json while this waited its turn
+    if (this.main && waitingForRetry(queue, e.eventId)) return false; // a reconnect found it undelivered again: the copy already kept is the one that is sent
     if (perishable(e) && this.paused()) { this.combine(e, "webhook is rate limited"); return true; }
     if (perishable(e) && !runEndBudget(this.recent, Date.now(), C.runEndsPerMinute)) { this.combine(e, `more than ${C.runEndsPerMinute} run ends in a minute`); return true; }
     if (!this.paused() && !this.down()) {
@@ -540,13 +552,19 @@ class Bot {
       try { for (; at < q.length; at++) {
         const item = q[at], { e } = item; roundHeld.delete(e.eventId);
         if (!this.main && this.inFlight.has(e.eventId)) continue; // being sent right now in the bot's own order
+        if (this.gone) break;
+        const asked = e.event === "request.opened" && S.sent[e.requestId];
+        if (e.event === "request.opened" && (!asked || asked.closing)) { // answered or gone before it could be sent: don't open a card for it now
+          if (asked) { if (this.main) asked.suppressed = true; else asked.quietFor = [...new Set([...(asked.quietFor || []), this.name])]; }
+          log(`request.opened ${ref(e).slice(-12)} closed before it could be sent; not sent${this.tag}`); if (!this.main) this.settle(e); else saveState(); continue;
+        }
         if (perishable(e)) {
           const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : this.paused() ? "webhook is rate limited" : !unreachable && !runEndBudget(this.recent, Date.now(), C.runEndsPerMinute) ? `more than ${C.runEndsPerMinute} run ends in a minute` : null;
           if (why) { this.combine(e, why); continue; }
         }
         if (this.paused() || unreachable || (item.notBefore && Date.now() < item.notBefore)) { stay(item); continue; } // one attempt found it unreachable: the rest wait for the next round
         item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
-        const r = await this.post(e);
+        let r; if (this.main) posting = e.eventId; try { r = await this.post(e); } finally { if (this.main) posting = null; }
         if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)${this.tag}`); this.settle(e, true); continue; }
         if (r.ok) { posted = at; this.downUntil = 0; log(sentLine(e, r, ` (retry ${item.rounds})${this.tag}`)); delivered++; this.settle(e); continue; }
         if (r.pauseMs) this.pause(r.pauseMs);
@@ -554,7 +572,7 @@ class Bot {
         if (r.timedOut) {
           const next = afterTimeouts(e, (item.timeouts = (item.timeouts || 0) + 1));
           if (next === "combine") { this.combine(e, `the webhook didn't answer in time ${MAX_TIMEOUTS} times`); continue; }
-          if (next === "slow") { item.notBefore = Date.now() + SLOW_RETRY_MS; log(`${e.event} ${ref(e).slice(-12)}: the webhook didn't answer in time ${item.timeouts} times; it is kept and tried again in an hour${this.tag}`); this.keep(item); continue; }
+          if (next === "slow" && Date.now() - item.since < 864e5) { item.notBefore = Date.now() + SLOW_RETRY_MS; log(`${e.event} ${ref(e).slice(-12)}: the webhook didn't answer in time ${item.timeouts} times; it is kept and tried again in an hour${this.tag}`); this.keep(item); continue; }
         }
         log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}${this.tag}`);
         if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) this.keep(item);
@@ -571,7 +589,7 @@ const bots = new Map([["main", mainBot]]);
 function syncBots() { // match the running bots to listen.json: the main bot always, the others as configured
   mainBot.hook = { url: C.url, headers: C.headers || {} };
   for (const [name, hook] of Object.entries(C.routing.bots)) { if (bots.has(name)) bots.get(name).hook = hook; else bots.set(name, new Bot(name, hook)); }
-  for (const name of [...bots.keys()]) if (name !== "main" && !C.routing.bots[name]) { bots.get(name).gone = true; bots.delete(name); }
+  for (const name of [...bots.keys()]) if (name !== "main" && !C.routing.bots[name]) { const b = bots.get(name); b.gone = true; clearTimeout(b.kick); clearTimeout(b.flushTimer); bots.delete(name); }
   for (const name of Object.keys(S.bots || {})) if (!C.routing.bots[name]) { const n = Object.keys(S.bots[name].pending || {}).length; delete S.bots[name]; log(`bot "${name}" is no longer in listen.json${n ? `; ${n} event(s) kept for it are dropped` : ""}`); }
 }
 // A question's close goes to the bots its opening went to, whatever the subscriptions say by then. An event the main bot kept
@@ -588,7 +606,8 @@ async function sendTo(e, ds) { // -> true when the main bot has nothing left to 
   stamp(e);
   if (DRY) { log("DRY-RUN payload " + JSON.stringify(e)); delivered++; return true; }
   routed(e);
-  for (const d of ds) if (!d.main) d.hand(e);
+  for (const d of ds) if (!d.main) d.hand(e, false);
+  if (ds.some((d) => !d.main)) saveState(); // every bot's copy is saved together, so a crash can't leave one bot without it
   if (ds.includes(mainBot)) return mainBot.deliver(e);
   markDelivered(e); if (!ds.length) log(`no bot is subscribed: ${e.event} ${ref(e).slice(-12)} is not sent`);
   return true;
@@ -625,17 +644,26 @@ const known = new Map(); // threadId -> pendingRuntimeRequest.id last seen (null
 const meta = { projects: new Map(), threads: new Map() };
 const wanted = (r) => r.status === "pending" && !SKIP_KINDS.has(r.kind) && (r.kind === "user_input" || C.approvals) && (r.responseCapability || {}).type !== "not_resumable";
 
-const lagging = new Set(); // requests the live stream named that T3's thread data hasn't shown after several looks
+// Requests T3 named that its thread data hasn't shown after several looks: request id -> { looks, timer }. A thread waiting on a
+// question sends no further update, so each is looked at again every LAG_LOOK_MS, for about ten minutes.
+const lagging = new Map(), LAG_LOOKS = 40;
+const LAG_LOOK_MS = 15000;
+const lagDone = (id) => { const lag = lagging.get(id); if (lag) clearTimeout(lag.timer); lagging.delete(id); };
 async function reconcile(ep, threadId, opts = {}) {
   const t = meta.threads.get(threadId) || {}; let p = null;
   // opts.expect: the request the live update named. The thread read can trail it by a moment, or fail once; without another
   // look the question would never be sent, because no further live update comes for it.
   for (let i = 0; !opts.gone; i++) {
     let failed = null; try { p = await threadSnap(ep, threadId); } catch (err) { failed = err; }
-    if (!failed && (!opts.expect || !p || (p.runtimeRequests || []).some((r) => r.id === opts.expect))) { lagging.delete(opts.expect); break; }
+    if (!failed && (!opts.expect || !p || (p.runtimeRequests || []).some((r) => r.id === opts.expect))) { lagDone(opts.expect); break; }
     if (i >= 3 || lagging.has(opts.expect)) { // looked enough for now: one read per later update, so other threads aren't held up
-      if (failed) log(`couldn't read thread ${threadId.slice(0, 40)}: ${failed.message}`); else if (!lagging.has(opts.expect)) log(`request ${String(opts.expect).slice(-12)} is pending but T3's thread data doesn't show it yet; it is looked at again on the next update`);
-      if (opts.expect) lagging.add(opts.expect); known.delete(threadId); if (failed) return; break; }
+      if (failed) log(`couldn't read thread ${threadId.slice(0, 40)}: ${failed.message}`); else if (!lagging.has(opts.expect)) log(`request ${String(opts.expect).slice(-12)} is pending but T3's thread data doesn't show it yet; it is looked at again shortly`);
+      if (opts.expect) {
+        const lag = lagging.get(opts.expect) || { looks: 0, timer: null }; lagging.set(opts.expect, lag);
+        if (!lag.timer && lag.looks++ >= LAG_LOOKS) lagging.delete(opts.expect); // looked for ten minutes: from here only a new update looks again
+        else if (!lag.timer) lag.timer = setTimeout(() => { lag.timer = null; reconcile(ep, threadId, { expect: opts.expect, relook: true }).catch((err) => log("error:", err.message)); }, LAG_LOOK_MS).unref();
+      }
+      known.delete(threadId); if (failed) return; break; }
     await sleep(1500);
   }
   const base = { machine: C.machine, threadId, title: t.title || threadId, project: meta.projects.get(t.projectId) || null, projectId: t.projectId || null };
@@ -650,6 +678,7 @@ async function reconcile(ep, threadId, opts = {}) {
     const was = S.sent[r.id]; // a retry after a reconnect or restart keeps which bots already have the question
     S.sent[r.id] = { threadId, at: (was && was.at) || Date.now(), delivered: false, ...(was && was.to ? { to: was.to } : {}) }; saveState(); await deliver(e);
   }
+  if (opts.relook) return; // a timed second look only sends the question it came for; closes follow the live stream
   for (const [id, s] of Object.entries(S.sent)) {
     if (s.threadId !== threadId || open.some((r) => r.id === id)) continue;
     const r = all.find((x) => x.id === id);
@@ -902,7 +931,7 @@ async function onItem(ep, v, full, ctx = {}) {
     const live = new Set();
     for (const t of v.snapshot.threads || []) { live.add(t.id); meta.threads.set(t.id, { title: t.title, projectId: t.projectId }); known.set(t.id, t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null); }
     const check = new Set([...v.snapshot.threads.filter((t) => t.pendingRuntimeRequest).map((t) => t.id), ...Object.values(S.sent).map((s) => s.threadId)]);
-    for (const tid of check) await reconcile(ep, tid, { startup: true, ...(live.has(tid) ? {} : { gone: "archived-or-deleted" }) });
+    for (const tid of check) await reconcile(ep, tid, { startup: true, ...(live.has(tid) ? (known.get(tid) ? { expect: known.get(tid) } : {}) : { gone: "archived-or-deleted" }) });
     for (const t of v.snapshot.threads || []) noteRun(t);
     const watching = () => log(`watching ${live.size} threads (${[...runSeen.values()].filter(isActive).length} running); ${Object.values(S.sent).filter((s) => !s.skipped).length} open question(s) sent, ${Object.values(S.sent).filter((s) => s.skipped).length} older one(s) skipped; run ends on`);
     if (DRY) watching();
@@ -970,7 +999,7 @@ function pidIsListener(pid, platform = process.platform, exec = askOs, alive = (
   const r = platform === "win32" ? exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${+pid}").CommandLine`])
     : exec("ps", ["-p", String(+pid), "-o", "command="]);
   if (!r.ok) return alive(pid); // the OS couldn't be asked (no ps, PowerShell blocked): fall back to "is that pid alive", as before
-  return /t3listen["']?\s+["']?run\b/.test(r.out); // "node t3listen run", not an editor or a one-off command that only names the file
+  return /\bnode(\.exe)?["']?\s.*t3listen["']?\s*(?:$|["']?(?:run\b|--))/i.test(r.out.trim()); // node running "t3listen", "t3listen run" or "t3listen --log": not an editor, and not a one-off command such as status
 }
 function winProcs() { // node processes running THIS t3listen (never touches other node processes)
   try { return ps(`Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like ${psq("*" + SELF + "*")} -and $_.CommandLine -like '* run*' } | ForEach-Object { $_.ProcessId }`).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
@@ -1080,6 +1109,7 @@ function projectRef(q, projects) { // a project named by title or id -> { id, ti
 }
 async function ruleFromArgs() {
   const names = optAll("--project"), ev = optv("--events"), rule = {};
+  if (!ev && argv.some((a) => a === "--events" || a.startsWith("--events="))) die("USAGE", `--events takes ${EVENT_GROUPS.join(", ")}`);
   if (names.length) { const all = await t3Projects(); rule.projects = names.map((n) => projectRef(n, all)); }
   if (ev) { rule.events = ev.split(",").map((x) => x.trim()).filter(Boolean); const bad = rule.events.find((x) => !EVENT_GROUPS.includes(x)); if (bad || !rule.events.length) die("USAGE", `--events takes ${EVENT_GROUPS.join(", ")}`); }
   return rule;
@@ -1091,7 +1121,8 @@ function botText(name, b) {
   return `${name}: gets ${only.length ? only.map(ruleText).join("; and ") : "everything"}${skip.length ? `; not ${skip.map(ruleText).join("; nor ")}` : ""}`;
 }
 const botLines = (c) => [botText("main", c.main || {}), ...Object.entries(c.bots || {}).map(([n, b]) => botText(n, b))];
-function saveBots(c) { try { compileRouting(c); } catch (err) { die("BAD_LISTEN_CONFIG", err.message); } saveConf(c); console.log(botLines(c).join("\n")); console.log("A running listener picks this up within a few seconds."); }
+function saveBots(c) { try { compileRouting(c); } catch (err) { die("BAD_LISTEN_CONFIG", err.message); } saveConf(c); console.log(botLines(c).join("\n"));
+  if (!c.approvals && [c.main || {}, ...Object.values(c.bots || {})].some((b) => [].concat(b.only || []).some((r) => (r.events || []).includes("approvals")))) console.log('Note: approvals are sent only when they are turned on ("approvals": true in listen.json, or install --approvals).'); console.log("A running listener picks this up within a few seconds."); }
 const confOrDie = () => { const c = readJSON(CONF, null); if (!c) die("NO_LISTEN_CONFIG", `run setup first: node "${path.join(DIR, "t3listen")}" setup`); return c; };
 async function botsCmd() { console.log(botLines(confOrDie()).join("\n")); }
 async function botCmd() { // bot add <name> [--project p]... [--events a,b] (URL and key on stdin) | bot remove <name>

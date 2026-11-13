@@ -33,7 +33,9 @@ def ago_h(s):
 # SECRET_KEYS: word for word the same as scripts/scan-private.py (tests/install_test.py checks). Thread text can hold a pasted key,
 # and everything this script prints goes into the bot's chat, so every text field is redacted on its way out.
 SECRET_KEYS = r"sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_[a-z]+_[A-Za-z0-9_]{16,}|whsec_[A-Za-z0-9+/=_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|https://hooks\.slack\.com/services/[A-Za-z0-9/]+|https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+"
-RED = re.compile(r"(?<![A-Za-z0-9])(?:" + SECRET_KEYS + r")|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.-]+|(?i:\bbearer)\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}")
+RED = re.compile(r"(?<![A-Za-z0-9])(?:" + SECRET_KEYS + r")|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.-]+|(?i:\b(?:bearer|basic))\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}|(?<=://)[^/\s@]+(?=@)")
+_print = print
+def print(*a, **k): _print(*[RED.sub("[redacted]", x) if isinstance(x, str) else x for x in a], **k)  # titles, git remotes and commit subjects too
 def flat(s, n): s = " ".join(RED.sub("[redacted]", s or "").replace(os.path.expanduser("~"), "~").split()); return s if len(s) <= n else s[:n] + "…"
 def env_int(name, default):  # whole-number settings; anything else stops with BAD_SETTING instead of a traceback
     v = os.environ.get(name, "").strip() or str(default)

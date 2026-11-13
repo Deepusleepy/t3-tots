@@ -230,3 +230,31 @@ test("bots, live: with failure waves, a failure the main bot couldn't take stays
     assert.equal(f.posts[0].runId, "A1"); assert.equal(site.posts.length, 1, "and the other bot is not sent it again");
   } finally { await f.close(); }
 });
+test("rules: a rule with a mistyped key or with nothing in it is refused, never read as everything", () => {
+  const bot = (rule) => ({ bots: { site: { url: "https://a.example/h", only: [rule] } } });
+  assert.throws(() => l.compileRouting(bot({ project: ["p1"] })), /has "project"/);
+  assert.throws(() => l.compileRouting(bot({})), /must name "projects" and\/or "events"/);
+  assert.throws(() => l.compileRouting({ main: { skip: [{}] } }), /must name/);
+});
+test("bots, live: an event still waiting its turn for a bot is not sent once that bot is removed", async () => {
+  const f = await startFake();
+  try {
+    const site = await f.addHook(); site.status = () => ({ status: 200, delayMs: 2500 });
+    f.writeConfig({ bots: { site: { url: site.url, only: [{ projects: P1 }] } } });
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await finish(f, "A", "p1", "failed"); await finish(f, "B", "p1", "failed");
+    await f.waitFor(() => f.posts.length === 2, 5000, "the main bot got both");
+    f.writeConfig({});
+    await f.waitFor(() => /bot "site" is no longer in listen\.json/.test(f.out), 8000, "the reload"); await sleep(4000);
+    assert.equal(site.hits, 1, "only the POST already on its way when the bot was removed");
+  } finally { await f.close(); }
+});
+test("bot commands: --events with no value is refused, and an approvals subscription says when approvals are off", async () => {
+  const f = await startFake();
+  try {
+    const none = await f.cli(["subscribe", "main", "--events"]);
+    assert.notEqual(none.status, 0); assert.match(none.stdout + none.stderr, /USAGE/);
+    const r = await f.cli(["bot", "add", "appr", "--events", "approvals"], "https://a.example/h\n\n");
+    assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /approvals are sent only when they are turned on/);
+  } finally { await f.close(); }
+});

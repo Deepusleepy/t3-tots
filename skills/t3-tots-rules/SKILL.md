@@ -180,7 +180,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `TOOLS_INCOMPLETE` | A helper file is missing from the tools folder. Reinstall with t3-install-tools |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
-| `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
+| `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--request <id> --user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
 | `REDIRECT_NOT_DELIVERED` | The approval was declined, but the follow-up didn't reach the thread. Don't rerun `answer` (the request is closed). Run the `t3ctl send ... --prompt-file` command it prints |
 | `THREAD_RUNNING` | `t3ctl archive` won't archive a running thread. Wait until it finishes, or stop it first only with the user's OK for that stop |

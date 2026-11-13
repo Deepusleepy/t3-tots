@@ -1567,3 +1567,76 @@ test("timeouts: a finish goes into the summary after 3, a question or failure is
   for (const event of ["thread.finished", "thread.cancelled"]) assert.deepEqual([1, 2, 3, 4].map((n) => l.afterTimeouts({ event }, n)), ["retry", "retry", "combine", "combine"], event);
   for (const event of ["request.opened", "request.resolved", "thread.failed", "thread.failed.batch"]) assert.deepEqual([1, 2, 3, 9].map((n) => l.afterTimeouts({ event }, n)), ["retry", "retry", "slow", "slow"], event);
 });
+test("questions, live: a question the webhook refused is sent once after a reconnect, by the copy already kept for retry", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setHookStatus(() => 400);
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(true));
+    await f.waitFor(() => f.hits >= 1, 8000, "the refused try");
+    f.setHookStatus(() => 200);
+    f.dropSockets(); await f.waitFor(() => f.count(/connected to T3/) === 2, 15000, "reconnect"); await fakeT3.sleep(2500);
+    assert.equal(f.posts.length, 0, "the reconnect doesn't send it beside the kept copy");
+    await f.waitFor(() => f.posts.length >= 1, 70000, "the kept copy at the next retry round"); await fakeT3.sleep(1500);
+    assert.deepEqual(f.posts.map((e) => e.event), ["request.opened"], "one question");
+    assert.match(f.out, /sent request\.opened .*\(retry 1\)/);
+  } finally { await f.close(); }
+});
+test("questions, live: thread data that trails by longer than the first looks is looked at again without a new update", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    f.update(askT(true), askProjection(false));
+    setTimeout(() => f.projections.set("Q", askProjection(true)), 8000); // after the four quick looks gave up
+    await f.waitFor(() => f.posts.length >= 1, 30000, "the question");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.requestId]), [["request.opened", "q1"]]);
+  } finally { await f.close(); }
+});
+test("questions, live: a question the first snapshot names before its thread data shows it is still sent", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    f.setThread(askT(true), askProjection(false));
+    f.start(); await f.waitFor(() => /connected to T3/.test(f.out), 8000, "connected");
+    setTimeout(() => f.projections.set("Q", askProjection(true)), 1200);
+    await f.waitFor(() => f.posts.length >= 1, 9000, "the question");
+    assert.deepEqual(f.posts.map((e) => [e.event, e.requestId]), [["request.opened", "q1"]]);
+  } finally { await f.close(); }
+});
+test("dry run, live: with failure waves on, a failure is printed and nothing is posted", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 1 });
+  try {
+    f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
+    f.start(["--dry-run"]); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");
+    f.update(failedT("A", "r1"), { runs: [failRun("r1")], turnItems: [errItem("r1", "Provider error 503")] });
+    await f.waitFor(() => /DRY-RUN payload .*thread\.failed/.test(f.out), 8000, "the printed failure"); await fakeT3.sleep(2500);
+    assert.equal(f.hits, 0, "a dry run never posts");
+  } finally { await f.close(); }
+});
+test("listen.pid: a listener started without the word run still counts as running", () => {
+  const os_ = (out) => () => ({ ok: true, out });
+  assert.equal(l.pidIsListener(4242, "linux", os_("node /home/u/t3-tots/t3listen\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("/opt/homebrew/opt/node@24/bin/node t3listen --log --approvals\n")), true);
+  assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\u\\t3-tots\\t3listen" "--log"\r\n')), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("node /home/u/t3-tots/t3listen bots\n")), false, "a one-off command is not the listener");
+  assert.equal(l.pidIsListener(4242, "linux", os_("less /home/u/t3-tots/t3listen\n")), false);
+});
+test("retry queue: an event parked while the queue is full keeps its timeout count and its hourly wait", () => {
+  const q = Array.from({ length: l.MAX_RETRY_QUEUE }, (_, i) => ({ e: { event: "thread.finished", runId: `x${i}`, eventId: `x${i}` } }));
+  const st = { sent: { q9: {} }, finished: {} }, item = { e: { event: "request.opened", requestId: "q9", eventId: "e9" }, rounds: 4, since: 5, timeouts: 3, notBefore: 99 };
+  assert.equal(l.keepForRetry(q, st, item), "parked");
+  const back = []; l.refillFromState(back, st, 7);
+  assert.deepEqual(back, [{ e: item.e, rounds: 4, since: 5, timeouts: 3, notBefore: 99 }]);
+});
+test("post: HTTP 504 counts as no answer in time, since the receiver may have taken it", async () => {
+  const answer = (status) => async () => ({ ok: false, status, text: async () => "", headers: null });
+  const opts = { config: { url: "http://127.0.0.1:9/", headers: {} }, state: { sent: {} }, presence: () => null };
+  assert.equal((await l.post({ event: "request.opened", requestId: "q" }, { ...opts, send: answer(504) })).timedOut, true);
+  assert.equal((await l.post({ event: "request.opened", requestId: "q" }, { ...opts, send: answer(503) })).timedOut, false);
+});
+test("post: a close is held back only for the bot that never saw the question", async () => {
+  const sent = []; const send = async (url) => { sent.push(url); return { ok: true, status: 200 }; };
+  const state = { sent: { q: { suppressed: true } } }, e = { event: "request.resolved", requestId: "q" }, config = { url: "http://127.0.0.1:9/", headers: {} };
+  assert.equal((await l.post(e, { send, config, state, presence: () => null })).suppressed, true, "the main bot, which was never told");
+  assert.equal((await l.post(e, { send, config, state, presence: () => null, unseen: false })).suppressed, undefined, "another bot that did get the question");
+  assert.equal(sent.length, 1);
+});

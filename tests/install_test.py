@@ -272,6 +272,12 @@ class ScanPrivate(unittest.TestCase):
         out = ns["flat"]("key sk-ant-api03-" + "abcdefghijklmnopqrstuvwxyz012345" + " then ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " then Bearer " + "abcdefghijklmnop1234" + " done", 400)
         self.assertEqual(out, "key [redacted] then [redacted] then [redacted] done")
         self.assertEqual(ns["flat"]("nothing secret here, just words", 400), "nothing secret here, just words")
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):  # titles, git remotes and commit subjects are printed without flat()
+            ns["print"]("THREAD Use ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " for CI | remote https://deploy:" + "s3cretpass" + "@github.com/a/b.git | head 1a2b3c fix basic auth")
+        self.assertEqual(buf.getvalue(), "THREAD Use [redacted] for CI | remote https://[redacted]@github.com/a/b.git | head 1a2b3c fix basic auth
+")
         for plain in ("Fix task-scheduler-retry-backoff-logic", "C:\\worktrees\\risk-assessment-for-payments-v2", "desk-booking-system-redesign", "Bearer authentication-middleware", "thread:project:20b7dd6b-aecd-42a3-a4dc-85fbcdee5f59"):
             self.assertEqual(ns["flat"](plain, 400), plain, plain)
 
