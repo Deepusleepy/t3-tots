@@ -25,35 +25,35 @@ T3 Tots can reach a computer's T3 Code through **T3's MCP** (a connector named "
 | Rename; change the model | `t3_thread_update`; `t3_thread_configure` |
 | Scheduled tasks | `schedule_task`, `list_scheduled_tasks`, `run_scheduled_task_now`, `delete_scheduled_task` |
 
-**List 2: what MCP can't do. Always the local tools.** Approvals (`t3ctl answer --decision`), phone answers setup and `t3listen`, every `t3q.py` report (waiting, digest, usage, health), `limits`, `resume-at-reset`, `snooze-until-reset`, `queue --resume`, `diff`, `files`, `prs`, `pr`, `watch`, `export.js`, `survey.js`, archived threads. When the Grok app on that computer is off, these are unavailable: say so in one line; never fake them through MCP.
+**List 2: what MCP can't do. Always the local tools.** Approvals (`t3ctl answer --decision`), phone answers setup and `t3listen`, every `t3q.py` report (waiting, digest, usage, health), `limits`, `resume-at-reset`, `snooze-until-reset`, `queue --resume`, `diff`, `files`, `prs`, `pr`, `watch`, `export.js`, `survey.js`, archived threads. Anything in neither list uses the local tools too.
 
-Anything in neither list uses the local tools.
+When the Grok app on that computer is off, List 2 and anything in neither list are unavailable there: say so in one line and never fake them through MCP. In particular, don't build "what's waiting" from `t3_pending_request`: it never lists approvals.
 
 **An approval never goes through MCP.** `t3_pending_request` answers questions only. A permission request is accepted only with `t3ctl answer --request <id> --decision <option> --user-approved` after the user's yes (t3-tots-rules "Decisions"). If that computer's Grok app is off, tell the user to approve it in T3 Code.
 
 ## Which connection
 For a thread on computer X, in this order:
 1. X's own T3 connector.
-2. Another computer's T3 connector, passing X's `environmentId`, only when `t3_environment_links` on that connector lists X as reachable (the user turned on Linked environments). Reads are allowed. A change that fails this way counts as "maybe sent" (below).
-3. The local tools on X.
+2. The local tools on X.
+3. Only when neither works: another computer's T3 connector, passing X's `environmentId`, if `t3_environment_links` on that connector lists X as reachable (the user turned on Linked environments). Reads and changes are both allowed. A change that fails this way counts as "maybe sent" (below).
 
 Every one of these acts on X, the computer that owns the thread. Never run one computer's tools, or use its connector without `environmentId`, for another computer's thread. A computer with no T3 connector uses the local tools for everything.
 
-**Finding a thread.** t3-tots-rules says to search every computer with `t3q.py thread`. A computer whose Grok app is off can't run it: search that one with `t3_thread_search` through its connector. If a computer couldn't be searched at all, say so and don't pick a best match from the others.
+**Finding a thread.** t3-tots-rules says to search every computer with `t3q.py thread`. A computer whose Grok app is off can't run it: search that one with `t3_thread_search` through its connector. MCP search gives no score to compare with `t3q.py`'s. So when any computer was searched through MCP, show the top match from each computer and ask, unless one is an exact title or id. If a computer couldn't be searched at all, say so and don't pick a best match from the others.
 
 ## Calling MCP
 - Pass thread and project ids exactly as T3 and `t3ctl` print them. Pass only the arguments a tool declares.
 - Reads default to a few short items. Ask for what you need with `limit` and `maxCharsPerItem`, and page with `afterPosition`.
 - Give each launch, send and interrupt a new `clientRequestId`. Reuse one only to retry that same action with the same content.
-- Before a change to a thread, you usually know its `runtimeMode` from a read. If it is above the connector's level in the note, MCP will refuse: don't call it, go straight to "When T3 refuses".
+- Before a change to a thread, you usually know its `runtimeMode` from a read. If it is above the connector's level in the note, MCP will refuse: don't call it, go straight to "When T3 refuses". If you don't know the mode, make the call; a refusal goes there too.
 - Archive: read the thread first and don't archive one that is running (MCP would stop it without a word).
 - Outside clients can't use the tools that act as a thread (`delegate_task`, `create_threads`, previews, devices, worktree handoff).
 
 ## Starting a thread
-- Mode: use the runtime mode the user names. If they name none, use the mode that project's own threads run in (read one). If that is above the connector's level, it is a refusal case: ask first ("When T3 refuses").
+- Mode: use the runtime mode the user names. If they name none, use the mode that project's own threads run in (read one). If that is above the connector's level, it is a refusal case: ask first ("When T3 refuses"). With the local tools, pass the mode as `t3ctl new --runtime <mode>`; without it `t3ctl new` starts in Full access.
 - Wait for the result (`t3_thread_wait`) only when the user wants it.
-- Afterwards record it: `t3ctl record --started <threadId>` on that computer. Without it the thread is hidden from "what's waiting" and digests as agent-started, and Resume at reset isn't armed. If that computer's Grok app is off, add the thread id to a "to record" line in the "T3 routes" note and run the command, then clear the line, the next time you act there.
-- A launch that may have been sent (timeout, dropped connection): call `t3_thread_launch` again with the **same** `clientRequestId` and the same content; T3 returns the thread it already made. If you no longer have that id, search the project for a thread with that title made in the last few minutes before starting another, and ask if unsure. Never launch a second one on a guess.
+- After an MCP launch, record it: `t3ctl record --started <threadId>` on that computer (`t3ctl new` records by itself). Without it the thread is hidden from "what's waiting" and digests as agent-started, and Resume at reset isn't armed. If that computer's Grok app is off, add the thread id to a "to record" line in the "T3 routes" note. Before any action or report on a computer, run its "to record" lines first and clear them. While it stays offline, mention that those threads are missing from its reports.
+- A launch that may have been sent (timeout, dropped connection): call `t3_thread_launch` again with the **same** `clientRequestId` and the same content; T3 returns the thread it already made, so there is no need to look first. If you no longer have that id, search the project for a thread with that title made in the last few minutes before starting another, and ask if unsure. Never launch a second one on a guess.
 
 ## Answering
 - A question card the user answered: when the Grok app on that computer is on, use `t3ctl answer` as t3-phone-answers says. It records the answer by itself.
@@ -65,7 +65,7 @@ Decide by what is known about the request, never by guessing from the error text
 | What happened | Meaning | Do |
 |---|---|---|
 | The connector is missing, can't connect, or says the sign-in expired (HTTP 401 or 403) | Nothing was sent | Use the next connection in the order above. After a 401, tell the user that computer needs reconnecting ("Setup" below) |
-| The connector answers HTTP 429 or 5xx | Nothing was done | Try once more shortly, then use the next connection |
+| The connector answers HTTP 429 or 5xx | Nothing was done | Wait about 10 seconds and try once more, then use the next connection |
 | A timeout or dropped connection after the call left, or `orchestration_error`; any failed change through a linked computer | Maybe sent | Look first: read the thread **and** its queue (`t3_queue` `list`), since a queued message is not in the thread yet. If it is there, stop. If both clearly show nothing, retry the same connection with the same `clientRequestId`. Never repeat it another way while unsure; ask the user |
 | `t3ctl` ended with `WRITE_STATE: none` | Nothing was sent | The other connection is fine |
 | `t3ctl` ended with `WRITE_STATE: unknown`, or gave no such line (killed, computer dropped) | Maybe sent | Look first, thread and queue. `t3ctl` has no retry id, so send again only when both clearly show nothing |
@@ -79,7 +79,7 @@ The user picked an access level when they connected this bot. T3 refuses a chang
 - **Yes**: do it with the local tools, once.
 - **Always**: save "refusals on <computer>: use the local tools" in the "T3 routes" note. From then on, for a thread above that connector's level, skip MCP, do it with the local tools, and say in the same message that you did. It holds for that computer until its connector is reconnected.
 - **No**: stop. Tell them they can do it in T3 Code, or raise the bot's level by reconnecting.
-- With nobody there to ask (a routine run, delegated mode) and no "Always" saved: don't do it; report what was refused.
+- With nobody there to ask (a routine run, delegated mode) and no "Always" saved: what delegated mode already lets you do (t3-tots-rules "Decisions": answer routine questions, one nudge per stall, decline an approval) goes through the local tools, and you list each one in your report. Anything else: don't do it; report what was refused.
 A refusal from the local tools themselves (`NEEDS_USER_APPROVAL`, `THREAD_RUNNING`, `AMBIGUOUS` and so on) follows t3-tots-rules "Status words". It never moves to another connection.
 
 ## Setup ("connect T3 MCP")

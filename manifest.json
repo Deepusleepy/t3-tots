@@ -312,8 +312,8 @@
    "path": "skills/t3-routes/SKILL.md",
    "dest": "t3-routes/SKILL.md",
    "kind": "skill",
-   "bytes": 10192,
-   "sha256": "783591d892d26f50a1a10ddf7ddb7b7a8afd7057bba725c5f98e92fbe88a6fc8"
+   "bytes": 11151,
+   "sha256": "046e6992a9a13c246210d2d04d5da6cd33da1ec3712479a44a9c5f20b512b86f"
   },
   {
    "path": "skills/t3-save-learnings/SKILL.md",
@@ -354,8 +354,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 28313,
-   "sha256": "e52446d06e64f3d7165be334e2c343af5b4b23b462728b7aadc3a1376a486e70"
+   "bytes": 28323,
+   "sha256": "b81eba9c3b52007d9c847f98453ff978ffa6523e05379e435aeb1ec0604e9e4d"
   },
   {
    "path": "skills/t3-update/SKILL.md",
