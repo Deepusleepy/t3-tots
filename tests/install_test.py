@@ -434,6 +434,15 @@ class SkillSync(unittest.TestCase):
         e = json.loads((self.sync / (tag or self.ver) / entry).read_text())
         self.put(sid, f"---\nname: {e['name']}\ndescription: >-\n  {e['description']}\n---\n{e['body']}")
 
+    def test_box_never_puts_an_older_release_back_over_newer_box_tools(self):
+        box = self.tmp / "box"; box.mkdir(); (box / "VERSION").write_text("v99.0.0\n"); (box / "t3ctl").write_text("newer tools\n")
+        r = self.fetch("box", "--from", str(ROOT)); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("newer than this script's pin", r.stdout); self.assertNotIn("files verified", r.stdout)
+        self.assertEqual((box / "VERSION").read_text(), "v99.0.0\n"); self.assertEqual((box / "t3ctl").read_text(), "newer tools\n")
+        (box / "VERSION").write_text("v0.0.1\n")
+        r = self.fetch("box", "--from", str(ROOT)); self.assertIn("files verified", r.stdout, r.stdout + r.stderr)
+        self.assertEqual((box / "VERSION").read_text().strip(), self.ver, "older box tools are still brought up to this release")
+
     def test_check_tells_a_placeholder_an_owner_edit_and_a_clash_apart(self):
         r = self.skills(); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("0 changed, 1 placeholders, 1 yours, 2 both", r.stdout)
