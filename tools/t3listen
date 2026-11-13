@@ -306,8 +306,11 @@ async function post(e, { presence = livePresence, send = fetch, config = C, stat
     return { ok: false, status: r.status, body: redact(body), retry: RETRYABLE(r.status, body), pauseMs: rateLimitPause(r.status, body, r.headers ? r.headers.get("retry-after") : null) };
   } catch (err) { return { ok: false, status: 0, body: (err.cause && err.cause.code) || err.name, retry: true, timedOut: err.name === "TimeoutError" || err.name === "AbortError" }; }
 }
-// A POST that timed out may have been taken: the receiver can start its run and answer too late. Each retry may start another.
-const MAX_TIMEOUTS = 3;
+// A POST that timed out may have been taken: the receiver can start its run and answer too late, and each retry may start
+// another. After MAX_TIMEOUTS a finish or cancel goes into the summary. A question or failure is never dropped: it is kept and
+// tried once an hour, since a timeout can also mean nothing arrived at all.
+const MAX_TIMEOUTS = 3, SLOW_RETRY_MS = 3600e3;
+const afterTimeouts = (e, timeouts) => (timeouts < MAX_TIMEOUTS ? "retry" : perishable(e) ? "combine" : "slow");
 const ref = (e) => String(e.requestId || e.runId || "");
 function settleDelivery(state, e, suppressed = false) {
   if (e.failures) { for (const f of e.failures) settleDelivery(state, { event: "thread.failed", runId: f.runId, threadId: f.threadId }, suppressed); return; }
@@ -329,8 +332,9 @@ function markDelivered(e, suppressed = false) {
 }
 const MAX_RETRY_QUEUE = 100;
 const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.finished[e.runId] : null);
+const roundHeld = new Set(); // events the main bot's retry round took out of the queue and hasn't got to yet
 function keepForRetry(q, st, item) {
-  if (item.e.eventId && q.some((x) => x.e.eventId === item.e.eventId)) return "queued"; // already waiting: a reconnect found it undelivered again
+  if (item.e.eventId && (roundHeld.has(item.e.eventId) || q.some((x) => x.e.eventId === item.e.eventId))) return "queued"; // already waiting: a reconnect found it undelivered again
   if (q.length < MAX_RETRY_QUEUE) { q.push(item); return "queued"; }
   if (item.e.failures) {
     let kept = 0;
@@ -498,10 +502,11 @@ class Bot {
     const st = this.st, taken = (st.sending = st.missed); st.missed = newMissed(); // "sending" is saved too, so a crash mid-POST keeps the count
     const e = missedEvent(taken, C.machine); stamp(e);
     const back = () => { st.missed = mergeMissed(taken, st.missed); delete st.sending; saveState(); };
-    this.flushing = true; let r; try { r = await this.post(e); } catch (err) { back(); throw err; } finally { this.flushing = false; }
+    saveState();
+    this.flushing = true; let r = null; try { r = await this.post(e); } finally { this.flushing = false; if (!r || !r.ok) back(); }
     if (r.pauseMs) this.pause(r.pauseMs);
     if (transportFailure(r)) this.markDown();
-    if (!r.ok) { back(); log(`thread.missed.summary (${e.count} run ends) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}; it is tried again${this.tag}`); return; }
+    if (!r.ok) { log(`thread.missed.summary (${e.count} run ends) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}; it is tried again${this.tag}`); return; }
     delete st.sending; saveState();
     if (r.suppressed) log(`suppressed thread.missed.summary (${e.count} run ends, active in T3)${this.tag}`);
     else { delivered++; log(`sent thread.missed.summary (${e.count} run ends) -> HTTP ${r.status}${this.tag}`); }
@@ -530,26 +535,32 @@ class Bot {
       const taken = this.main ? queue : Object.values(this.st.pending); if (this.main) queue = [];
       const q = taken.sort((a, b) => perishable(a.e) - perishable(b.e)); // questions and failures go first
       const stay = (item) => { if (this.main) retryLater(item); }; // another bot's item is still in its saved list
-      let unreachable = false, at = 0;
+      let unreachable = false, at = 0, posted = -1;
+      if (this.main) for (const item of q) if (item.e.eventId) roundHeld.add(item.e.eventId);
       try { for (; at < q.length; at++) {
-        const item = q[at], { e } = item;
+        const item = q[at], { e } = item; roundHeld.delete(e.eventId);
         if (!this.main && this.inFlight.has(e.eventId)) continue; // being sent right now in the bot's own order
         if (perishable(e)) {
           const why = staleRunEnd(e, item.since) ? "not delivered for an hour" : this.paused() ? "webhook is rate limited" : !unreachable && !runEndBudget(this.recent, Date.now(), C.runEndsPerMinute) ? `more than ${C.runEndsPerMinute} run ends in a minute` : null;
           if (why) { this.combine(e, why); continue; }
         }
-        if (this.paused() || unreachable) { stay(item); continue; } // one attempt found it unreachable: the rest wait for the next round
+        if (this.paused() || unreachable || (item.notBefore && Date.now() < item.notBefore)) { stay(item); continue; } // one attempt found it unreachable: the rest wait for the next round
         item.rounds++; if (!e.eventId) stamp(e); e.sentAt = new Date().toISOString();
         const r = await this.post(e);
         if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)${this.tag}`); this.settle(e, true); continue; }
-        if (r.ok) { this.downUntil = 0; log(sentLine(e, r, ` (retry ${item.rounds})${this.tag}`)); delivered++; this.settle(e); continue; }
+        if (r.ok) { posted = at; this.downUntil = 0; log(sentLine(e, r, ` (retry ${item.rounds})${this.tag}`)); delivered++; this.settle(e); continue; }
         if (r.pauseMs) this.pause(r.pauseMs);
         if (transportFailure(r)) { unreachable = true; this.markDown(); }
-        if (r.timedOut && (item.timeouts = (item.timeouts || 0) + 1) >= MAX_TIMEOUTS) { log(`giving up on ${e.event} ${ref(e).slice(-12)}: the webhook took it ${MAX_TIMEOUTS} times without answering in time, so it may have arrived each time${this.tag}`); this.settle(e); continue; }
+        if (r.timedOut) {
+          const next = afterTimeouts(e, (item.timeouts = (item.timeouts || 0) + 1));
+          if (next === "combine") { this.combine(e, `the webhook didn't answer in time ${MAX_TIMEOUTS} times`); continue; }
+          if (next === "slow") { item.notBefore = Date.now() + SLOW_RETRY_MS; log(`${e.event} ${ref(e).slice(-12)}: the webhook didn't answer in time ${item.timeouts} times; it is kept and tried again in an hour${this.tag}`); this.keep(item); continue; }
+        }
         log(`retry ${item.rounds}: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`} for ${e.event} ${ref(e).slice(-12)}${r.status && r.body ? `: ${r.body}` : ""}${this.tag}`);
         if (r.retry ? Date.now() - item.since < 864e5 : item.rounds < 10) this.keep(item);
         else { log(`giving up on ${e.event} ${ref(e).slice(-12)} after ${item.rounds} retries${this.main ? "; it is tried again when the listener restarts" : ""}${this.tag}`); if (!this.main) this.settle(e); }
-      } } catch (err) { if (this.main) for (const item of q.slice(at)) queue.push(item); throw err; } // e.g. the state file couldn't be saved: keep what wasn't tried
+      } } catch (err) { if (this.main) for (const item of q.slice(posted === at ? at + 1 : at)) queue.push(item); throw err; } // e.g. the state file couldn't be saved: keep what wasn't sent
+      finally { if (this.main) roundHeld.clear(); }
       if (this.main && refillFromState(queue, S, Date.now())) saveState();
       if (!unreachable) await this.flushMissed();
     } finally { this.rounding = false; }
@@ -614,14 +625,17 @@ const known = new Map(); // threadId -> pendingRuntimeRequest.id last seen (null
 const meta = { projects: new Map(), threads: new Map() };
 const wanted = (r) => r.status === "pending" && !SKIP_KINDS.has(r.kind) && (r.kind === "user_input" || C.approvals) && (r.responseCapability || {}).type !== "not_resumable";
 
+const lagging = new Set(); // requests the live stream named that T3's thread data hasn't shown after several looks
 async function reconcile(ep, threadId, opts = {}) {
   const t = meta.threads.get(threadId) || {}; let p = null;
   // opts.expect: the request the live update named. The thread read can trail it by a moment, or fail once; without another
   // look the question would never be sent, because no further live update comes for it.
   for (let i = 0; !opts.gone; i++) {
     let failed = null; try { p = await threadSnap(ep, threadId); } catch (err) { failed = err; }
-    if (!failed && (!opts.expect || !p || (p.runtimeRequests || []).some((r) => r.id === opts.expect))) break;
-    if (i >= 3) { if (failed) log(`couldn't read thread ${threadId.slice(0, 40)}: ${failed.message}`); else log(`request ${String(opts.expect).slice(-12)} is pending but T3's thread data doesn't show it yet; it is looked at again on the next update`); known.delete(threadId); if (failed) return; break; }
+    if (!failed && (!opts.expect || !p || (p.runtimeRequests || []).some((r) => r.id === opts.expect))) { lagging.delete(opts.expect); break; }
+    if (i >= 3 || lagging.has(opts.expect)) { // looked enough for now: one read per later update, so other threads aren't held up
+      if (failed) log(`couldn't read thread ${threadId.slice(0, 40)}: ${failed.message}`); else if (!lagging.has(opts.expect)) log(`request ${String(opts.expect).slice(-12)} is pending but T3's thread data doesn't show it yet; it is looked at again on the next update`);
+      if (opts.expect) lagging.add(opts.expect); known.delete(threadId); if (failed) return; break; }
     await sleep(1500);
   }
   const base = { machine: C.machine, threadId, title: t.title || threadId, project: meta.projects.get(t.projectId) || null, projectId: t.projectId || null };
@@ -951,10 +965,12 @@ function ps(script) { return sh("powershell.exe", ["-NoProfile", "-NonInteractiv
 const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
 // After a crash or power loss listen.pid stays, and its number may now belong to any other program. Only a process that is
 // really this listener counts as running.
-function pidIsListener(pid, platform = process.platform, exec = tryRun) {
-  if (platform === "win32") return winProcs().includes(pid);
-  const r = exec("ps", ["-p", String(pid), "-o", "command="]);
-  return r.ok && /t3listen/.test(r.out);
+const askOs = (c, a) => { try { return { ok: true, out: cp.execFileSync(c, a, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"], windowsHide: true }) }; } catch { return { ok: false, out: "" }; } };
+function pidIsListener(pid, platform = process.platform, exec = askOs, alive = (p) => { try { process.kill(p, 0); return true; } catch (e) { return e.code === "EPERM"; } }) {
+  const r = platform === "win32" ? exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${+pid}").CommandLine`])
+    : exec("ps", ["-p", String(+pid), "-o", "command="]);
+  if (!r.ok) return alive(pid); // the OS couldn't be asked (no ps, PowerShell blocked): fall back to "is that pid alive", as before
+  return /t3listen["']?\s+["']?run\b/.test(r.out); // "node t3listen run", not an editor or a one-off command that only names the file
 }
 function winProcs() { // node processes running THIS t3listen (never touches other node processes)
   try { return ps(`Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like ${psq("*" + SELF + "*")} -and $_.CommandLine -like '* run*' } | ForEach-Object { $_.ProcessId }`).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
@@ -1160,5 +1176,5 @@ t3listen bot add <name> [--project p]... [--events a,b] [--everything] [--replac
 t3listen subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]   change what a bot gets; events: questions, approvals, finished, cancelled, failed
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { pidIsListener, mergeMissed, compileRouting, routeNames, eventGroup, EVENT_GROUPS, botText, stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
+if (require.main !== module) module.exports = { afterTimeouts, MAX_TIMEOUTS, pidIsListener, mergeMissed, compileRouting, routeNames, eventGroup, EVENT_GROUPS, botText, stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
 else ({ run, setup, test, bots: botsCmd, bot: botCmd, subscribe: () => subscribeCmd(false), unsubscribe: () => subscribeCmd(true), "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

@@ -33,10 +33,10 @@ goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urllib.request
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "4926e89065778994109a9bfbe3d82a492600fd77bace67273b9c89e028aea0b9"],
- "tools/t3ctl": ["t3ctl", "b4f7c8b4efc58368130e1927780637908cf6f65095b72495027e2f368b97e648"],
+ "tools/t3q.py": ["t3q.py", "a2fd8b855c38e365e2d46bd50015bbc5b350bddda11a73206ccd73366af2bad8"],
+ "tools/t3ctl": ["t3ctl", "1ccd846f97cb170e49aed823719267c9d311bfdce2756bf5bbab95d867eab021"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "877d960317674296ec65945c6d5756823dd52840ad4e1d94fec8726afc27b107"],
+ "tools/t3listen": ["t3listen", "4d814f5a36304a865767bd347db8ea7bfbaa172ba0b81c4f5e382dd96831ae6b"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "a0b6d1ca974ba1123a8f77a92c7e26331cc8fb3ed2a528af1b856a81aed7431d"],

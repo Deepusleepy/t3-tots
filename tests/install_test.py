@@ -272,6 +272,8 @@ class ScanPrivate(unittest.TestCase):
         out = ns["flat"]("key sk-ant-api03-" + "abcdefghijklmnopqrstuvwxyz012345" + " then ghp_" + "abcdefghijklmnopqrstuvwxyz0123" + " then Bearer " + "abcdefghijklmnop1234" + " done", 400)
         self.assertEqual(out, "key [redacted] then [redacted] then [redacted] done")
         self.assertEqual(ns["flat"]("nothing secret here, just words", 400), "nothing secret here, just words")
+        for plain in ("Fix task-scheduler-retry-backoff-logic", "C:\\worktrees\\risk-assessment-for-payments-v2", "desk-booking-system-redesign", "Bearer authentication-middleware", "thread:project:20b7dd6b-aecd-42a3-a4dc-85fbcdee5f59"):
+            self.assertEqual(ns["flat"](plain, 400), plain, plain)
 
     def test_secret_patterns_catch_base64_webhook_secrets_and_underscored_stripe_keys(self):
         keys = re.compile(self.m.SECRET_KEYS)

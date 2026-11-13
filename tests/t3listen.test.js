@@ -1547,9 +1547,20 @@ test("summary counts merge: nothing is lost when a count taken for sending is pu
   assert.deepEqual(l.mergeMissed(a, b), { count: 5, titles: ["A", "B", "C"], firstAt: "2026-11-13T07:00:00Z", lastAt: "2026-11-13T09:00:00Z" });
   assert.deepEqual(l.mergeMissed(a, l.newMissed()), a);
 });
-test("listen.pid: a leftover pid that now belongs to another program doesn't count as a running listener", { skip: process.platform === "win32" && "the Windows check reads this listener's own processes" }, () => {
-  const ps = (out, ok = true) => () => ({ ok, out });
-  assert.equal(l.pidIsListener(4242, "linux", ps("/usr/bin/node /home/u/t3-tots/t3listen run --log\n")), true);
-  assert.equal(l.pidIsListener(4242, "linux", ps("/usr/lib/firefox/firefox -contentproc\n")), false);
-  assert.equal(l.pidIsListener(4242, "darwin", ps("", false)), false, "no such process");
+test("listen.pid: a leftover pid that now belongs to another program doesn't count as a running listener", () => {
+  const os_ = (out, ok = true) => () => ({ ok, out }), dead = () => false, alive = () => true;
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/bin/node /home/u/t3-tots/t3listen run --log\n")), true);
+  assert.equal(l.pidIsListener(4242, "linux", os_("/usr/lib/firefox/firefox -contentproc\n")), false);
+  assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\Program Files\\nodejs\\node.exe" t3listen run --log\r\n')), true, "a listener started by hand from its folder counts too");
+  assert.equal(l.pidIsListener(4242, "win32", os_("C:\\Windows\\explorer.exe\r\n")), false);
+  assert.equal(l.pidIsListener(4242, "win32", os_('"C:\\node.exe" "C:\\Users\\u\\t3-tots\\t3listen" "run" "--log"\r\n')), true, "the quoted form the logon task uses");
+  assert.equal(l.pidIsListener(4242, "linux", os_("vim /home/u/t3-tots/t3listen\n")), false, "an editor with the file open is not a listener");
+  assert.equal(l.pidIsListener(4242, "linux", os_("node t3listen status\n")), false);
+  assert.equal(l.pidIsListener(4242, "win32", os_("\r\n")), false, "no such process");
+  assert.equal(l.pidIsListener(4242, "linux", os_("", false), dead), false, "the OS couldn't be asked and the pid is gone");
+  assert.equal(l.pidIsListener(4242, "win32", os_("", false), alive), true, "the OS couldn't be asked: a live pid still blocks a second listener, as before");
+});
+test("timeouts: a finish goes into the summary after 3, a question or failure is kept for an hourly try, nothing is dropped", () => {
+  for (const event of ["thread.finished", "thread.cancelled"]) assert.deepEqual([1, 2, 3, 4].map((n) => l.afterTimeouts({ event }, n)), ["retry", "retry", "combine", "combine"], event);
+  for (const event of ["request.opened", "request.resolved", "thread.failed", "thread.failed.batch"]) assert.deepEqual([1, 2, 3, 9].map((n) => l.afterTimeouts({ event }, n)), ["retry", "retry", "slow", "slow"], event);
 });

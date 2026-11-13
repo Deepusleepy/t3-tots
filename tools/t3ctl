@@ -125,6 +125,30 @@ function workspaceOf(o) {
   return { type: "worktree", baseRef };
 }
 
+// rpcFirst: the first item of a T3 stream (acknowledged, then the socket closes). Same message shapes t3listen follows.
+function rpcFirst(tag, payload) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: H });
+    const t = setTimeout(() => { ws.close(); reject(new Error("rpc timeout")); }, 60000);
+    const done = (f, v) => { clearTimeout(t); try { ws.close(); } catch {} f(v); };
+    ws.onopen = () => ws.send(JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] }));
+    ws.onmessage = (ev) => {
+      let msgs; try { msgs = JSON.parse(ev.data); } catch { return done(reject, new Error("unreadable reply from T3")); } if (!Array.isArray(msgs)) msgs = [msgs];
+      for (const m of msgs) {
+        if (m._tag === "Ping") ws.send(JSON.stringify({ _tag: "Pong" }));
+        if (m._tag === "Chunk" && m.requestId === "1") { ws.send(JSON.stringify({ _tag: "Ack", requestId: "1" })); if ((m.values || []).length) return done(resolve, m.values[0]); }
+        if (m._tag === "Exit" && m.requestId === "1") return m.exit._tag === "Success" ? done(resolve, m.exit.value) : done(reject, new Error(JSON.stringify(m.exit.cause || m.exit).slice(0, 1500)));
+        if (m._tag === "Defect") return done(reject, new Error("defect " + JSON.stringify(m).slice(0, 800)));
+      }
+    };
+    ws.onerror = (e) => { clearTimeout(t); reject(new Error(`ws error ${e.message || ""} (T3 not reachable at ${BASE}, or the token was rejected)`)); };
+  });
+}
+// listTasks: T3 Code replaced scheduledTasks.list with the scheduledTasks.subscribe stream; older builds still have list.
+async function listTasks() {
+  try { return ((await rpcFirst("scheduledTasks.subscribe", {})) || {}).tasks || []; }
+  catch (e) { if (!/Unknown request tag/.test(e.message)) throw e; return ((await rpc("scheduledTasks.list", {})) || {}).tasks || []; }
+}
 const dispatch = (type, threadId, extra = {}) => rpc("orchestration.dispatchCommand", { type, commandId: uuid(), threadId, ...extra });
 const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 async function uploadImages(list) {
@@ -328,7 +352,7 @@ async function answer(o) {
     const r = await pickRequest(t, o, true); const d = String(o.decision);
     if (!r.approval.options.some((x) => x.decision === d)) throw new Error(`--decision must be one of: ${r.approval.options.map((x) => x.decision).join(", ")}`);
     if (o.redirect && d !== "decline") throw new Error("--redirect only goes with --decision decline");
-    if (d !== "decline" && d !== "cancel" && o["user-approved"] === true && !o.request) throw new Error(`USAGE: accepting needs --request ${r.requestId}, so the user's yes applies to the request they saw and not to one that opened since. Nothing was sent.`);
+    if (d !== "decline" && d !== "cancel" && o["user-approved"] === true && !o.request) throw new Error("USAGE: accepting needs --request <id>, with the id from the card or event the user said yes to, so their yes can't land on a request that opened since. Nothing was sent.");
     if (!approvalAllowed(d, o["user-approved"])) throw new Error(`NEEDS_USER_APPROVAL: --decision ${d} lets "${t.title}" run: ${r.approval.prompt || r.approval.requestKind}. Show it to the user. After their yes for this request, add --user-approved. To keep the thread moving without them, use --decision decline --redirect.`);
     await respond(t, r.requestId, { decision: d });
     await confirm(t, r, `decision=${d}`);
@@ -653,7 +677,7 @@ const main = async () => {
       const r = await rpc("scheduledTasks.upsert", { ...(o.id ? { id: String(o.id), requireExisting: true } : {}), commandId: uuid(), title: String(o.title), prompt: tprompt, enabled: !o.disabled, schedule, projectId: p.id, threadId: th ? th.id : null,
         workspaceStrategy: workspaceOf(o), modelSelection: modelSel(o, p.defaultModelSelection || recentSel(s, p.id) || recentSel(s), s), runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", createdBy: "user", creationSource: "web" });
       const task = r.task || r; console.log(`saved task ${task.id || "?"}  "${o.title}"  enabled=${!o.disabled}  ${JSON.stringify(schedule)}`); return; }
-    const r = await rpc("scheduledTasks.list", {}); const s = await shell(); if (!r.tasks.length) console.log("no scheduled tasks");
+    const r = { tasks: await listTasks() }; const s = await shell(); if (!r.tasks.length) console.log("no scheduled tasks");
     for (const k of r.tasks) { const p = s.projects.find((x) => x.id === k.projectId); const sc = k.schedule || {};
       const when = sc.type === "interval" ? `every ${Math.round(sc.everyMs / 6e4)}m` : sc.type === "fixed_time" ? `at ${sc.timeOfDay}${sc.weekdays ? " on " + sc.weekdays.map((d) => "Sun Mon Tue Wed Thu Fri Sat".split(" ")[d]).join(",") : " daily"}` : sc.type || "?";
       console.log(`${k.id}  ${k.enabled ? "on " : "off"}  ${when}  ${p ? p.title : k.projectId}  ${k.title}${k.lastRunStatus ? "  last=" + k.lastRunStatus : ""}${k.nextRunAt ? "  next=" + localT(k.nextRunAt) : ""}`); } }

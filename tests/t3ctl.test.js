@@ -307,7 +307,7 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     r = await ask("rm -rf ~", "--decision", "decline");
     assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].type, "runtime-request.respond"); assert.equal(sent[0].decision, "decline");
     r = await ask("rm -rf build", "--decision", "accept", "--user-approved");
-    assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: accepting needs --request req-1/, "a yes names the request it was given for"); assert.deepEqual(sent, []);
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: accepting needs --request <id>/, "a yes names the request it was given for"); assert.doesNotMatch(r.out, /req-1/, "and the id that is open now is not handed out"); assert.deepEqual(sent, []);
     r = await ask("rm -rf build", "--decision", "accept", "--user-approved", "--request", "req-OLD");
     assert.equal(r.code, 1, r.out); assert.match(r.out, /^NOT_PENDING/, "the request the user said yes to is gone; the one that opened since is not accepted"); assert.deepEqual(sent, []);
     r = await ask("rm -rf build", "--decision", "accept", "--user-approved", "--request", "req-1");
