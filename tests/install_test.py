@@ -387,38 +387,52 @@ class T3uiQuoting(unittest.TestCase):
 class SkillSync(unittest.TestCase):
     """What an update may do to each live skill. A bot made from the template starts with short placeholder skills; an owner may
     have edited a skill; a release may have changed it. The fetcher must tell these apart, never replace an owner's edit without
-    their choice, and keep a backup of everything it replaces."""
+    their choice, and keep a backup of everything of theirs it may replace."""
+    OLD = "v0.9.0"
+
+    def release(self, folder, version, texts):  # a release-shaped folder: skills/<id>/SKILL.md and a manifest.json that pins them
+        files = [f for f in MANIFEST["files"] if f.get("kind") != "skill"]
+        for n, t in texts.items():
+            (folder / "skills" / n).mkdir(parents=True); (folder / "skills" / n / "SKILL.md").write_bytes(t.encode("utf-8"))
+            files.append({"path": f"skills/{n}/SKILL.md", "dest": f"{n}/SKILL.md", "kind": "skill", "sha256": hashlib.sha256(t.encode("utf-8")).hexdigest()})
+        (folder / "manifest.json").write_text(json.dumps({"version": version, "files": files}))
+
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3tots-sync-")); self.f = fetcher(self.tmp)
-        self.live = self.tmp / "live"; self.sync = self.tmp / "sync"; self.base = self.tmp / "base"; self.ver = MANIFEST["version"]
-        now = lambda n: (ROOT / "skills" / n / "SKILL.md").read_text(encoding="utf-8")
+        self.live = self.tmp / "live"; self.sync = self.tmp / "sync"; self.rels = self.tmp / "releases"; self.ver = MANIFEST["version"]
+        self.now = {d.name: (d / "SKILL.md").read_text(encoding="utf-8") for d in sorted((ROOT / "skills").iterdir())}
         # the release the bot had before: t3-digest and t3-usage each had one line that the new release rewrote
         self.old_line = "This line was in the old release.\n"
-        was = {d.name: now(d.name) for d in sorted((ROOT / "skills").iterdir())}
+        was = dict(self.now)
         for n in ("t3-digest", "t3-usage"): was[n] = was[n] + self.old_line
-        files = []
-        for n, t in was.items():
-            (self.base / "skills" / n).mkdir(parents=True); (self.base / "skills" / n / "SKILL.md").write_bytes(t.encode("utf-8"))
-            files.append({"path": f"skills/{n}/SKILL.md", "dest": f"{n}/SKILL.md", "kind": "skill", "sha256": hashlib.sha256(t.encode("utf-8")).hexdigest()})
-        (self.base / "manifest.json").write_text(json.dumps({"version": "v0.9.0", "files": files}))
-        for n, t in was.items():
-            (self.live / n).mkdir(parents=True); (self.live / n / "SKILL.md").write_bytes(now(n).encode("utf-8"))
-        put = lambda n, t: (self.live / n / "SKILL.md").write_bytes(t.encode("utf-8"))
-        put("t3-status", "---\nname: t3-status\ndescription: >-\n  Short live answer. Use for status.\n---\nFull skill (pinned release): https://raw.githubusercontent.com/Deepusleepy/t3-tots/" + self.ver + "/skills/t3-status/SKILL.md\nFetch and follow it before any step.\n")
-        put("t3-waiting", now("t3-waiting") + "\nMy own extra rule.\n")                                   # edited by the owner; the release didn't change it
+        self.release(self.rels / self.OLD, self.OLD, was); self.release(self.rels / self.ver, self.ver, self.now)
+        for n, t in self.now.items():
+            (self.live / n).mkdir(parents=True); self.put(n, t)
+        self.put("t3-status", "---\nname: t3-status\ndescription: >-\n  Short live answer. Use for status.\n---\nFull skill (pinned release): https://raw.githubusercontent.com/Deepusleepy/t3-tots/" + self.ver + "/skills/t3-status/SKILL.md\nFetch and follow it before any step.\n")
+        self.put("t3-waiting", self.now["t3-waiting"] + "\nMy own extra rule.\n")                              # edited by the owner; the release didn't change it
         head, _, rest = was["t3-digest"].partition("\n---\n")
-        put("t3-digest", head + "\n---\nMy note at the top.\n" + rest)                                     # the owner's edit is far from the release's change
-        put("t3-usage", was["t3-usage"].replace(self.old_line, "I rewrote this line myself.\n"))           # the owner changed the very line the release rewrote
+        self.put("t3-digest", head + "\n---\nMy note at the top.\n" + rest)                                    # the owner's edit is far from the release's change
+        self.put("t3-usage", was["t3-usage"].replace(self.old_line, "I rewrote this line myself.\n"))          # the owner changed the very line the release rewrote
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def skills(self, *a):
-        env = {"T3TOTS_LIVE_SKILLS": str(self.live), "T3TOTS_SKILL_SYNC": str(self.sync)}
-        return run(self.f, "skills", self.ver, "--from", str(ROOT), "--base", "v0.9.0", "--base-from", str(self.base), *a, dst=self.tmp / "box", env=env)
+    def put(self, n, t):
+        (self.live / n / "SKILL.md").write_bytes(t.encode("utf-8"))
 
-    def plan(self):
-        return json.loads((self.sync / self.ver / "PLAN.json").read_text())
+    def fetch(self, *a):
+        env = {"T3TOTS_LIVE_SKILLS": str(self.live), "T3TOTS_SKILL_SYNC": str(self.sync)}
+        return run(self.f, *a, dst=self.tmp / "box", env=env)
+
+    def skills(self, *a, tag=None, src=None):
+        return self.fetch("skills", tag or self.ver, "--from", str(src or ROOT), "--base", self.OLD, "--base-from", str(self.rels), *a)
+
+    def plan(self, tag=None):
+        return json.loads((self.sync / (tag or self.ver) / "PLAN.json").read_text())
+
+    def save(self, sid, entry, tag=None):  # what UpdateSkill does: name and description in a header, then the body
+        e = json.loads((self.sync / (tag or self.ver) / entry).read_text())
+        self.put(sid, f"---\nname: {e['name']}\ndescription: >-\n  {e['description']}\n---\n{e['body']}")
 
     def test_check_tells_a_placeholder_an_owner_edit_and_a_clash_apart(self):
         r = self.skills(); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -436,38 +450,68 @@ class SkillSync(unittest.TestCase):
         self.assertEqual(p["yours_kept"], ["t3-waiting"])
         ask = {e["id"]: e for e in p["ask_the_owner"]}; self.assertEqual(sorted(ask), ["t3-digest", "t3-usage"])
         self.assertFalse(ask["t3-digest"]["overlap"]); self.assertTrue(ask["t3-usage"]["overlap"]); self.assertNotIn("keep_my_edit", ask["t3-usage"])
+        self.assertTrue(ask["t3-usage"]["keep_mine_allowed"])
         merged = json.loads((out / ask["t3-digest"]["keep_my_edit"]).read_text())["body"]
         self.assertIn("My note at the top.", merged); self.assertNotIn(self.old_line.strip(), merged)
         self.assertIn("My note at the top.", (out / ask["t3-digest"]["your_edit"]).read_text()); self.assertIn("-" + self.old_line.strip(), (out / ask["t3-digest"]["release_change"]).read_text())
         backed = sorted(f.name for f in pathlib.Path(p["backups"]).iterdir())
-        self.assertEqual(backed, ["t3-digest.SKILL.md", "t3-status.SKILL.md", "t3-usage.SKILL.md"])
+        self.assertEqual(backed, ["t3-digest.SKILL.md", "t3-usage.SKILL.md"], "the owner's edited copies; a placeholder holds nothing of theirs")
         self.assertIn("I rewrote this line myself.", (pathlib.Path(p["backups"]) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
 
     def test_placeholders_only_prepares_just_the_full_copy(self):
         r = self.skills("--write", "--placeholders"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         p = self.plan(); self.assertEqual([e["id"] for e in p["apply_in_order"]], ["t3-status"]); self.assertEqual(p["ask_the_owner"], [])
-        full = (ROOT / "skills" / "t3-status" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertEqual((self.sync / self.ver / "t3-status.SKILL.md").read_text(encoding="utf-8"), full)
+        self.assertEqual((self.sync / self.ver / "t3-status.SKILL.md").read_text(encoding="utf-8"), self.now["t3-status"])
         shutil.copy(self.sync / self.ver / "t3-status.SKILL.md", self.live / "t3-status" / "SKILL.md")
         again = self.skills(); self.assertIn("0 placeholders", again.stdout); self.assertNotIn("NEXT:", again.stdout)
 
-    def save(self, sid, entry):
-        e = json.loads((self.sync / self.ver / entry).read_text())
-        (self.live / sid / "SKILL.md").write_text(f"---\nname: {e['name']}\ndescription: >-\n  {e['description']}\n---\n{e['body']}", encoding="utf-8")
+    def settle(self):  # the owner answers: digest "update and keep my edit", usage "keep mine"
+        self.skills("--write"); ask = {e["id"]: e for e in self.plan()["ask_the_owner"]}
+        self.save("t3-status", "t3-status.json"); self.save("t3-digest", ask["t3-digest"]["keep_my_edit"])
+        k = self.fetch("keep", "t3-usage", self.ver); self.assertIn("OK t3-usage", k.stdout, k.stdout + k.stderr)
+        return ask
 
     def test_each_choice_is_remembered_so_the_owner_is_not_asked_again(self):
-        self.skills("--write"); ask = {e["id"]: e for e in self.plan()["ask_the_owner"]}
-        self.save("t3-status", "t3-status.json")
-        self.save("t3-digest", ask["t3-digest"]["keep_my_edit"])  # "update and keep my edit"
-        r = self.skills(); self.assertIn("skill yours: t3-digest", r.stdout, r.stdout + r.stderr)
-        self.assertRegex(r.stdout, r"skill both: t3-usage")  # "keep mine": nothing was saved, and it is still named, never replaced
-        hand = (self.live / "t3-usage" / "SKILL.md").read_text(encoding="utf-8") + "\nA hand-merged copy.\n"
-        (self.live / "t3-usage" / "SKILL.md").write_text(hand, encoding="utf-8")
-        env = {"T3TOTS_LIVE_SKILLS": str(self.live), "T3TOTS_SKILL_SYNC": str(self.sync)}
-        rb = run(self.f, "rebase", "t3-usage", self.ver, dst=self.tmp / "box", env=env); self.assertIn("OK t3-usage", rb.stdout, rb.stdout + rb.stderr)
+        ask = self.settle()
         r = self.skills(); self.assertIn("0 changed, 0 placeholders, 3 yours, 0 both", r.stdout, r.stdout + r.stderr); self.assertNotIn("ASK:", r.stdout)
+        self.assertRegex(r.stdout, r"skill yours: t3-usage .*kept by your choice")
+        self.assertEqual(self.skills().stdout, r.stdout, "a second check says the same")
+        self.put("t3-usage", (self.live / "t3-usage" / "SKILL.md").read_text(encoding="utf-8") + "\nA hand-merged copy.\n")
+        rb = self.fetch("rebase", "t3-usage", self.ver); self.assertIn("OK t3-usage", rb.stdout, rb.stdout + rb.stderr)
+        r = self.skills(); self.assertIn("3 yours, 0 both", r.stdout, r.stdout + r.stderr); self.assertNotIn("kept by your choice", r.stdout)
         self.save("t3-usage", ask["t3-usage"]["take_new"])        # "take the new one"
         r = self.skills(); self.assertIn("2 yours, 0 both", r.stdout, r.stdout + r.stderr)
+
+    def test_after_keep_mine_the_next_release_still_updates_the_untouched_skills_and_asks_only_about_what_changed_again(self):
+        self.settle(); self.skills()
+        nxt = dict(self.now); nxt["t3-new-thread"] += "\nA new rule in the next release.\n"; nxt["t3-usage"] += "\nThe next release changed this skill again.\n"
+        self.release(self.tmp / "next", "v9.9.9", nxt)
+        r = self.skills(tag="v9.9.9", src=self.tmp / "next"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("2 changed, 0 placeholders, 2 yours, 1 both", r.stdout, r.stdout)
+        self.assertIn("skill changed: t3-new-thread", r.stdout); self.assertIn("skill changed: t3-install-tools", r.stdout)
+        self.assertIn("skill yours: t3-digest", r.stdout); self.assertIn("skill yours: t3-waiting", r.stdout)
+        self.assertRegex(r.stdout, r"skill both: t3-usage .*since v0\.9\.0", "asked again, and still compared with the release the owner's edit was made on")
+        same = dict(self.now); same["t3-new-thread"] += "\nA new rule in the next release.\n"
+        self.release(self.tmp / "quiet", "v9.9.8", same)
+        q = self.skills(tag="v9.9.8", src=self.tmp / "quiet")
+        self.assertRegex(q.stdout, r"skill yours: t3-usage .*kept by your choice", "a release that didn't touch the kept skill doesn't ask"); self.assertNotIn("ASK:", q.stdout)
+
+    def test_the_update_skill_itself_is_never_taken_for_an_owner_edit_because_of_its_pins_and_cannot_be_kept(self):
+        rows = re.search(r"PINNED = \{\n(.*?)\n\}", self.now["t3-install-tools"], re.S).group(1).split(",\n")
+        shuffled = self.now["t3-install-tools"].replace(",\n".join(rows), ",\n".join(rows[1:] + rows[:1])).replace(f'PIN = "{self.ver}"', 'PIN = "v0.9.0"')
+        self.put("t3-install-tools", shuffled)   # an older copy: another pin, and its rows in another order
+        r = self.skills(); self.assertIn("skill changed: t3-install-tools", r.stdout, r.stdout + r.stderr)
+        self.put("t3-install-tools", shuffled + "\nMy own note about installing.\n")
+        r = self.skills("--write"); e = {x["id"]: x for x in self.plan()["ask_the_owner"]}["t3-install-tools"]
+        self.assertFalse(e["keep_mine_allowed"]); self.assertFalse(e["overlap"])
+        body = json.loads((self.sync / self.ver / e["keep_my_edit"]).read_text())["body"]
+        self.assertIn("My own note about installing.", body); self.assertIn(f'PIN = "{self.ver}"', body, "the merged copy carries this release's pins")
+        k = self.fetch("keep", "t3-install-tools", self.ver); self.assertNotEqual(k.returncode, 0); self.assertIn("CANNOT_KEEP", k.stdout + k.stderr)
+
+    def test_an_edit_that_only_changes_indentation_counts_as_an_edit(self):
+        lines = self.now["t3-templates"].split("\n"); i = max(k for k, l in enumerate(lines) if l.startswith("- "))
+        lines[i] = "  " + lines[i]; self.put("t3-templates", "\n".join(lines))
+        self.assertIn("skill yours: t3-templates", self.skills().stdout)
 
 
 if __name__ == "__main__":

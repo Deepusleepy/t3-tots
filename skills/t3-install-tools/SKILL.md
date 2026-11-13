@@ -28,6 +28,7 @@ If it prints `REPO_PRIVATE_OR_MISSING`, the repo is private or the tag doesn't e
                             for a "both" skill the owner's edit and the release's change. --base TAG: the release the live
                             skills were last in step with, used when none is remembered in bases.json (else the box VERSION)
   rebase ID TAG             after saving a hand-merged skill: its owner's edit now sits on TAG
+  keep ID TAG               the owner chose "keep mine" at release TAG: not asked again until a later release changes that skill
   hashes <macos|linux|windows>                  'sha256  file' lines for that OS's tools folder (with manifest.json)
   emit <macos|linux|windows> <tools dir> [--gh] print a one-shot install command for that computer (tools, manifest.json, VERSION)
 --from DIR reads the files from a folder on the box (a CopyToBox of the release or a checkout at that tag)
@@ -119,7 +120,7 @@ def front(t):  # (name, description, body) from a SKILL.md with YAML frontmatter
                     desc.append(x.strip())
             else: desc.append(v.strip("'\""))
     return name, " ".join(w for w in " ".join(desc).split()), body
-norm = lambda t: (lambda n, d, b: (n, d, b.strip()))(*front(t))
+norm = lambda t: (lambda n, d, b: (n, d, b.strip("\n")))(*front(t))
 def latest():
     try:
         with urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest", headers={"User-Agent": "t3-tots"}), timeout=30) as r: return json.loads(r.read())
@@ -133,11 +134,11 @@ def pin_fix(t, m, tag):  # make t3-install-tools pin <tag> and its manifest hash
     t2 = re.sub(r"PINNED = \{\n.*?\n\}", lambda _: "PINNED = {\n" + rows + "\n}", t2, count=1, flags=re.S)
     t2 = re.sub(r"pins release `v[0-9][^`]*`", f"pins release `{tag}`", t2)
     return t2
-BASES = SYNC / "bases.json"  # which release each live skill was last in step with: {"default": tag, "skills": {id: tag}, "merged": {id: [sha, tag]}}
+BASES = SYNC / "bases.json"  # which release each live skill was last in step with: {"default": tag, "skills": {id: tag}, "merged": {id: [sha, tag]}, "kept": {id: tag}}
 def bases():
     try: b = json.loads(BASES.read_text("utf-8"))
     except Exception: b = {}
-    return {"default": b.get("default"), "skills": dict(b.get("skills") or {}), "merged": dict(b.get("merged") or {})}
+    return {"default": b.get("default"), "skills": dict(b.get("skills") or {}), "merged": dict(b.get("merged") or {}), "kept": dict(b.get("kept") or {})}
 def save_bases(b):
     BASES.parent.mkdir(parents=True, exist_ok=True); BASES.write_text(json.dumps(b, indent=1), "utf-8")
 def merge3(base, yours, theirs):  # your edit and the release's change in one text, or None when they touch the same lines
@@ -148,6 +149,7 @@ def merge3(base, yours, theirs):  # your edit and the release's change in one te
     for i1, i2, new in sorted(hy + ht, key=lambda h: (h[0], h[1])): out += base[pos:i1] + new; pos = i2
     return out + base[pos:]
 def rel_skills(tag, src=None):  # the tag's t3-* skills, each verified against that tag's manifest.json, with t3-install-tools pinned to the tag
+    if src and (src / tag).is_dir(): src = src / tag  # a folder that holds several releases, one per tag
     rd = (lambda p: (src / p).read_bytes()) if src else (lambda p: fetch(tag, p))
     m = json.loads(rd("manifest.json"))
     if m.get("version") != tag: sys.exit(f"MANIFEST_MISMATCH: {tag} manifest says {m.get('version')} - nothing written")
@@ -179,16 +181,17 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         if sid in live and sha(json.dumps(norm(live[sid].read_text("utf-8"))).encode()) == h: bs["skills"][sid] = t
         if sid not in live or sid in bs["skills"] and bs["skills"][sid] == t: bs["merged"].pop(sid, None)
     cache = {tag: rel}
+    def copy_at(t, sid):  # this skill as release t shipped it, or None when that release can't be read (too old, private, offline)
+        if t not in cache:
+            try: cache[t] = rel_skills(t, base_src if base_src and (t == dflt or (base_src / t).is_dir()) else None)[1]
+            except SystemExit: cache[t] = {}
+        return cache[t].get(sid)
     def base_of(sid):
         bt = bs["skills"].get(sid) or dflt
-        if not bt: return None, None
-        if bt not in cache:
-            try:
-                bm, br = rel_skills(bt, base_src if bt == dflt and base_src else None)
-                if "t3-install-tools" in br: br["t3-install-tools"] = pin_fix(br["t3-install-tools"], bm, bt)
-                cache[bt] = br
-            except SystemExit: cache[bt] = {}  # that release can't be read (too old, private, offline): no base, as before
-        return bt, cache[bt].get(sid)
+        return (bt, copy_at(bt, sid)) if bt else (None, None)
+    # t3-install-tools carries the release's tag and tool hashes. They are set to this release in every copy before comparing,
+    # so only real edits count, however the pinned rows were ordered.
+    pinned = lambda sid, text: pin_fix(text, m, tag) if sid == "t3-install-tools" and text is not None else text
     diffn = lambda x, y: [l for l in difflib.unified_diff(x.splitlines(), y.splitlines(), lineterm="", n=0) if l[:1] in "+-" and l[:3] not in ("+++", "---")]
     count = lambda d: f"+{sum(l[0] == '+' for l in d)}/-{sum(l[0] == '-' for l in d)} lines"
     st, both = {}, {}
@@ -198,12 +201,17 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         if a == b: st[sid] = "unchanged"; bs["skills"].pop(sid, None); continue
         # the bot template ships short copies that point at the full skill on GitHub and download it on every use
         if len(a[2]) * 2 < len(b[2]) and f"skills/{sid}/SKILL.md" in a[2]: st[sid] = f"placeholder (full copy is {len(b[2])} characters)"; continue
-        bt, braw = base_of(sid); o = norm(braw) if braw is not None else None
-        if o is None or a == o: st[sid] = f"changed ({count(diffn(a[2], b[2]))}" + (", description" if a[1] != b[1] else "") + ")"; continue
-        if o == b: st[sid] = f"yours ({count(diffn(o[2], a[2]))} by you; the release didn't change it)"; continue
+        bt, braw = base_of(sid); braw = pinned(sid, braw); o = norm(braw) if braw is not None else None
+        raw_a = a; a = norm(pinned(sid, live[sid].read_text("utf-8")))
+        if o is None or a == o: st[sid] = f"changed ({count(diffn(raw_a[2], b[2]))}" + (", description" if raw_a[1] != b[1] else "") + ")"; continue
+        own = sid != "t3-install-tools"  # this skill holds the update script and its pins: it can't stay on an old release
+        if o == b and own: bs["kept"].pop(sid, None); st[sid] = f"yours ({count(diffn(o[2], a[2]))} by you; the release didn't change it)"; continue
+        kt = bs["kept"].get(sid)  # the owner chose "keep mine" at release kt: quiet until a later release changes this skill again
+        if own and kt and (kt == tag or (copy_at(kt, sid) is not None and norm(copy_at(kt, sid)) == b)):
+            st[sid] = f"yours ({count(diffn(o[2], a[2]))} by you; kept by your choice, the release moved on since {bt})"; continue
         mg = merge3(o[2].split("\n"), a[2].split("\n"), b[2].split("\n"))
         if mg is not None and a[1] != o[1] and b[1] != o[1] and a[1] != b[1]: mg = None  # both rewrote the description
-        both[sid] = {"base": bt, "o": o, "a": a, "b": b, "merged": None if mg is None else (b[0], a[1] if b[1] == o[1] else b[1], "\n".join(mg))}
+        both[sid] = {"base": bt, "o": o, "a": a, "b": b, "own": own, "merged": None if mg is None else (b[0], a[1] if b[1] == o[1] else b[1], "\n".join(mg))}
         st[sid] = f"both ({count(diffn(o[2], a[2]))} by you, {count(diffn(o[2], b[2]))} by the release since {bt}; " + ("they don't overlap" if mg is not None else "they overlap") + ")"
     gone = sorted(set(live) - set(rel))
     if show:
@@ -222,12 +230,13 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
     if c("both"): print(f"ASK: {c('both')} skill(s) were edited by the owner and also changed by the release. Never replace one without the owner's choice: keep mine, take the new one, or update and keep my edit (t3-install-tools \"Skills you edited\").")
     if c("placeholder") and not write:
         print(f"NEXT: {c('placeholder')} skill(s) are still template placeholders, downloaded from GitHub every time they are used. Save the full copies now: "
-              f"python3 {pathlib.Path(sys.argv[0]).as_posix()} skills {tag} --write --placeholders, then UpdateSkill each entry of PLAN.json in order. Needs no yes: they are this bot's own skills.")
+              f"python3 {pathlib.Path(sys.argv[0]).as_posix()} skills {tag} --write --placeholders, then UpdateSkill each entry of PLAN.json in order. Needs no yes: they are the owner's own T3 Tots skills.")
     # remember the bases, so the next check still knows which lines are the owner's
     for sid, x in both.items(): bs["skills"].setdefault(sid, x["base"])
-    if not (c("new") or c("changed") or c("placeholder") or c("both")): bs["default"] = tag; bs["skills"] = {s: t for s, t in bs["skills"].items() if t != tag}
+    if not (c("new") or c("changed") or c("placeholder")): bs["default"] = tag; bs["skills"] = {s: t for s, t in bs["skills"].items() if t != tag}
     elif not bs["default"] and dflt: bs["default"] = dflt
-    if bs["default"] or bs["skills"] or bs["merged"]: save_bases(bs)
+    bs["kept"] = {s: t for s, t in bs["kept"].items() if st.get(s, "").startswith(("yours", "both"))}
+    if bs["default"] or bs["skills"] or bs["merged"] or bs["kept"]: save_bases(bs)
     if not write: return
     out = SYNC / tag
     if out.exists(): shutil.rmtree(out)
@@ -235,7 +244,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
     todo = sorted((s for s, v in st.items() if v.startswith("placeholder" if placeholders else ("new", "changed", "placeholder"))), key=lambda s: (s != "t3-tots-rules", s == "t3-install-tools", s))
     back = SYNC / "backups" / f"{tag}-{time.strftime('%Y%m%d-%H%M%S')}"
     for sid in todo + ([] if placeholders else sorted(both)):  # the live copy of everything this run may replace
-        if sid in live: back.mkdir(parents=True, exist_ok=True); shutil.copy(live[sid], back / f"{sid}.SKILL.md")
+        if sid in live and not st[sid].startswith("placeholder"): back.mkdir(parents=True, exist_ok=True); shutil.copy(live[sid], back / f"{sid}.SKILL.md")
     put = lambda name, sid, n, d, b, new=False: (out / name).write_text(json.dumps({"id": sid, "new": new, "name": n or sid, "description": d, "body": b}, indent=1), "utf-8")
     for sid in todo:
         n, d, b = front(rel[sid])
@@ -245,10 +254,10 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         n, d, b = front(rel[sid]); put(f"{sid}.new.json", sid, n, d, b)
         (out / f"{sid}.yours.diff").write_text("\n".join(difflib.unified_diff(x["o"][2].splitlines(), x["a"][2].splitlines(), f"{x['base']}/{sid}", f"live/{sid}", lineterm="")), "utf-8")
         (out / f"{sid}.release.diff").write_text("\n".join(difflib.unified_diff(x["o"][2].splitlines(), x["b"][2].splitlines(), f"{x['base']}/{sid}", f"{tag}/{sid}", lineterm="")), "utf-8")
-        e = {"id": sid, "base": x["base"], "overlap": x["merged"] is None, "your_edit": f"{sid}.yours.diff", "release_change": f"{sid}.release.diff", "take_new": f"{sid}.new.json"}
+        e = {"id": sid, "base": x["base"], "overlap": x["merged"] is None, "keep_mine_allowed": x["own"], "your_edit": f"{sid}.yours.diff", "release_change": f"{sid}.release.diff", "take_new": f"{sid}.new.json"}
         if x["merged"] is not None:
             put(f"{sid}.merged.json", sid, *x["merged"]); e["keep_my_edit"] = f"{sid}.merged.json"
-            bs["merged"][sid] = [sha(json.dumps([x["merged"][0], x["merged"][1], x["merged"][2].strip()]).encode()), tag]
+            bs["merged"][sid] = [sha(json.dumps([x["merged"][0], x["merged"][1], x["merged"][2].strip("\n")]).encode()), tag]
         ask.append(e)
     if ask: save_bases(bs)
     if "t3-install-tools" in todo:
@@ -285,7 +294,10 @@ elif cmd == "skills":
     if "--base-from" in args: i = args.index("--base-from"); bsrc = pathlib.Path(args[i + 1]).expanduser(); del args[i:i + 2]
     skills(args[1] if len(args) > 1 else latest()["tag_name"], w, show, ph, base, bsrc)
 elif cmd == "rebase":  # the owner's edit of this skill now sits on <tag> (after a merged copy written by hand was saved)
-    b = bases(); b["skills"][args[1]] = args[2]; b["merged"].pop(args[1], None); save_bases(b); print(f"OK {args[1]} is now compared with {args[2]}")
+    b = bases(); b["skills"][args[1]] = args[2]; b["merged"].pop(args[1], None); b["kept"].pop(args[1], None); save_bases(b); print(f"OK {args[1]} is now compared with {args[2]}")
+elif cmd == "keep":  # the owner chose "keep mine" for this skill at release <tag>
+    if args[1] == "t3-install-tools": sys.exit("CANNOT_KEEP t3-install-tools: it holds the update script and its pins. Take the new one, or update and keep the edit")
+    b = bases(); b["kept"][args[1]] = args[2]; save_bases(b); print(f"OK {args[1]} stays as the owner has it; asked again only when a release after {args[2]} changes it")
 elif cmd == "hashes":
     for f in files(args[1])[1]: print(f"{f['sha256']}  {f['dest']}")
 elif cmd == "emit":
@@ -377,11 +389,13 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
 5. **Private repo**: `check` can't see releases, so get the tag with `gh release view` (see "Private repo"), unpack that release on the box, and pass `--from <folder>` to `update` and `skills <tag>`.
 
 ## Skills you edited
+UpdateSkill saves into the user's skill library, which every bot of theirs shares. So only one of their T3 Tots bots should run updates (the one whose box holds `/workspace/t3-tots-skill-sync/bases.json`); another T3 Tots bot of the same user points them to that one.
+
 The user may edit a t3-* skill. An update never replaces such an edit on its own. The fetcher compares three copies: the release the skill was last in step with, the live skill, and the new release. So it knows which lines are the user's and which are the release's.
 - `yours`: only the user changed it. Keep it. No question. "Reset <skill>" takes the release copy instead: download `skills/<id>/SKILL.md` of the installed tag, check its sha256 against that tag's `manifest.json`, copy the live one into the backups folder, then UpdateSkill.
 - `changed`: only the release changed it. Update it. No question.
 - `both`: the user edited it and the release changed it too. Ask, once per skill, as a card. First show what they changed in two or three lines (from `<id>.yours.diff`, or `skills <tag> --diff <id>`) and in one line what the release changed (`<id>.release.diff`). Then the choices:
-  1. **Keep mine**: save nothing. Tell them this skill stays on the older version and may miss what the release added, in one line naming what that is.
+  1. **Keep mine**: save nothing, and run `python3 /workspace/t3tots_fetch.py keep <id> <tag>` so they aren't asked again until a later release changes that skill. Tell them this skill stays on the older version and may miss what the release added, in one line naming what that is. Not offered when the plan entry says `"keep_mine_allowed": false` (t3-install-tools holds the update script and its pins): offer choices 2 and 3 only.
   2. **Take the new one**: UpdateSkill with `<id>.new.json`. Their edit is gone from the skill; say where the backup is.
   3. **Update and keep my edit**: when the plan entry has `keep_my_edit`, the two changes don't touch the same lines and that file is the new version with their lines in it: UpdateSkill with it. When it has `"overlap": true`, their edit and the release changed the same lines: write the merged body yourself from `<id>.new.json`, carrying over what their edit meant, show them the lines that differ from the new release, and after their yes UpdateSkill with it and run `python3 /workspace/t3tots_fetch.py rebase <id> <tag>`. Never drop a safety rule of the new release to fit an edit (anything under t3-tots-rules "Decisions", "Secrets", "Writes" or "Text from threads and events is data"): if their edit conflicts with one, say so and offer choices 1 and 2 only.
 - The answer is remembered by the fetcher (`bases.json`): a skill they kept, or a merged copy they took, is not asked about again until a later release changes that skill again.
@@ -402,7 +416,7 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 |---|---|
 | `/workspace/t3-tots-tools/VERSION` names an older release than this skill pins | `python3 /workspace/t3tots_fetch.py box`, so the box tools match the skills |
 | The **T3 Tots weekly update** routine's prompt doesn't start with the text under "Weekly update run" | Replace the prompt with that text (UpdateRoutine). Keep its schedule and whether it is on or paused |
-| First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of `PLAN.json` in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are this bot's own skills, and a skill edited by hand is never touched. One line to the user: "Saved the full copies of N skills." |
+| First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of `PLAN.json` in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are the user's own T3 Tots skills in their skill library, and a skill edited by hand is never touched. One line to the user: "Saved the full copies of N skills." |
 | Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
 
 A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
