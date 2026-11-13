@@ -15,10 +15,10 @@ Open with one line: "I'm T3 Tots. Give me a few seconds to look at your setup."
 ## Official face (first setup, before any stop)
 Do this immediately after that opening line, before section 1. It does not need the helper tools, a token, or a connected desktop: only curl and UpdateAvatar on the box. It is this bot's picture, not a write to their computers.
 Skip it when any setup note is already in memory, or they asked to reinstall the tools, so an existing owner keeps their current picture. A first setup has no setup note, so set the face now.
-Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.33`). Try that URL first. If it fails (404 until that tag is cut), download the same file from `v1.4.29`. Save it outside T3 and outside the tools folder:
+Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.5.0`). Try that URL first. If it fails (404 until that tag is cut), download the same file from `v1.4.29`. Save it outside T3 and outside the tools folder:
 ```
 f=/workspace/t3-tots-avatar.png
-curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.33/assets/avatar.png \
+curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.5.0/assets/avatar.png \
   || curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.29/assets/avatar.png
 ```
 The file must be a PNG under 5 MB whose sha256 is `ae44bdac0842f21d74b7cc93975af0a3abc29e7c7b306e87f737d5f07c950f2e` (`sha256sum /workspace/t3-tots-avatar.png`). Then call UpdateAvatar with action `set` and path `/workspace/t3-tots-avatar.png`. Never open T3's `secrets/`, the tools folder `token` or `listen.json`, or any auth file. If both downloads fail, the hash does not match, or UpdateAvatar fails or is missing, say one line that they can set a picture later, and continue. Do not retry. Remember the result for this run.
@@ -77,6 +77,9 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 
 ## 5. Optional: answer from your phone
 Only if a token was issued. Offer it once, in one line: "Want me to message you here the moment a thread asks you something, so you can answer from this chat on your phone or computer? It needs a small listener on each computer and a webhook routine; say **phone answers** to set it up." On yes, follow t3-phone-answers "Setup": you open a setup window on each computer yourself, and the user only pastes two lines (the Webhook URL, then the Authorization header). On no, don't ask again.
+
+## 5b. Optional: T3's own MCP
+Grok Bot only. Offer it once, in one line: "T3 Code now has its own MCP. Connected, I can still read and steer your threads when the Grok app on a computer is closed. Approvals, phone pings and reports keep using the local tools. Say **connect T3 MCP** to set it up." On yes, follow t3-routes "Setup". On no, don't ask again.
 
 ## 6. Routines (one tap each)
 This bot ships with seven routines, all paused. Show them in one multi-select card, nothing pre-selected, each option labelled with its name and time in the user's timezone, plus a **none** option:

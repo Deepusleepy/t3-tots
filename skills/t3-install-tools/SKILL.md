@@ -4,7 +4,7 @@ description: >-
   Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", the T3 Tots weekly update routine, during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
 ---
 
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.33` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.5.0` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
@@ -31,16 +31,16 @@ Installs tools only. Live Grok Bot skills are applied by the main agent with Upd
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.33"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "822129b9918e8cd7cd6830101b267285d4c360df2bc8d458092002dacc4c0c94"],
- "tools/t3ctl": ["t3ctl", "3eae56b3284a3e019772c70c6534107c1d8969480bc318dc6792d2e502aff43d"],
+ "tools/t3q.py": ["t3q.py", "4926e89065778994109a9bfbe3d82a492600fd77bace67273b9c89e028aea0b9"],
+ "tools/t3ctl": ["t3ctl", "b4f7c8b4efc58368130e1927780637908cf6f65095b72495027e2f368b97e648"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "877d960317674296ec65945c6d5756823dd52840ad4e1d94fec8726afc27b107"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
- "tools/survey.js": ["survey.js", "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f"],
+ "tools/export.js": ["export.js", "a0b6d1ca974ba1123a8f77a92c7e26331cc8fb3ed2a528af1b856a81aed7431d"],
+ "tools/survey.js": ["survey.js", "f2054798d5d3fd7b2c4a852eebf1fdf48a46dc12b9d872bf379273522dd17320"],
  "tools/t3ui": ["t3ui", "221951527b7250375dc97ec63fababa09e693b3af0e5ae1132d42aee67f2b23f"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],

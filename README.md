@@ -174,6 +174,18 @@ node t3listen bot remove site
 - A question's close goes to the bots its opening went to. Events carry `projectId` next to `project`.
 - In `listen.json` this is `"main": { "skip": [...] }` and `"bots": { "<name>": { "url", "headers", "only": [...], "skip": [...] } }`. Each rule is `{ "projects": [{ "id", "title" }], "events": [...] }` with either part optional. A bot gets an event unless it has `only` rules and none matches, or a `skip` rule matches.
 
+## T3's own MCP (optional)
+
+T3 Code has its own MCP server, and T3 Tots can use it next to the local tools. Say "connect T3 MCP" to the bot, then in T3 Code press Ctrl/Cmd+K, choose **Use T3 Code in another app (MCP)** and pick Grok Bot.
+
+- **What MCP can do goes through MCP first:** listing, reading, searching and waiting on threads, starting one, sending, steering, answering a question, stopping, settling, renaming, scheduled tasks. The local tools are the backup.
+- **What MCP can't do always uses the local tools:** approvals, phone answers, reports, limits and resume-at-reset, diffs and files.
+- **The backup is used only when nothing was sent.** After a timeout the bot reads the thread first. It never repeats a change another way while unsure. `t3ctl` ends a failed write with `WRITE_STATE: none` or `WRITE_STATE: unknown` for this.
+- **When T3 refuses** a change because of the access level you gave the bot, it tells you why and asks before doing it with the local tools. Say "always" and it stops asking.
+- T3 Connect's free plan links 3 computers; the rest keep using the local tools. A sign-in lasts 30 days.
+
+The rules are in [t3-routes](skills/t3-routes/SKILL.md).
+
 ## Delegated mode and approvals
 
 Delegated mode starts only when you hand over control, for example "I'm away, keep it moving". The agent then answers routine questions, nudges stalled threads, and resumes threads after a usage limit.
