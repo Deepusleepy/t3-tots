@@ -19,9 +19,10 @@ If it prints `REPO_PRIVATE_OR_MISSING`, the repo is private or the tag doesn't e
   box [--from DIR]          install the pinned release's tools into /workspace/t3-tots-tools, verify every sha256
   check                     compare with the latest GitHub release (read-only): changed files + notes
   update <tag> [--from DIR] install <tag> on the box, verified against that tag's manifest.json (only after the user's yes)
-  skills [tag] [--write] [--diff ID] [--from DIR]  compare the tag's skills (default: latest release) with the live
-                            Grok Bot skills: new / changed / unchanged / removed. --write saves verified copies for
-                            UpdateSkill in /workspace/t3-tots-skill-sync/<tag>/. --diff ID prints one skill's diff
+  skills [tag] [--write [--placeholders]] [--diff ID] [--from DIR]  compare the tag's skills (default: latest release)
+                            with the live Grok Bot skills: new / changed / placeholder / unchanged / removed. --write saves
+                            verified copies for UpdateSkill in /workspace/t3-tots-skill-sync/<tag>/; with --placeholders only
+                            the template's short copies, never a skill edited by hand. --diff ID prints one skill's diff
   hashes <macos|linux|windows>                  'sha256  file' lines for that OS's tools folder (with manifest.json)
   emit <macos|linux|windows> <tools dir> [--gh] print a one-shot install command for that computer (tools, manifest.json, VERSION)
 --from DIR reads the files from a folder on the box (a CopyToBox of the release or a checkout at that tag)
@@ -286,7 +287,7 @@ Hash its files (step 3 commands) and compare with `python3 /workspace/t3tots_fet
 
 ## Update T3 Tots (scripts and skills)
 Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots") or when a script prints `T3_SCHEMA_CHANGED`. The T3 Tots weekly update routine runs it without asking ("Weekly update run"). "Update T3" or "update gh" means T3 Code or dev tools: that's t3-update. One check and one yes cover the box, every T3 computer and the live skills.
-1. **Check** (read-only, no approval). Save the fetcher from "Box copy" if `/workspace/t3tots_fetch.py` is missing or differs, then run `python3 /workspace/t3tots_fetch.py check`. It prints installed vs latest tag, the changed tool files, the release notes, then one skills line (`new`, `changed (+a/-b lines, description)`, `unchanged`, `not in release`) and one line per skill that isn't unchanged. Only `t3-*` skills are compared; frontmatter is compared by name and description text, so reflowed YAML doesn't count as a change. If the user asks what changed in one skill, run `skills <tag> --diff <id>` and summarize it.
+1. **Check** (read-only, no approval). Save the fetcher from "Box copy" if `/workspace/t3tots_fetch.py` is missing or differs, then run `python3 /workspace/t3tots_fetch.py check`. It prints installed vs latest tag, the changed tool files, the release notes, then one skills line (`new`, `changed (+a/-b lines, description)`, `placeholder`, `unchanged`, `not in release`) and one line per skill that isn't unchanged. Only `t3-*` skills are compared; frontmatter is compared by name and description text, so reflowed YAML doesn't count as a change. If the user asks what changed in one skill, run `skills <tag> --diff <id>` and summarize it.
 2. **Show and ask once.** One short message: installed and latest tag, 2 to 4 lines of the notes, changed scripts, new and changed skills, and any live t3-* skill the release no longer has. Nothing changed in scripts or skills: say it's up to date and stop. Scripts current but skills differ (for example a skill edited by hand): still offer the skills. Skills the check calls `placeholder` are the short copies a bot template ships: don't ask about those, save the full copies ("After an update") and say "saved the full copies of N skills". Ask "Update to <tag>?". The user can answer "yes, but skip <skill>"; leave that skill out.
 3. **On yes**, in this order:
    a. Box: `python3 /workspace/t3tots_fetch.py update <tag>` (skip if `VERSION` already says that tag). It verifies against that tag's `manifest.json` and replaces the box manifest.
@@ -305,7 +306,7 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 
 | Check | If so |
 |---|---|
-| `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of `PLAN.json` in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are this bot's own skills, and a skill edited by hand is never touched. One line to the user: "Saved the full copies of N skills." |
+| First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of `PLAN.json` in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are this bot's own skills, and a skill edited by hand is never touched. One line to the user: "Saved the full copies of N skills." |
 | Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
 
 A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
@@ -321,4 +322,4 @@ It updates only T3 Tots scripts and t3-* skills. Never update T3 Code, Node, gh 
 
 The routine's prompt starts with this text. A template may add reminders after it, as long as they repeat this section and change nothing:
 
-> T3 Tots weekly update. Follow t3-install-tools "Weekly update run" and t3-tots-rules. Send nothing when T3 Tots is already on the latest release.
+> T3 Tots weekly update. Follow t3-install-tools "Weekly update run" and t3-tots-rules. Send nothing when T3 Tots is already on the latest release and nothing changed.
