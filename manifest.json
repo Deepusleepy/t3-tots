@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.32",
+ "version": "v1.4.33",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.32/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.33/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -66,8 +66,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 88997,
-   "sha256": "a682a7cd6f73a299f28b1de6edf9f2b1e1625ce37a6b739d537a895f27636078",
+   "bytes": 106630,
+   "sha256": "5448271d3f2ed99fb2d2c87a5e44f807a70800af783eb335ad01d900890ecab7",
    "targets": [
     "macos",
     "linux",
@@ -257,7 +257,7 @@
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
    "bytes": 13180,
-   "sha256": "56a53960fa61c7f23144a8a4f773c564240e35325b90adfb27c49ada5a6651d6"
+   "sha256": "0576fd867d1dc8f015fddd215ce834bf7e71aa79bfe4bc775dfff34a9a9b427e"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -271,7 +271,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 29059,
-   "sha256": "508dc0880f48bb592dcecdb4010898787dad09ce2a16d1037887a5f4c90730d8"
+   "sha256": "647c8bb6583376b9afb9e3da2fb1e8efcc251f16bbb33e24ad19247b7807c083"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -284,8 +284,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 15335,
-   "sha256": "41b987fd494e11ffbeded2c3b16d7ab20e3846ac5483b740008c1414d97fcc5f"
+   "bytes": 17212,
+   "sha256": "77363d13d17abf3fb24435729ee932c2c287c548f64261b9dd437ed11a94f2d4"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
@@ -347,8 +347,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 26151,
-   "sha256": "4470312cd13e350b9e7fb5a6d11a4b2ab56ba724778526619d25b1ff71f8b121"
+   "bytes": 26618,
+   "sha256": "e7a23d978fda47bdce7fa9dc73ad2733e480de5374979040adf8fb9a2f6436eb"
   },
   {
    "path": "skills/t3-update/SKILL.md",

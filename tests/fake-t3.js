@@ -31,7 +31,7 @@ async function startFake(config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-fake-"));
   copyTools(dir);
   fs.writeFileSync(path.join(dir, "token"), "test-fixture");
-  const posts = [], commands = [], projects = [{ id: "p1", title: "proj" }], threads = new Map(), projections = new Map(), sockets = new Set(), threadReads = new Map();
+  const posts = [], commands = [], projects = [{ id: "p1", title: "proj" }, { id: "p2", title: "other" }], extraHooks = [], threads = new Map(), projections = new Map(), sockets = new Set(), threadReads = new Map();
   let readDelay = () => 0; // ms to hold a thread read, to stand in for a large thread
   let hookStatus = () => 200, hits = 0; // hookStatus returns a status, or { status, body, headers } for a custom refusal
   const hook = http.createServer((req, res) => {
@@ -69,6 +69,15 @@ async function startFake(config = {}) {
     });
   });
   await new Promise((r) => hook.listen(0, "127.0.0.1", r));
+  async function addHook() { // one more webhook, for a bot other than the main one
+    const h = { posts: [], hits: 0, status: () => 200 };
+    const srv = http.createServer((req, res) => {
+      let b = ""; req.on("data", (c) => (b += c));
+      req.on("end", () => { h.hits++; const e = JSON.parse(b), a = h.status(e), st = typeof a === "number" ? a : a.status; if (st === 200) h.posts.push(e); setTimeout(() => { res.writeHead(st, (typeof a === "object" && a.headers) || {}); res.end((typeof a === "object" && a.body) || (st === 200 ? "ok" : "busy")); }, (typeof a === "object" && a.delayMs) || 0); });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    h.url = `http://127.0.0.1:${srv.address().port}/hook`; h.srv = srv; extraHooks.push(h); return h;
+  }
   await new Promise((r) => t3.listen(0, "127.0.0.1", r));
   fs.mkdirSync(path.join(dir, "t3"));
   fs.writeFileSync(path.join(dir, "t3", "server-runtime.json"), JSON.stringify({ host: "127.0.0.1", port: t3.address().port }));
@@ -79,6 +88,15 @@ async function startFake(config = {}) {
     dir, posts, commands, threads, projections,
     get out() { return out; },
     get hits() { return hits; },
+    addHook, hookUrl: () => `http://127.0.0.1:${hook.address().port}/hook`, t3Home: path.join(dir, "t3"),
+    writeConfig(extra) { fs.writeFileSync(path.join(dir, "listen.json"), JSON.stringify({ url: `http://127.0.0.1:${hook.address().port}/hook`, headers: {}, machine: "m", ...config, ...extra })); },
+    cli(args, input = "") { // run one t3listen command -> { status, stdout, stderr }; async, so this process's stand-in T3 can answer it
+      return new Promise((resolve) => {
+        const c = cp.spawn(process.execPath, [path.join(dir, "t3listen"), ...args], { env: { ...process.env, T3_HOME: path.join(dir, "t3") }, stdio: ["pipe", "pipe", "pipe"] });
+        let stdout = "", stderr = ""; c.stdout.on("data", (d) => (stdout += d)); c.stderr.on("data", (d) => (stderr += d));
+        c.on("exit", (status) => resolve({ status, stdout, stderr })); c.stdin.end(input);
+      });
+    },
     reads(id) { return threadReads.get(id) || 0; },
     setHookStatus(fn) { hookStatus = fn; },
     setReadDelay(fn) { readDelay = fn; },
@@ -102,8 +120,8 @@ async function startFake(config = {}) {
     },
     async close() {
       await f.stop(); for (const s of sockets) s.sock.destroy();
-      hook.closeAllConnections(); t3.closeAllConnections();
-      await Promise.all([new Promise((r) => hook.close(r)), new Promise((r) => t3.close(r))]);
+      hook.closeAllConnections(); t3.closeAllConnections(); for (const h of extraHooks) h.srv.closeAllConnections();
+      await Promise.all([new Promise((r) => hook.close(r)), new Promise((r) => t3.close(r)), ...extraHooks.map((h) => new Promise((r) => h.srv.close(r)))]);
       fs.rmSync(dir, { recursive: true, force: true });
     },
   };

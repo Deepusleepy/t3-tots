@@ -62,6 +62,14 @@ Success prints `answered "<title>": ... (request resolved)`; confirm in one line
 
 After a successful answer, t3ctl lists any other requests still open in that thread. Deal with them, or tell the user to clear them in T3.
 
+## More bots (optional)
+One listener can send to several bots. This bot, the main one, gets everything until it is unsubscribed from something. Another bot gets only what it is subscribed to. Several bots may get the same project. What no bot is subscribed to reaches nobody, questions and failures included, so say that plainly before you leave a project with no bot. Run these in the tools folder on every computer that runs the listener; a running listener picks the change up within a few seconds.
+- "Give <project> its own bot", "send <project> to <bot> too": that bot needs its own webhook routine with the prompt under "Routine prompt". Open a window as in Setup step 2, with `node t3listen bot add <name> --project '<project>'` in place of `setup` (repeat `--project` for more; add `--events questions,failed` to narrow it; the command refuses a bot with neither, unless `--everything` is given, and an existing name needs `--replace` to change its webhook). The user pastes that bot's URL and Authorization line there, never in chat. Then `node t3listen test --bot <name>` must print `OK`.
+- "Stop sending <project> here", "mute <project>": `node t3listen unsubscribe main --project '<project>'`. Add `--events finished,cancelled` to stop only those kinds, or leave `--project` out to stop a kind everywhere. Undo with `node t3listen subscribe main` and the same options.
+- Change another bot the same way with its name in place of `main`. `node t3listen bots` lists who gets what; `node t3listen bot remove <name>` removes one.
+- Kinds: `questions`, `approvals`, `finished`, `cancelled`, `failed`. A project is saved by its T3 id, so a rename changes nothing. Every question and run-end event carries `projectId` next to `project`.
+- A bot that should answer or act on its events needs T3 Tots set up for itself. Without that it can only report what the event says.
+
 ## Status, pause, off
 - `node t3listen status`: autostart, running, how many open questions were sent, and the last log lines (`listen.log` in the tools folder).
 - Approvals: the listener sends them when `listen.json` has `"approvals": true` or the service was installed with `--approvals`, and `node t3listen status` says which. Turn them on only when the user explicitly asks: `node t3listen install --approvals`. `node t3listen install` drops the flag again; if status still says `listen.json`, the user turns it off in that file.
