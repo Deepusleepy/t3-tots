@@ -1656,3 +1656,9 @@ test("questions, live: a question answered in T3 while its opening still waits f
     assert.equal(f.hits, 1);
   } finally { await f.close(); }
 });
+test("install: its output tells an agent on older skills that skills and tools must match", () => {
+  const note = l.skillsNote();
+  assert.match(note, /^NEXT \(for the agent that ran this\)/); assert.match(note, /"After an update"/); assert.match(note, /thread\.failed\.batch/);
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
+  assert.equal((src.match(/installedLine\(`installed: /g) || []).length, 4, "every way install can succeed prints it");
+});

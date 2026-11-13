@@ -1004,6 +1004,11 @@ const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
 // After a crash or power loss listen.pid stays, and its number may now belong to any other program. Only a process that is
 // really this listener counts as running.
 const askOs = (c, a) => { try { return { ok: true, out: cp.execFileSync(c, a, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"], windowsHide: true }) }; } catch { return { ok: false, out: "" }; } };
+// An update run by an older skill restarts the listener with this command and reads what it prints, so this is where a
+// bot whose skills are older than the tools learns that they must match.
+const skillsNote = () => { let v = ""; try { v = fs.readFileSync(path.join(DIR, "VERSION"), "utf8").trim(); } catch {}
+  return `NEXT (for the agent that ran this): the T3 Tots skills on the bot must be the same version as these tools${v ? ` (${v})` : ""}. If they are older, update them now ("update T3 Tots", from github.com/Deepusleepy/t3-tots), then do every check in the t3-install-tools skill under "After an update". Skills older than v1.4.31 ignore thread.failed.batch, so failures that arrive together would not reach the user.`; };
+const installedLine = (line) => { console.log(line); console.log(skillsNote()); };
 function pidIsListener(pid, platform = process.platform, exec = askOs, alive = (p) => { try { process.kill(p, 0); return true; } catch (e) { return e.code === "EPERM"; } }) {
   const r = platform === "win32" ? exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${+pid}").CommandLine`])
     : exec("ps", ["-p", String(+pid), "-o", "command="]);
@@ -1037,21 +1042,21 @@ function install() {
     const dom = `gui/${process.getuid()}`; tryRun("launchctl", ["bootout", `${dom}/${LABEL}`]);
     let r = tryRun("launchctl", ["bootstrap", dom, plistPath()]); if (!r.ok) { cp.spawnSync("sleep", ["1"]); r = tryRun("launchctl", ["bootstrap", dom, plistPath()]); }
     if (!r.ok) die("INSTALL_FAILED", r.out.trim());
-    console.log(`installed: LaunchAgent ${plistPath()} (starts at login, restarts if it crashes; log ${LOG})`);
+    installedLine(`installed: LaunchAgent ${plistPath()} (starts at login, restarts if it crashes; log ${LOG})`);
   } else if (process.platform === "win32") {
     for (const p of winProcs()) try { process.kill(p); } catch {}
     const action = `New-ScheduledTaskAction -Execute ${psq(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "conhost.exe"))} -Argument ${psq(["--headless", node, ...args].map((a) => `"${a}"`).join(" "))} -WorkingDirectory ${psq(DIR)}`;
     const r = tryRun("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
       `$ErrorActionPreference='Stop'; $a=${action}; $t=New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\\$env:USERNAME"; $s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew; $p=New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\\$env:USERNAME" -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName ${psq(TASK)} -Action $a -Trigger $t -Settings $s -Principal $p -Force | Out-Null; Start-ScheduledTask -TaskName ${psq(TASK)}`]);
-    if (r.ok) { console.log(`installed: Task Scheduler task "${TASK}" (runs hidden at logon; log ${LOG})`); return; }
+    if (r.ok) { installedLine(`installed: Task Scheduler task "${TASK}" (runs hidden at logon; log ${LOG})`); return; }
     // no permission for a logon task: fall back to a hidden Startup-folder shortcut
     ps(`$w=New-Object -ComObject WScript.Shell; $l=$w.CreateShortcut(${psq(startupLnk())}); $l.TargetPath=${psq(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "conhost.exe"))}; $l.Arguments=${psq(["--headless", node, ...args].map((a) => `"${a}"`).join(" "))}; $l.WorkingDirectory=${psq(DIR)}; $l.WindowStyle=7; $l.Save(); Start-Process -WindowStyle Hidden -FilePath $l.TargetPath -ArgumentList $l.Arguments -WorkingDirectory ${psq(DIR)}`);
-    console.log(`installed: Startup shortcut "${startupLnk()}" (Task Scheduler said: ${r.out.trim().split("\n")[0].slice(0, 160)}); log ${LOG}`);
+    installedLine(`installed: Startup shortcut "${startupLnk()}" (Task Scheduler said: ${r.out.trim().split("\n")[0].slice(0, 160)}); log ${LOG}`);
   } else {
     const unit = systemdUnit(node, args, DIR, Object.fromEntries(["T3_HOME", "T3CODE_HOME"].filter((k) => process.env[k]).map((k) => [k, process.env[k]])));
     fs.mkdirSync(path.dirname(unitPath()), { recursive: true }); fs.writeFileSync(unitPath(), unit);
     sh("systemctl", ["--user", "daemon-reload"]); sh("systemctl", ["--user", "enable", "--now", unitName()]); tryRun("systemctl", ["--user", "restart", unitName()]);
-    console.log(`installed: systemd user unit ${unitPath()} (log ${LOG})`);
+    installedLine(`installed: systemd user unit ${unitPath()} (log ${LOG})`);
   }
 }
 function uninstall() {
@@ -1216,5 +1221,5 @@ t3listen bot add <name> [--project p]... [--events a,b] [--everything] [--replac
 t3listen subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]   change what a bot gets; events: questions, approvals, finished, cancelled, failed
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
-if (require.main !== module) module.exports = { afterTimeouts, MAX_TIMEOUTS, pidIsListener, mergeMissed, compileRouting, routeNames, eventGroup, EVENT_GROUPS, botText, stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
+if (require.main !== module) module.exports = { skillsNote, afterTimeouts, MAX_TIMEOUTS, pidIsListener, mergeMissed, compileRouting, routeNames, eventGroup, EVENT_GROUPS, botText, stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };
 else ({ run, setup, test, bots: botsCmd, bot: botCmd, subscribe: () => subscribeCmd(false), unsubscribe: () => subscribeCmd(true), "preview-finish": previewFinish, install: async () => install(), uninstall: async () => uninstall(), status: async () => status() }[cmd] || (async () => console.log(USAGE)))().catch((e) => { console.error("error:", e.message); process.exit(1); });

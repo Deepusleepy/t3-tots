@@ -36,7 +36,7 @@ PINNED = {
  "tools/t3q.py": ["t3q.py", "01ff4476b33f3623b4e7c36a696e1fcc89f3b6101ef11c464235bc29d1fadc1b"],
  "tools/t3ctl": ["t3ctl", "cafd839cb4275f9b69af6d1ab2d33ba158999a01320b9b47db256d36aeb63191"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "c31cd33c8c2579bf9fd41e4ad22f6dce1b994d32eb9254a46c242f6832794655"],
+ "tools/t3listen": ["t3listen", "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
@@ -93,6 +93,7 @@ def install_box(tag, mb):
         if (DST / d).exists(): os.chmod(DST / d, 0o755)
     (DST / "VERSION").write_text(tag + "\n")
     print(f"OK {tag}: {len(got)} files verified in {DST}" + (f" (from {SRC})" if SRC else ""))
+    print('NEXT: open the t3-install-tools skill as it is now (it may have just been updated) and do every check under "After an update". Do not skip this: it holds the changes that are made on the bot side.')
 def files(os_):  # this OS's tools, then manifest.json itself (verified by `box`), so computers get it next to VERSION
     if not (DST / "manifest.json").exists(): sys.exit("NO_BOX_COPY: run `box` first")
     mb = (DST / "manifest.json").read_bytes(); m = json.loads(mb)
@@ -287,14 +288,24 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
    d. Apply: the main Grok Bot agent goes through `PLAN.json` in order and calls UpdateSkill once per entry with that json's name, description and body (action write; pass id to rewrite an existing skill, omit id to create a new one). Skip skills the user excluded. A subagent can't call UpdateSkill: it stops after step c and hands the main agent the folder path and the plan.
    e. t3-install-tools goes last. Its prepared body already pins `<tag>` and that tag's tool hashes (the fetcher rewrites `PIN` and `PINNED` from the manifest, and keeps the live body if that release's copy has no skill sync). After its UpdateSkill, copy the folder's `t3tots_fetch.py` over `/workspace/t3tots_fetch.py` (or save the fetcher from the updated skill), then run `python3 /workspace/t3tots_fetch.py box`. It must print `OK <tag>`; a `HASH_MISMATCH` means the pin and the box disagree, so stop and report.
    f. Skills listed under `not_in_release_ask_default_keep`: list them and ask "Delete <ids>?". Default keep; delete only after a separate yes.
-   g. Update the T3 Tots version in memory. Finish in one line: tag, where the scripts were installed, skills updated and created, skills kept or skipped, and where t3listen restarted.
+   g. Do every check under "After an update" below, reading that section from the skill as it is after step e, not from what you read before the update.
+   h. Update the T3 Tots version in memory. Finish in one line: tag, where the scripts were installed, skills updated and created, skills kept or skipped, and where t3listen restarted.
 4. **Rollback**: the same steps with the previous tag (`update <previous tag>`, then `skills <previous tag> --write` and apply). Older tags stay on GitHub.
 5. **Private repo**: `check` can't see releases, so get the tag with `gh release view` (see "Private repo"), unpack that release on the box, and pass `--from <folder>` to `update` and `skills <tag>`.
+
+## After an update
+Some changes live on the bot side, not in the scripts or skills: a routine's prompt, a memory note. This is the one list of them. Each check looks at how things are now, so it is right whatever version the user came from, and doing it twice changes nothing. Do all of them after every update (step 3g), when `t3tots_fetch.py` prints `NEXT:`, in a weekly update run, and when the user says "check my T3 Tots setup". Then save one memory note: "T3 Tots bot-side checks done for <tag>". If that note names an older tag than the installed `VERSION`, or is missing, the checks are still owed: do them before anything else in a T3 Tots update or setup conversation.
+
+| Check | If so |
+|---|---|
+| Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
+
+A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
 
 ## Weekly update run
 The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this. Turning it on is the user's yes for each later run, so don't ask.
 1. Run "Update T3 Tots" step 1. If the latest tag is the installed tag, send nothing and stop, even when a skill differs from the release (a hand edit stays until the user asks).
-2. If a newer tag exists, run step 3 a to e and g for it. Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, don't restart it; it runs the new version from its next login.
+2. If a newer tag exists, run step 3 a to e, g and h for it. Skip step f: a routine run never deletes a skill. List offline computers instead of retrying them. If neither `t3listen status` nor memory says whether a listener used `--approvals`, don't restart it; it runs the new version from its next login.
 3. Send one short message: the old and new tag, 2 to 4 lines of the notes, what was updated where, and anything left for the user (offline computers, listeners not restarted yet, skills the release no longer has).
 4. `HASH_MISMATCH`, `REPO_PRIVATE_OR_MISSING` or a failed step installs nothing more. Say what was and wasn't updated, once per tag and error, and note it in memory so later runs stay quiet until the tag or the error changes.
 

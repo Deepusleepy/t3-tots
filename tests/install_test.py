@@ -87,6 +87,7 @@ class Fetcher(unittest.TestCase):
 
     def test_box_install_is_flat_and_verified(self):
         r = run(self.f, "box", "--from", str(ROOT), dst=self.dst)
+        self.assertIn('NEXT: open the t3-install-tools skill as it is now', r.stdout)  # the one line an older skill's update flow is sure to see
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         for f in TOOLS:
             self.assertEqual(sha((self.dst / f["dest"]).read_bytes()), f["sha256"], f["dest"])
