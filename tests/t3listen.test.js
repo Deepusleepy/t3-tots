@@ -722,7 +722,8 @@ test("state, live: a save Windows refuses while another process has listen-state
   } finally { await f.close(); }
 });
 test("reliability settings: catch-up is capped at 30 minutes by default, the rest are off; bad values fall back to the defaults", () => {
-  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, runEndsPerMinute: 10, failureWaveMs: 0, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.deepEqual(l.reliability({}), { catchUpMinutes: 30, runEndsPerMinute: 10, failureWaveMs: 20000, failureWaveMaxMs: 120000, repeatFailureMs: 0 });
+  assert.equal(l.reliability({ failureWaveSeconds: 0 }).failureWaveMs, 0, "0 turns failure waves off");
   assert.equal(l.reliability({ runEndsPerMinute: 3 }).runEndsPerMinute, 3);
   assert.equal(l.reliability({ runEndsPerMinute: 0 }).runEndsPerMinute, 0, "0 combines every run end");
   assert.equal(l.settingsLine({ runEndsPerMinute: 3 }), "run ends combined above 3 a minute");
@@ -803,15 +804,17 @@ test("retry queue full: a batch keeps each failure it carries in listen-state.js
 });
 test("settingsLine: status names the optional listener settings that are on", () => {
   assert.equal(l.settingsLine({}), "defaults");
-  assert.equal(l.settingsLine({ catchUpMinutes: 2, failureWaveSeconds: 20, repeatFailureHours: 6 }), "catch-up of finishes and cancels capped at 2 min, failure waves 20s (up to 120s), repeat holds 6h");
+  assert.equal(l.settingsLine({ failureWaveSeconds: 20 }), "defaults");
+  assert.equal(l.settingsLine({ failureWaveSeconds: 0 }), "failure waves off");
+  assert.equal(l.settingsLine({ catchUpMinutes: 2, failureWaveSeconds: 45, repeatFailureHours: 6 }), "catch-up of finishes and cancels capped at 2 min, failure waves 45s (up to 120s), repeat holds 6h");
 });
 const isoNow = () => new Date().toISOString();
 const busyT = (id, runId) => ({ id, title: `Thread ${id}`, status: "running", activeRunId: runId, latestRunId: runId });
 const failedT = (id, runId, extra = {}) => ({ id, title: `Thread ${id}`, status: "failed", activeRunId: null, latestRunId: runId, ...extra });
 const failRun = (id, extra = {}) => ({ id, status: "failed", startedAt: "2026-11-07T04:00:00Z", completedAt: isoNow(), ...extra });
 const errItem = (runId, text) => ({ type: "error", runId, text });
-test("failure waves, live: off by default, a failure is posted once as a plain thread.failed", async () => {
-  const f = await fakeT3.startFake();
+test("failure waves, live: turned off, a failure is posted at once as a plain thread.failed", async () => {
+  const f = await fakeT3.startFake({ failureWaveSeconds: 0 });
   try {
     f.setThread(busyT("A", "r1"), { runs: [{ id: "r1", status: "running", startedAt: isoNow() }], turnItems: [] });
     f.start(); await f.waitFor(() => /watching 1 threads/.test(f.out), 8000, "first snapshot");

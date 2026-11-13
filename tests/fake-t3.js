@@ -27,7 +27,8 @@ function readFrames(state, chunk, onText) {
   }
 }
 
-async function startFake(config = {}) {
+async function startFake(given = {}) {
+  const config = { failureWaveSeconds: 0, ...given };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t3listen-fake-"));
   copyTools(dir);
   fs.writeFileSync(path.join(dir, "token"), "test-fixture");

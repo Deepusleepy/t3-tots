@@ -102,8 +102,8 @@ const numOr = (v, d) => (v === undefined || v === null || v === "" || !Number.is
 // catchUpMinutes: after a restart or a lost connection, report finishes and cancels from at most this many minutes back; older ones are counted in one thread.missed.summary
 // failureWaveSeconds / failureWaveMaxSeconds: hold a thread.failed this long for more failures; two or more post as one thread.failed.batch
 // repeatFailureHours: hold back a thread's failure with the same error as its last post within this many hours
-const CATCH_UP_MINUTES = 30, RUN_ENDS_PER_MINUTE = 10;
-const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_MINUTES), runEndsPerMinute: numOr(c.runEndsPerMinute, RUN_ENDS_PER_MINUTE), failureWaveMs: numOr(c.failureWaveSeconds, 0) * 1000,
+const CATCH_UP_MINUTES = 30, RUN_ENDS_PER_MINUTE = 10, FAILURE_WAVE_SECONDS = 20;
+const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_MINUTES), runEndsPerMinute: numOr(c.runEndsPerMinute, RUN_ENDS_PER_MINUTE), failureWaveMs: numOr(c.failureWaveSeconds, FAILURE_WAVE_SECONDS) * 1000,
   failureWaveMaxMs: numOr(c.failureWaveMaxSeconds, 120) * 1000, repeatFailureMs: numOr(c.repeatFailureHours, 0) * 3600e3 });
 // ---------- bots: who gets which events ----------
 // listen.json "url" and "headers" are the main bot. "bots" adds more webhooks. Every bot, the main one included, follows one rule:
@@ -360,8 +360,8 @@ function retryLater(item) {
   if (how === "parked") { saveState(); log(`retry queue is full; ${item.e.event} ${ref(item.e).slice(-12)} is saved and retried when there is room`); }
   else if (how === "dropped") log(`retry queue is full and ${item.e.event} ${ref(item.e).slice(-12)} has no saved state, so it is dropped`);
 }
-// ---------- failure waves and repeats (off unless listen.json sets them) ----------
-// failureWaveSeconds: a thread.failed waits that long for more failures (the wait restarts with each one, up to failureWaveMaxSeconds
+// ---------- failure waves (on, 20 s) and repeats (off unless listen.json sets them) ----------
+// failureWaveSeconds (0 turns it off): a thread.failed waits that long for more failures (the wait restarts with each one, up to failureWaveMaxSeconds
 // after the first). One failure alone is sent as a plain thread.failed; two or more are sent once as thread.failed.batch.
 // repeatFailureHours: a thread that fails again with the same error as its last sent failure within that window is held back
 // (counted in listen-state.json "failRepeat"); the next failure that is sent carries repeatsSuppressed and repeatsSince.
@@ -419,7 +419,7 @@ async function flushWave() {
 // Every POST starts work on the receiving side, so a finish or cancel gets its own message only when it is fresh and few
 // are going out. It is counted instead, and sent with the others as one thread.missed.summary, when it is older than the
 // catch-up window, when the webhook is rate limited, when it could not be delivered for an hour, or when more than
-// runEndsPerMinute (default 10) went out in the last minute. Failures and questions are never combined.
+// runEndsPerMinute (default 10) went out in the last minute. Failures and questions never go into it.
 const RUN_END_KEEP_MS = 3600e3;
 const perishable = (e) => e.event === "thread.finished" || e.event === "thread.cancelled";
 const staleRunEnd = (e, since, now = Date.now()) => perishable(e) && now - since > RUN_END_KEEP_MS;
@@ -1038,7 +1038,7 @@ function settingsLine(c) {
   const r = reliability(c || {}), on = [];
   if (r.runEndsPerMinute !== RUN_ENDS_PER_MINUTE) on.push(`run ends combined above ${r.runEndsPerMinute} a minute`);
   if (r.catchUpMinutes !== CATCH_UP_MINUTES) on.push(`catch-up of finishes and cancels capped at ${r.catchUpMinutes} min`);
-  if (r.failureWaveMs > 0) on.push(`failure waves ${r.failureWaveMs / 1000}s (up to ${r.failureWaveMaxMs / 1000}s)`);
+  if (r.failureWaveMs !== FAILURE_WAVE_SECONDS * 1000 || r.failureWaveMaxMs !== 120000) on.push(r.failureWaveMs > 0 ? `failure waves ${r.failureWaveMs / 1000}s (up to ${r.failureWaveMaxMs / 1000}s)` : "failure waves off");
   if (r.repeatFailureMs > 0) on.push(`repeat holds ${+(r.repeatFailureMs / 3600e3).toFixed(4)}h`);
   try {
     const p = presenceSettings(c || {});
