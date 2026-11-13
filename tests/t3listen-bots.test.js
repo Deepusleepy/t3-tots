@@ -258,3 +258,15 @@ test("bot commands: --events with no value is refused, and an approvals subscrip
     assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /approvals are sent only when they are turned on/);
   } finally { await f.close(); }
 });
+test("bots, live: a new main webhook in listen.json is used by the running listener, not only after a restart", async () => {
+  const f = await startFake();
+  try {
+    const moved = await f.addHook();
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await finish(f, "A", "p1"); await f.waitFor(() => f.posts.length === 1, 5000, "the first finish at the first webhook");
+    f.writeConfig({ url: moved.url });
+    await f.waitFor(() => /listen\.json changed/.test(f.out), 8000, "the reload");
+    await finish(f, "B", "p1"); await f.waitFor(() => moved.posts.length === 1, 5000, "the next finish at the new webhook"); await sleep(500);
+    assert.deepEqual([runIds(f.posts), runIds(moved.posts)], [["A1"], ["B1"]]);
+  } finally { await f.close(); }
+});

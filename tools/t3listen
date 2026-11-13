@@ -451,7 +451,7 @@ function mergeMissed(a, b) { // two counts into one
 }
 const missedEvent = (m, machine) => ({ event: "thread.missed.summary", kind: "thread-missed-summary", machine, title: `${m.count} run ends`, count: m.count,
   firstAt: m.firstAt, lastAt: m.lastAt, firstAtLocal: m.firstAt && localTime(m.firstAt), lastAtLocal: m.lastAt && localTime(m.lastAt), threads: m.titles });
-function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",") || e.sentAt}`).digest("hex").slice(0, 16); }
+function stamp(e) { cleanEvent(e); e.text = summary(e); e.sentAt = new Date().toISOString(); e.eventId = crypto.createHash("sha256").update(`${e.event}|${ref(e) || (e.failures || []).map((f) => f.runId).join(",") || (e.event === "thread.missed.summary" ? `${e.count}|${e.firstAt}|${e.lastAt}` : e.sentAt)}`).digest("hex").slice(0, 16); }
 const sentLine = (e, r, extra = "") => `sent ${e.event} "${e.title}" ${ref(e).slice(-12)}${e.event === "request.resolved" ? ` answeredHere=${e.answeredHere}` : ""} -> HTTP ${r.status}${extra}`;
 const transportFailure = (r) => !r.ok && !r.suppressed && (!r.status || r.status >= 500);
 const MAX_BOT_PENDING = 200;
@@ -623,9 +623,12 @@ async function deliver(e, opts = {}) { // opts.now: send without the failure-wav
   return sendTo(e, ds);
 }
 function reloadBots() { // listen.json changed while running (t3listen bot / subscribe / unsubscribe): pick up the new bots and rules
-  let c; try { c = JSON.parse(fs.readFileSync(CONF, "utf8")); C.routing = compileRouting(c); }
-  catch (err) { log(`listen.json changed but can't be used (${err instanceof SyntaxError ? "it is not valid JSON" : err.message}); keeping the bots and rules from before`); return; }
-  syncBots(); saveState(); log(`listen.json changed: ${bots.size - 1} extra bot(s); subscriptions reloaded`);
+  let c; try {
+    c = JSON.parse(fs.readFileSync(CONF, "utf8")); const routing = compileRouting(c);
+    if (!hookUrlOk(c.url)) throw new Error("url must start with https:// (http only for localhost)");
+    C.routing = routing; C.url = c.url; C.headers = c.headers || {}; // the main bot's webhook and key too, so a new one is used at once
+  } catch (err) { log(`listen.json changed but can't be used (${err instanceof SyntaxError ? "it is not valid JSON" : err.message}); keeping the bots and rules from before`); return; }
+  syncBots(); saveState(); log(`listen.json changed: ${bots.size - 1} extra bot(s); webhooks and subscriptions reloaded (other settings apply after a restart)`);
 }
 let pruned = Date.now();
 setInterval(() => { if (DRY || !C) return; if (Date.now() - pruned > 3600e3) { pruned = Date.now(); pruneFinished(); saveState(); } for (const b of bots.values()) b.retryRound().catch((err) => log("error:", err.message)); }, 60000).unref();
