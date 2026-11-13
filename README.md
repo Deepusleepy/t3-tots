@@ -66,6 +66,8 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
+Every event starts a new bot run, so what that run reads is kept small. The routine's own prompt (about 2,000 characters) handles finishes, failures, summaries and closes without reading any file. A question or approval adds one small skill, [t3-event](skills/t3-event/SKILL.md) (about 5,400 characters). Before v1.4.33 every event read two skills, about 48,000 characters. A routine set up before v1.4.33 keeps working with its old prompt; "update T3 Tots" replaces the prompt, or say "update the phone answers routine".
+
 ### Active-use suppression (optional, macOS and Windows desktop)
 
 Set `"suppressWhileActive": true` in `listen.json` to skip automatic webhook notifications while T3 Code is foreground and system input was used within the last 15 minutes. Set `"activeIdleMinutes": 5`, for example, to choose a shorter window (a positive number). Suppression is off by default and applies to questions, approvals, run ends, failure batches and the missed-run summary, including retries and catch-up. It works on macOS and Windows; on Linux the setting has no effect, and `t3listen status` says so. A burst of events shares one check for 10 seconds. Suppressed events are remembered, not sent later; the resolution of a suppressed question stays quiet too. Resolutions of delivered questions still go through, so the receiver can close its cards (unless `filters.resolved` is false). Test and dry-run/preview commands still work.

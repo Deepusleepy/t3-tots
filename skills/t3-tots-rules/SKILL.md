@@ -1,7 +1,8 @@
 ---
 name: t3-tots-rules
 description: >-
-  Shared rules and tools for every t3-* (T3 Tots) skill. Read before running any of them.
+  Shared rules and tools for every t3-* (T3 Tots) skill. Read before running any of them,
+  except in a run of the "T3 questions to chat" webhook routine, which t3-event covers alone.
 ---
 # T3 Tots rules
 
@@ -14,7 +15,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 |---|---|
 | t3-new-thread, t3-templates, t3-get-output, t3-pm-thread | Prompts into T3 |
 | t3-thread-actions | The thread action asked: `settle`, `unsettle`, `archive`, `unarchive`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
-| t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, under "Decisions" below |
+| t3-waiting, t3-phone-answers, t3-event, t3-watch | Answers to questions and approvals, under "Decisions" below |
 | t3-watch (delegated mode) | One nudge per stall (`send`), `queue --resume` once for a stuck queue, and `resume-at-reset` on a usage limit |
 | t3-phone-answers | `t3listen` setup, after a yes, and its bots and subscriptions when the user asks for a change. `t3listen` itself arms Resume at reset for threads T3 Tots started and for projects in `autoresume.json` ("Tools on each computer"). In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
 | t3-update, t3-sync | The items the user picked |
