@@ -209,3 +209,10 @@ Report issues in [SECURITY.md](SECURITY.md).
 - `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, and updates the manifest. It copies nothing if the scan fails.
 - Never decide an approval by reading its text. T3 often shows a description instead of the command. Approval decisions go through `approvalAuthority`.
 - Release only from a tag. Installers download by tag and check every hash.
+
+## Thanks
+
+- [@mzkmnk](https://github.com/mzkmnk): the idea behind project bots. Their fork ran a separate listener per project, which led to bots that subscribe to projects and events (v1.4.33).
+- [@0xmythril](https://github.com/0xmythril): the report of the notification flood after a long outage, with the numbers that made it fixable (#40, fixed in v1.4.32).
+- [@pablog12](https://github.com/pablog12): notification filters and grouped failures (#38, #39, v1.4.31).
+- [@balasivagn](https://github.com/balasivagn): staying quiet while you are at T3 Code, on macOS (#41, v1.4.32).
