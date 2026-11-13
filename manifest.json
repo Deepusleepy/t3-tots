@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.4.33",
+ "version": "v1.4.34",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.33/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.34/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -263,8 +263,8 @@
    "path": "skills/t3-getting-started/SKILL.md",
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
-   "bytes": 13180,
-   "sha256": "0576fd867d1dc8f015fddd215ce834bf7e71aa79bfe4bc775dfff34a9a9b427e"
+   "bytes": 15280,
+   "sha256": "dc26acb46b1680a2a36001fc56296990b23817f22f5b83816a3be2ce5b094e87"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -277,8 +277,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 30734,
-   "sha256": "1ca2daf11ceadc1a948fb7f064c9279b37549b384d09151c45498c12d32136c0"
+   "bytes": 61616,
+   "sha256": "de665f0010d9bc5a1748558bf37ab013fbc159a7c1c8c4637fb047407f8b9653"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -291,8 +291,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 20829,
-   "sha256": "b7694f2ab73196abe0da15dd3d62c3137ebc0416ed5ddb37aa8d87afb2f2905f"
+   "bytes": 21030,
+   "sha256": "ca303362b5c4420c973475d2debd36291b8af74b5aef56df7c6f65691efdb48e"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
@@ -354,8 +354,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 27514,
-   "sha256": "d18322372f77d11087db37d42f8bc8e545d1b5a92f9f87782654fc41a028a256"
+   "bytes": 27671,
+   "sha256": "0b6b78ada2193c8e56407d79d76a37f2799ccc2a15207eb68d02d726fef30251"
   },
   {
    "path": "skills/t3-update/SKILL.md",

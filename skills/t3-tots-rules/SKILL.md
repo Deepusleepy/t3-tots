@@ -113,7 +113,7 @@ Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows 
 Read-only database queries. It needs no token. Commands: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. Settings: `T3_DAYS`, `T3_ALL=1`, `T3_Q` (thread words or id), `T3_LAST`, `T3_WEEK=1`.
 
 ### t3ctl
-Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Updating". Don't retry other spellings.
+Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Update T3 Tots (scripts and skills)". Don't retry other spellings.
 
 | Area | Commands |
 |---|---|
@@ -171,7 +171,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `T3_NOT_RUNNING`, `T3_NOT_REACHABLE`, `NO_T3` | Open T3 Code |
 | `NO_TOKEN`, `TOKEN_REJECTED` | Issue or reissue the token ("Token" below) |
 | `NODE_TOO_OLD`, `PYTHON_TOO_OLD` | Upgrade (t3-getting-started lists per-OS commands) |
-| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Updating"); use `t3ctl` meanwhile |
+| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Update T3 Tots (scripts and skills)"); use `t3ctl` meanwhile |
 | `T3_DB_BUSY` | Retry in a few seconds |
 | `BAD_SETTING` | A number setting such as `T3_DAYS` or `T3_LAST` isn't a whole number of 1 or more. Fix it and rerun |
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
@@ -212,7 +212,7 @@ The token gives write access to T3. Issue or reissue it only after the user's ye
 Check the token only by running `t3ctl projects`. Record the issue date and the 90-day expiry in `README.md`, with how to revoke it: `t3 auth session list`, then `t3 auth session revoke <id>`.
 
 ## Opt-in features
-Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. Turning on T3 Tots weekly update also counts as the yes for its runs to install a newer T3 Tots release (t3-install-tools "Weekly update run"). "Update T3 Tots" in chat still shows the plan and asks. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
+Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. T3 Tots weekly update follows the update mode the user chose (t3-install-tools "Update mode"): only "Update by myself" (auto) is the yes for its runs to install a newer T3 Tots release; in "Tell me first" (notify) it reports and installs nothing. "Update T3 Tots" in chat still shows the plan and asks. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
 
 ## Memory
 - Save decisions, modes and preferences, not activity. A check where nothing changed is not worth a memory entry or a journal line.
