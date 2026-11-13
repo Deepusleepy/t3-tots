@@ -408,7 +408,7 @@ class SkillSync(unittest.TestCase):
         self.release(self.rels / self.OLD, self.OLD, was); self.release(self.rels / self.ver, self.ver, self.now)
         for n, t in self.now.items():
             (self.live / n).mkdir(parents=True); self.put(n, t)
-        self.put("t3-status", "---\nname: t3-status\ndescription: >-\n  Short live answer. Use for status.\n---\nFull skill (pinned release): https://raw.githubusercontent.com/Deepusleepy/t3-tots/" + self.ver + "/skills/t3-status/SKILL.md\nFetch and follow it before any step.\n")
+        self.put("t3-status", self.stub("t3-status"))
         self.put("t3-waiting", self.now["t3-waiting"] + "\nMy own extra rule.\n")                              # edited by the owner; the release didn't change it
         head, _, rest = was["t3-digest"].partition("\n---\n")
         self.put("t3-digest", head + "\n---\nMy note at the top.\n" + rest)                                    # the owner's edit is far from the release's change
@@ -416,6 +416,11 @@ class SkillSync(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def stub(self, sid, tag=None, extra=""):  # the placeholder a template ships, as the importing bot stores it
+        tag = tag or self.ver
+        return (f"---\nname: {sid}\ndescription: Short live answer. Use for status.\n---\nFollow t3-tots-rules.\n\nFull skill (pinned release {tag}): "
+                f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{tag}/skills/{sid}/SKILL.md\nFetch and follow it before running any step not shown here.\n{extra}")
 
     def put(self, n, t):
         (self.live / n / "SKILL.md").write_bytes(t.encode("utf-8"))
@@ -587,6 +592,23 @@ class SkillSync(unittest.TestCase):
         r = self.fetch("skills", self.ver, "--from", str(ROOT), "--write"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertRegex(r.stdout, r"skill both: t3-usage .*can't be read"); self.assertNotIn("skill yours: t3-usage", r.stdout)
         self.assertEqual(self.plan()["apply_in_order"], [])
+
+    def test_only_the_exact_template_text_is_a_placeholder_so_one_the_owner_added_to_is_asked_about(self):
+        for n in ("t3-digest", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
+        self.put("t3-status", self.stub("t3-status", "v1.4.30"))                                        # an older template's placeholder
+        self.put("t3-watch", "---\nname: t3-watch\ndescription: Watch things.\n---\nFollow t3-tots-rules.\n\nFull skill: skills/t3-watch/SKILL.md in github.com/Deepusleepy/t3-tots release v1.4.28.\n")
+        self.put("t3-usage", self.stub("t3-usage", extra="MY RULE: always answer in Spanish.\n"))         # the owner added a line to theirs
+        self.put("t3-sync", self.stub("t3-update"))                                                     # it names another skill
+        self.put("t3-templates", "---\nname: t3-templates\ndescription: Mine.\n---\nMy own short version. See skills/t3-templates/SKILL.md.\n")
+        r = self.skills("--write", "--placeholders"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("skill placeholder: t3-status", r.stdout); self.assertIn("skill placeholder: t3-watch", r.stdout)
+        self.assertRegex(r.stdout, "skill both: t3-usage", r.stdout)   # the release changed this skill too, so the owner is asked
+        for mine in ("t3-sync", "t3-templates"): self.assertRegex(r.stdout, "skill yours: " + mine, r.stdout)   # theirs, and the release didn't change it: kept
+        self.assertEqual(sorted(e["id"] for e in self.plan(self.ver + "-placeholders")["apply_in_order"]), ["t3-status", "t3-watch"])
+        self.skills("--write"); p = self.plan()
+        self.assertEqual(sorted(e["id"] for e in p["apply_in_order"]), ["t3-status", "t3-watch"])
+        self.assertEqual([e["id"] for e in p["ask_the_owner"]], ["t3-usage"]); self.assertEqual(p["yours_kept"], ["t3-sync", "t3-templates"])
+        self.assertIn("MY RULE", (pathlib.Path(p["backups"]) / "t3-usage.SKILL.md").read_text(encoding="utf-8"))
 
     def test_a_placeholders_only_run_leaves_the_choices_still_waiting_for_the_owner(self):
         self.skills("--write"); before = self.plan()["ask_the_owner"]; self.assertEqual(len(before), 2)

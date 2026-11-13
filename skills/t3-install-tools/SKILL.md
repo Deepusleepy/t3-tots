@@ -160,6 +160,20 @@ def save_state(s):
 def unpin(t):  # t3-install-tools without the release tag and tool hashes it carries, so only real edits count
     t = re.sub(r'PIN = "[^"]*"', 'PIN = ""', t, count=1); t = re.sub(r"PINNED = \{\n.*?\n\}", "PINNED = {\n}", t, count=1, flags=re.S)
     return re.sub(r"pins release `v[0-9][^`]*`", "pins release ``", t)
+# What the bot template ships in place of a full skill. Only these exact texts count as a placeholder; a short skill that is
+# anything else, such as a placeholder with a line the owner added, is the owner's and is asked about like any other edit.
+STUBS = [re.compile(r"Follow t3-tots-rules\.\n\nFull skill \(pinned release (v\d+\.\d+\.\d+)\): https://raw\.githubusercontent\.com/Deepusleepy/t3-tots/\1/skills/(?P<id>t3-[a-z-]+)/SKILL\.md\nFetch and follow it before running any step not shown here\."),
+         re.compile(r"Follow t3-tots-rules\.\n\nFull skill: skills/(?P<id>t3-[a-z-]+)/SKILL\.md in github\.com/Deepusleepy/t3-tots release v\d+\.\d+\.\d+\.")]
+SHORTENED = {  # sha256 of the hand-shortened t3-tots-rules, t3-getting-started and t3-install-tools bodies the templates shipped
+ "43a479f07679b6112468c302bc5330721e64bf077c567b34dff2598ccbe0cfbb", "5bd237f54dfd32d231ac2975be51de37859ecb815cef695700052e64388e5a02", "a4cb47ef7e0b394478455c63241dbdea547842a22d1a19da3d75f3eaf859b893",  # v1.4.28
+ "cfbf2b1aabbd5022c3811e8b56be23fdc5a0b48b6822ce7102e28b6531f8e61c", "783ac25f68253cde36969dffbdcac1b6603912d6d3414a2a1dae1a9b0c9aa1ba", "9b72dc50d294dc3185e48bb11ddb82366502ff0dc0f3953f7d27bfa31dfdcac7",  # v1.4.29
+ "dcb7ee2e7b87833712b5a6f377938ba15262fdeaa8edc6b682f619654f3bc79f",
+ "b086dcb5da91f6302e5b12f5c61b99248bf395e48e3616f2a48aadaf7f05fe9c", "e15120096d49e4948c9e58ff528b400a2b91cb77fc49ba6b9482351c6a4c03b3", "8ee3c76ef096d44ee41da6cfa87dfa2cb62150f38c8e4262b05af7a2cf7b9b24",  # v1.4.30
+ "5876699a7ac5ca6d5d0e0246fd2719261568c5d411b1b5cd7603d8752abc81cd", "dc364756e47b10f9f5adf06210551ccad1de49e253ab2ebcb1ca76b536e41f93", "4efbc58b47d7c89c02a8b7f0881f30a0fb81c3befef094ebe317e49a16f6e832",  # v1.4.33
+ "69a224a60096766b9010fd587d8b0893afbe2deaceaff09fe34b4810c001c600", "e3444df646e060ad8304b2bb77ee38a73d2cb603a01f0ad6dc9e8d45a9a07368", "cb902443ccb10a84705b99fd28b4b20ec8fd65291da108f0310acbee7c9771a5",  # v1.4.34
+}
+def placeholder(sid, body):
+    return any((m := r.fullmatch(body)) and m.group("id") == sid for r in STUBS) or sha(body.encode("utf-8")) in SHORTENED
 same = lambda sid, parts: [parts[0], parts[1], unpin(parts[2]) if sid == IT else parts[2]]  # what is compared: name, description, body
 digest = lambda sid, parts: sha(json.dumps(same(sid, parts)).encode())
 def merge3(base, yours, theirs):  # your edit and the release's change in one text, or None when they touch the same lines
@@ -218,7 +232,7 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
         lt = live[sid].read_text("utf-8"); a, b = norm(lt), norm(t)
         if a == b: st[sid] = "unchanged"; state[sid] = {"tag": tag, "sha": digest(sid, b)}; continue
         # the bot template ships short copies that point at the full skill on GitHub and download it on every use
-        if len(a[2]) * 2 < len(b[2]) and f"skills/{sid}/SKILL.md" in a[2]: st[sid] = f"placeholder (full copy is {len(b[2])} characters)"; prepared[sid] = t; continue
+        if placeholder(sid, a[2]): st[sid] = f"placeholder (full copy is {len(b[2])} characters)"; prepared[sid] = t; continue
         rec = state.get(sid) or {}; mine = digest(sid, a)
         off = rec.get("offered") or {}
         if mine in (off.get("shas") or []): rec = {"tag": off["tag"], "sha": off["base"]}  # a copy the last --write prepared was saved: it sits on that release
