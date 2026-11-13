@@ -337,7 +337,8 @@ const MAX_RETRY_QUEUE = 100;
 const stateFor = (st, e) => (e.requestId ? st.sent[e.requestId] : e.runId ? st.finished[e.runId] : null);
 const roundHeld = new Set(); // events the main bot's retry round took out of the queue and hasn't got to yet
 let posting = null; // the event the main bot's retry round is sending right now
-const waitingForRetry = (q, eventId) => !!eventId && (posting === eventId || roundHeld.has(eventId) || q.some((x) => x.e.eventId === eventId));
+const sendingNow = new Set(); // events the main bot is sending right now outside a retry round
+const waitingForRetry = (q, eventId) => !!eventId && (posting === eventId || sendingNow.has(eventId) || roundHeld.has(eventId) || q.some((x) => x.e.eventId === eventId));
 function keepForRetry(q, st, item) {
   if (item.e.eventId && (roundHeld.has(item.e.eventId) || q.some((x) => x.e.eventId === item.e.eventId))) return "queued"; // already waiting: a reconnect found it undelivered again
   const park = { e: item.e, rounds: item.rounds || 0, since: item.since, ...(item.timeouts ? { timeouts: item.timeouts } : {}), ...(item.notBefore ? { notBefore: item.notBefore } : {}) };
@@ -528,7 +529,7 @@ class Bot {
     if (perishable(e) && this.paused()) { this.combine(e, "webhook is rate limited"); return true; }
     if (perishable(e) && !runEndBudget(this.recent, Date.now(), C.runEndsPerMinute)) { this.combine(e, `more than ${C.runEndsPerMinute} run ends in a minute`); return true; }
     if (!this.paused() && !this.down()) {
-      const r = await this.post(e);
+      let r; if (this.main) sendingNow.add(e.eventId); try { r = await this.post(e); } finally { sendingNow.delete(e.eventId); }
       if (r.suppressed) { log(`suppressed ${e.event} ${ref(e).slice(-12)} (active in T3 or unseen question)${this.tag}`); this.settle(e, true); return true; }
       if (r.ok) { log(sentLine(e, r, this.tag)); delivered++; this.settle(e); return true; }
       if (r.status) log(`webhook answered HTTP ${r.status} for ${e.event} ${ref(e).slice(-12)}${r.status === 401 || r.status === 403 ? " (check the key in listen.json)" : ""}${r.body ? `: ${r.body}` : ""}${this.tag}`);
@@ -556,6 +557,7 @@ class Bot {
         const asked = e.event === "request.opened" && S.sent[e.requestId];
         if (e.event === "request.opened" && (!asked || asked.closing)) { // answered or gone before it could be sent: don't open a card for it now
           if (asked) { if (this.main) asked.suppressed = true; else asked.quietFor = [...new Set([...(asked.quietFor || []), this.name])]; }
+          if (!this.main) for (const [id, x] of Object.entries(this.st.pending)) if (x.e.event === "request.resolved" && x.e.requestId === e.requestId && !this.inFlight.has(id)) delete this.st.pending[id]; // its close would be news about a question this bot never showed
           log(`request.opened ${ref(e).slice(-12)} closed before it could be sent; not sent${this.tag}`); if (!this.main) this.settle(e); else saveState(); continue;
         }
         if (perishable(e)) {
@@ -620,6 +622,10 @@ async function deliver(e, opts = {}) { // opts.now: send without the failure-wav
   const s = e.requestId && S.sent[e.requestId];
   if (s && e.event === "request.opened") { if (s.to) ds = ds.filter((d) => d.main && s.to.includes("main")); else s.to = ds.map((d) => d.name); }
   if (s && e.event === "request.resolved") { if (s.closeRouted) ds = ds.filter((d) => d.main); else s.closeRouted = true; }
+  if (s && e.event === "request.resolved" && !s.delivered) { // the main bot never got the question: drop its waiting copy and keep the close quiet
+    const i = queue.findIndex((x) => x.e.event === "request.opened" && x.e.requestId === e.requestId);
+    if (i >= 0) { queue.splice(i, 1); s.suppressed = true; log(`request.opened ${ref(e).slice(-12)} closed before it could be sent; not sent`); }
+  }
   return sendTo(e, ds);
 }
 function reloadBots() { // listen.json changed while running (t3listen bot / subscribe / unsubscribe): pick up the new bots and rules
@@ -653,13 +659,13 @@ const lagging = new Map(), LAG_LOOKS = 40;
 const LAG_LOOK_MS = 15000;
 const lagDone = (id) => { const lag = lagging.get(id); if (lag) clearTimeout(lag.timer); lagging.delete(id); };
 async function reconcile(ep, threadId, opts = {}) {
-  const t = meta.threads.get(threadId) || {}; let p = null;
+  const t = meta.threads.get(threadId) || {}; let p = null, stale = false;
   // opts.expect: the request the live update named. The thread read can trail it by a moment, or fail once; without another
   // look the question would never be sent, because no further live update comes for it.
   for (let i = 0; !opts.gone; i++) {
     let failed = null; try { p = await threadSnap(ep, threadId); } catch (err) { failed = err; }
     if (!failed && (!opts.expect || !p || (p.runtimeRequests || []).some((r) => r.id === opts.expect))) { lagDone(opts.expect); break; }
-    if (i >= 3 || lagging.has(opts.expect)) { // looked enough for now: one read per later update, so other threads aren't held up
+    if (i >= 3 || lagging.has(opts.expect)) { stale = true; // looked enough for now: one read per later update, so other threads aren't held up
       if (failed) log(`couldn't read thread ${threadId.slice(0, 40)}: ${failed.message}`); else if (!lagging.has(opts.expect)) log(`request ${String(opts.expect).slice(-12)} is pending but T3's thread data doesn't show it yet; it is looked at again shortly`);
       if (opts.expect) {
         const lag = lagging.get(opts.expect) || { looks: 0, timer: null }; lagging.set(opts.expect, lag);
@@ -681,7 +687,7 @@ async function reconcile(ep, threadId, opts = {}) {
     const was = S.sent[r.id]; // a retry after a reconnect or restart keeps which bots already have the question
     S.sent[r.id] = { threadId, at: (was && was.at) || Date.now(), delivered: false, ...(was && was.to ? { to: was.to } : {}) }; saveState(); await deliver(e);
   }
-  if (opts.relook) return; // a timed second look only sends the question it came for; closes follow the live stream
+  if (opts.relook && stale) return; // still trailing: this look can't tell which questions closed
   for (const [id, s] of Object.entries(S.sent)) {
     if (s.threadId !== threadId || open.some((r) => r.id === id)) continue;
     const r = all.find((x) => x.id === id);
@@ -1002,7 +1008,7 @@ function pidIsListener(pid, platform = process.platform, exec = askOs, alive = (
   const r = platform === "win32" ? exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${+pid}").CommandLine`])
     : exec("ps", ["-p", String(+pid), "-o", "command="]);
   if (!r.ok) return alive(pid); // the OS couldn't be asked (no ps, PowerShell blocked): fall back to "is that pid alive", as before
-  return /\bnode(\.exe)?["']?\s.*t3listen["']?\s*(?:$|["']?(?:run\b|--))/i.test(r.out.trim()); // node running "t3listen", "t3listen run" or "t3listen --log": not an editor, and not a one-off command such as status
+  return /\bnode[\w.@-]*["']?\s.*t3listen["']?\s*(?:$|["']?(?:run\b|--))/i.test(r.out.trim()); // node running "t3listen", "t3listen run" or "t3listen --log": not an editor, and not a one-off command such as status
 }
 function winProcs() { // node processes running THIS t3listen (never touches other node processes)
   try { return ps(`Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like ${psq("*" + SELF + "*")} -and $_.CommandLine -like '* run*' } | ForEach-Object { $_.ProcessId }`).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
