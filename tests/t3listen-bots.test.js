@@ -152,9 +152,81 @@ test("bot commands: add, list, subscribe and unsubscribe edit listen.json, look 
       r = await f.cli(args); assert.equal(r.status, 1, args.join(" ")); assert.match(out(r), new RegExp(`^${word}`), args.join(" "));
     }
     r = await f.cli(["bot", "add", "main"], hook); assert.match(out(r), /^USAGE/);
-    r = await f.cli(["bot", "add", "bad"], "http://evil.example/x\n"); assert.match(out(r), /^BAD_URL/);
+    r = await f.cli(["bot", "add", "bad", "--events", "failed"], "http://evil.example/x\n"); assert.match(out(r), /^BAD_URL/);
+    r = await f.cli(["bot", "add", "copy"], hook); assert.match(out(r), /^USAGE: say what "copy" gets/, "a bot is never subscribed to everything by leaving the options out");
+    r = await f.cli(["bot", "add", "copy", "--everything"], hook); assert.equal(r.status, 0, out(r)); assert.match(r.stdout, /copy: gets everything/);
+    r = await f.cli(["bot", "add", "site", "--events", "failed"], hook); assert.match(out(r), /^EXISTS/, "an existing bot's webhook is not replaced without --replace");
+    assert.deepEqual(conf().bots.site.only, [{ projects: [{ id: "p1", title: "proj" }] }, { projects: [{ id: "p2", title: "other" }], events: ["failed"] }]);
+    r = await f.cli(["bot", "add", "site", "--replace"], "https://hooks.example/new-path\nAuthorization: Bearer newkey12345\n"); assert.equal(r.status, 0, out(r));
+    assert.equal(conf().bots.site.url, "https://hooks.example/new-path"); assert.equal(conf().bots.site.only.length, 2, "--replace keeps what the bot gets");
+    r = await f.cli(["bot", "remove", "copy"]); assert.equal(r.status, 0, out(r));
+    r = await f.cli(["unsubscribe", "main", "--project", "proj", "--events", "finished"]); assert.equal(r.status, 0, out(r));
+    r = await f.cli(["subscribe", "main", "--project", "proj"]); assert.match(out(r), /^ALREADY_SUBSCRIBED: "main" has no unsubscribe that matches exactly\. It leaves out: .*finished from proj/, "the message says how to undo");
+    r = await f.cli(["subscribe", "main", "--project", "proj", "--events", "finished"]); assert.equal(r.status, 0, out(r));
     r = await f.cli(["unsubscribe", "site", "--project", "other", "--events", "failed"]); assert.equal(r.status, 0, out(r));
     r = await f.cli(["unsubscribe", "site", "--project", "proj"]); assert.match(out(r), /^LAST_SUBSCRIPTION/, "a bot is removed, not left subscribed to everything by accident");
     r = await f.cli(["bot", "remove", "site"]); assert.equal(r.status, 0, out(r)); assert.equal(conf().bots.site, undefined);
+  } finally { await f.close(); }
+});
+
+test("bots, live: a change to listen.json is picked up while running; a broken file changes nothing", async () => {
+  const f = await startFake();
+  try {
+    const site = await f.addHook();
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await sleep(2500); // the file watcher compares modification times
+    f.writeConfig({ main: { skip: [{ projects: P1 }] }, bots: { site: { url: site.url, only: [{ projects: P1 }] } } });
+    await f.waitFor(() => /listen\.json changed: 1 extra bot/.test(f.out), 9000, "the reload");
+    await finish(f, "A", "p1", "failed");
+    await f.waitFor(() => site.posts.length === 1, 8000, "the new bot's event");
+    require("fs").writeFileSync(path.join(f.dir, "listen.json"), '{ "url": "http://127.0.0.1:1/x", "bots": {'); // a typo while editing by hand
+    await f.waitFor(() => /listen\.json changed but can't be used \(it is not valid JSON\); keeping the bots and rules from before/.test(f.out), 9000, "the refusal");
+    await finish(f, "B", "p1", "failed");
+    await f.waitFor(() => site.posts.length === 2, 8000, "the bot is still there"); await sleep(300);
+    assert.deepEqual(f.posts, [], "the main bot did not start getting the project again");
+    assert.equal(f.count(/is no longer in listen\.json/), 0, "no bot was dropped");
+  } finally { await f.close(); }
+});
+test("bots, live: a slow bot doesn't hold up the main bot or the live stream", async () => {
+  const f = await startFake();
+  try {
+    const site = await f.addHook(); site.status = () => ({ status: 200, delayMs: 4000 });
+    f.writeConfig({ bots: { site: { url: site.url, only: [{ projects: P1 }] } } });
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    const t0 = Date.now();
+    await finish(f, "A", "p1", "failed"); await finish(f, "B", "p1", "failed"); await finish(f, "C", "p2", "failed");
+    await f.waitFor(() => f.posts.length === 3, 3000, "the main bot got all three while the slow bot was still answering its first");
+    assert.ok(Date.now() - t0 < 3500, `took ${Date.now() - t0} ms`);
+    await f.waitFor(() => site.posts.length === 2, 15000, "the slow bot still gets both, in order");
+    assert.deepEqual(site.posts.map((e) => e.runId), ["A1", "B1"]);
+  } finally { await f.close(); }
+});
+test("bots, live: a question a bot already has is not sent to it again when the main bot's copy is retried after a restart", async () => {
+  const f = await startFake();
+  try {
+    const site = await f.addHook(); f.setHookStatus(() => 503);
+    f.writeConfig({ bots: { site: { url: site.url, only: [{ projects: P1, events: ["questions"] }] } } });
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    const req = { id: "q1", kind: "user_input", status: "pending", createdAt: isoNow(), responseCapability: { type: "resumable" } };
+    const item = { type: "user_input_request", requestId: "q1", questions: [{ id: "a", header: "Go", question: "Ship it?", options: [{ label: "Yes" }, { label: "No" }] }] };
+    f.update({ id: "Q", title: "Thread Q", status: "running", activeRunId: "Q1", latestRunId: "Q1", projectId: "p1", pendingRuntimeRequest: { id: "q1" } }, { runs: [{ id: "Q1", status: "running", startedAt: isoNow() }], runtimeRequests: [req], turnItems: [item] });
+    await f.waitFor(() => site.posts.length === 1 && f.hits >= 1 && Object.keys(((f.state().bots || {}).site || {}).pending || { x: 1 }).length === 0, 8000, "the bot has it and the listener knows; the main bot's webhook refused");
+    await f.stop(); f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.length === 1, 9000, "the main bot gets it after the restart"); await sleep(800);
+    assert.equal(site.posts.length, 1, "the bot is not sent the question a second time");
+  } finally { await f.close(); }
+});
+test("bots, live: with failure waves, a failure the main bot couldn't take stays saved for it while another bot takes its copy", async () => {
+  const f = await startFake({ failureWaveSeconds: 0.5 });
+  try {
+    const site = await f.addHook(); f.setHookStatus(() => 400);
+    f.writeConfig({ failureWaveSeconds: 0.5, bots: { site: { url: site.url, only: [{ projects: P1 }] } } });
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await finish(f, "A", "p1", "failed");
+    await f.waitFor(() => site.posts.length === 1 && f.hits >= 1 && Object.keys(((f.state().bots || {}).site || {}).pending || { x: 1 }).length === 0, 9000, "the bot took it and the listener knows; the main bot's webhook refused"); await sleep(300);
+    assert.ok(f.state().finished.A1.e, "the main bot's copy is still saved");
+    await f.stop(); f.setHookStatus(() => 200); f.start();
+    await f.waitFor(() => f.posts.length === 1, 9000, "the main bot gets it after the restart"); await sleep(800);
+    assert.equal(f.posts[0].runId, "A1"); assert.equal(site.posts.length, 1, "and the other bot is not sent it again");
   } finally { await f.close(); }
 });

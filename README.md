@@ -156,7 +156,7 @@ One listener can send to several bots. The main bot is the webhook from `setup`,
 
 ```sh
 node t3listen bot add site --project "my-site"            # paste that bot's webhook URL, then its Authorization line
-node t3listen bot add alerts --events failed              # failures from every project
+node t3listen bot add alerts --events failed              # failures from every project (--everything for a full second copy)
 node t3listen unsubscribe main --project "my-site"        # the main bot stops getting my-site
 node t3listen unsubscribe main --events finished,cancelled
 node t3listen subscribe main --project "my-site"          # undo
@@ -168,8 +168,8 @@ node t3listen bot remove site
 - Event kinds: `questions`, `approvals`, `finished`, `cancelled`, `failed`.
 - `--project` takes a title or an id and can be repeated. It is looked up in the running T3 Code and saved by id, so renaming a project changes nothing.
 - A bot's webhook URL and key are read from stdin, as in `setup`, and are never printed. Commands and `status` show only names and subscriptions.
-- A running listener picks a change up within a minute. Nothing needs reinstalling.
-- Each bot has its own rate-limit pause, run-end limit, summary and retries, so a bot that is slow, refusing or over its limit never holds up another.
+- A running listener picks a change up within a few seconds. Nothing needs reinstalling. A file it cannot read is ignored, and the bots and rules from before stay.
+- Each bot has its own rate-limit pause, run-end limit, summary and retries. An event for another bot is saved in that bot's own list first and sent in its own order, so a bot that is slow, refusing or over its limit never holds up another, and a restart loses nothing.
 - A question's close goes to the bots its opening went to. Events carry `projectId` next to `project`.
 - In `listen.json` this is `"main": { "skip": [...] }` and `"bots": { "<name>": { "url", "headers", "only": [...], "skip": [...] } }`. Each rule is `{ "projects": [{ "id", "title" }], "events": [...] }` with either part optional. A bot gets an event unless it has `only` rules and none matches, or a `skip` rule matches.
 

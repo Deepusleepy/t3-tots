@@ -73,7 +73,7 @@ async function startFake(config = {}) {
     const h = { posts: [], hits: 0, status: () => 200 };
     const srv = http.createServer((req, res) => {
       let b = ""; req.on("data", (c) => (b += c));
-      req.on("end", () => { h.hits++; const e = JSON.parse(b), a = h.status(e), st = typeof a === "number" ? a : a.status; if (st === 200) h.posts.push(e); res.writeHead(st, (typeof a === "object" && a.headers) || {}); res.end((typeof a === "object" && a.body) || (st === 200 ? "ok" : "busy")); });
+      req.on("end", () => { h.hits++; const e = JSON.parse(b), a = h.status(e), st = typeof a === "number" ? a : a.status; if (st === 200) h.posts.push(e); setTimeout(() => { res.writeHead(st, (typeof a === "object" && a.headers) || {}); res.end((typeof a === "object" && a.body) || (st === 200 ? "ok" : "busy")); }, (typeof a === "object" && a.delayMs) || 0); });
     });
     await new Promise((r) => srv.listen(0, "127.0.0.1", r));
     h.url = `http://127.0.0.1:${srv.address().port}/hook`; h.srv = srv; extraHooks.push(h); return h;
