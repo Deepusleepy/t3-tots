@@ -747,6 +747,15 @@ class SkillSync(unittest.TestCase):
         body = json.loads((self.sync / "v9.9.9" / "t3-install-tools.json").read_text())["body"]
         self.assertIn('Remember PIN = "local-only".', body); self.assertIn('REPO = "Deepusleepy/t3-tots"; PIN = "v9.9.9"', body)
 
+    def test_the_placeholder_hint_names_the_installed_release_not_a_newer_one_being_checked(self):
+        box = self.tmp / "box"; box.mkdir(); (box / "VERSION").write_text(self.ver + "\n")
+        self.release(self.tmp / "next", "v9.9.9", dict(self.now))
+        r = self.skills(tag="v9.9.9", src=self.tmp / "next")   # a check against a newer release, as the weekly run does
+        self.assertIn(f"skills {self.ver} --write --placeholders", r.stdout, r.stdout + r.stderr); self.assertNotIn("skills v9.9.9 --write", r.stdout)
+        (box / "VERSION").unlink()
+        r = self.skills(tag="v9.9.9", src=self.tmp / "next")
+        self.assertIn("skills v9.9.9 --write --placeholders", r.stdout, "with no box tools yet, the release being checked is all there is")
+
     def test_keep_my_edit_carries_an_edited_name_or_description_too(self):
         for n in ("t3-status", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
         base = (self.rels / self.OLD / "skills" / "t3-digest" / "SKILL.md").read_text(encoding="utf-8")

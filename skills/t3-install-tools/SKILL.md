@@ -313,8 +313,11 @@ def skills(tag, write=False, show=None, placeholders=False, base=None, base_src=
     for sid in gone: print(f"skill not in release (kept unless the user says delete): {sid}")
     if c("both") and not placeholders: print(f"ASK: {c('both')} skill(s) were edited by the owner and also changed by the release. Never replace one without the owner's choice (t3-install-tools \"Skills you edited\").")
     if c("placeholder") and not write:
+        # The full copies to save are the installed release's, not a newer one this check may be looking at: saving a newer
+        # t3-install-tools would move the box tools to that release without the owner's yes.
+        have = (DST / "VERSION").read_text().strip() if (DST / "VERSION").exists() else tag
         print(f"NEXT: {c('placeholder')} skill(s) are still template placeholders, downloaded from GitHub every time they are used. Save the full copies now: "
-              f"python3 {pathlib.Path(sys.argv[0]).as_posix()} skills {tag} --write --placeholders, then UpdateSkill each entry of PLAN.json in order. Needs no yes: they are the owner's own T3 Tots skills.")
+              f"python3 {pathlib.Path(sys.argv[0]).as_posix()} skills {have} --write --placeholders, then UpdateSkill each entry of PLAN.json in order. Needs no yes: they are the owner's own T3 Tots skills.")
     out = SYNC / (tag + "-placeholders" if placeholders else tag)
     if write:
         if out.exists(): shutil.rmtree(out)
