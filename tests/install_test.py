@@ -469,9 +469,10 @@ class SkillSync(unittest.TestCase):
 
     def test_placeholders_only_prepares_just_the_full_copy(self):
         r = self.skills("--write", "--placeholders"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        p = self.plan(); self.assertEqual([e["id"] for e in p["apply_in_order"]], ["t3-status"]); self.assertEqual(p["ask_the_owner"], [])
-        self.assertEqual((self.sync / self.ver / "t3-status.SKILL.md").read_text(encoding="utf-8"), self.now["t3-status"])
-        shutil.copy(self.sync / self.ver / "t3-status.SKILL.md", self.live / "t3-status" / "SKILL.md")
+        ph = self.ver + "-placeholders"
+        p = self.plan(ph); self.assertEqual([e["id"] for e in p["apply_in_order"]], ["t3-status"]); self.assertEqual(p["ask_the_owner"], [])
+        self.assertEqual((self.sync / ph / "t3-status.SKILL.md").read_text(encoding="utf-8"), self.now["t3-status"])
+        shutil.copy(self.sync / ph / "t3-status.SKILL.md", self.live / "t3-status" / "SKILL.md")
         again = self.skills(); self.assertIn("0 placeholders", again.stdout); self.assertNotIn("NEXT:", again.stdout)
 
     def settle(self):  # the owner answers: digest "update and keep my edit", usage "keep mine"
@@ -586,6 +587,31 @@ class SkillSync(unittest.TestCase):
         r = self.fetch("skills", self.ver, "--from", str(ROOT), "--write"); self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertRegex(r.stdout, r"skill both: t3-usage .*can't be read"); self.assertNotIn("skill yours: t3-usage", r.stdout)
         self.assertEqual(self.plan()["apply_in_order"], [])
+
+    def test_a_placeholders_only_run_leaves_the_choices_still_waiting_for_the_owner(self):
+        self.skills("--write"); before = self.plan()["ask_the_owner"]; self.assertEqual(len(before), 2)
+        self.skills("--write", "--placeholders")
+        self.assertEqual(self.plan()["ask_the_owner"], before); self.assertTrue((self.sync / self.ver / before[0]["take_new"]).exists())
+
+    def test_naming_the_release_being_checked_as_the_base_says_nothing_about_a_skill(self):
+        for n in ("t3-status", "t3-digest", "t3-waiting"): self.put(n, self.now[n])
+        self.put("t3-usage", (self.rels / self.OLD / "skills" / "t3-usage" / "SKILL.md").read_text(encoding="utf-8"))   # an untouched copy of the older release
+        r = self.fetch("skills", self.ver, "--from", str(ROOT), "--base", self.ver)
+        self.assertRegex(r.stdout, r"skill both: t3-usage .*can't be read", r.stdout + r.stderr); self.assertNotIn("skill yours: t3-usage", r.stdout)
+
+    def test_keep_mine_holds_at_the_next_release_with_no_check_in_between(self):
+        self.skills("--write"); k = self.fetch("keep", "t3-usage", self.ver); self.assertIn("OK t3-usage", k.stdout, k.stdout + k.stderr)
+        same = dict(self.now); same["t3-new-thread"] += "\nA new rule in the next release.\n"
+        self.release(self.tmp / "quiet", "v9.9.8", same)
+        q = self.skills(tag="v9.9.8", src=self.tmp / "quiet")
+        self.assertRegex(q.stdout, r"skill yours: t3-usage .*kept by your choice", q.stdout + q.stderr); self.assertNotRegex(q.stdout, r"skill both: t3-usage")
+
+    def test_state_records_of_the_wrong_shape_are_dropped_not_crashed_on(self):
+        self.skills()
+        for junk in ('{"t3-usage": {"offered": "x"}}', '{"t3-usage": {"kept": "v1"}}', '{"t3-usage": {"tag": 5}}', '{"t3-usage": {"offered": {"tag": "v1"}}}'):
+            (self.sync / "skills-state.json").write_text(junk)
+            r = self.skills(); self.assertEqual(r.returncode, 0, junk + r.stdout + r.stderr); self.assertNotIn("Traceback", r.stderr, junk)
+            self.assertRegex(r.stdout, r"skill both: t3-usage", junk)
 
     def test_keep_my_edit_carries_an_edited_name_or_description_too(self):
         for n in ("t3-status", "t3-waiting", "t3-usage"): self.put(n, self.now[n])
