@@ -93,6 +93,7 @@ def install_box(tag, mb):
         if (DST / d).exists(): os.chmod(DST / d, 0o755)
     (DST / "VERSION").write_text(tag + "\n")
     print(f"OK {tag}: {len(got)} files verified in {DST}" + (f" (from {SRC})" if SRC else ""))
+    print('NEXT: open the t3-install-tools skill as it is now (it may have just been updated) and do every check under "After an update". Do not skip this: it holds the changes that are made on the bot side.')
 def files(os_):  # this OS's tools, then manifest.json itself (verified by `box`), so computers get it next to VERSION
     if not (DST / "manifest.json").exists(): sys.exit("NO_BOX_COPY: run `box` first")
     mb = (DST / "manifest.json").read_bytes(); m = json.loads(mb)
@@ -287,10 +288,19 @@ Use only when the user asks ("update T3 Tots", "update T3 Tots tools", "update m
    d. Apply: the main Grok Bot agent goes through `PLAN.json` in order and calls UpdateSkill once per entry with that json's name, description and body (action write; pass id to rewrite an existing skill, omit id to create a new one). Skip skills the user excluded. A subagent can't call UpdateSkill: it stops after step c and hands the main agent the folder path and the plan.
    e. t3-install-tools goes last. Its prepared body already pins `<tag>` and that tag's tool hashes (the fetcher rewrites `PIN` and `PINNED` from the manifest, and keeps the live body if that release's copy has no skill sync). After its UpdateSkill, copy the folder's `t3tots_fetch.py` over `/workspace/t3tots_fetch.py` (or save the fetcher from the updated skill), then run `python3 /workspace/t3tots_fetch.py box`. It must print `OK <tag>`; a `HASH_MISMATCH` means the pin and the box disagree, so stop and report.
    f. Skills listed under `not_in_release_ask_default_keep`: list them and ask "Delete <ids>?". Default keep; delete only after a separate yes.
-   g. Phone answers on (memory): if the **T3 questions to chat** routine's prompt doesn't start with "T3 Tots event routine v2.", replace it with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay). Do the same for any other bot's routine you can change. Say it in the finish line: each notification now reads far less.
+   g. Do every check under "After an update" below, reading that section from the skill as it is after step e, not from what you read before the update.
    h. Update the T3 Tots version in memory. Finish in one line: tag, where the scripts were installed, skills updated and created, skills kept or skipped, and where t3listen restarted.
 4. **Rollback**: the same steps with the previous tag (`update <previous tag>`, then `skills <previous tag> --write` and apply). Older tags stay on GitHub.
 5. **Private repo**: `check` can't see releases, so get the tag with `gh release view` (see "Private repo"), unpack that release on the box, and pass `--from <folder>` to `update` and `skills <tag>`.
+
+## After an update
+Some changes live on the bot side, not in the scripts or skills: a routine's prompt, a memory note. This is the one list of them. Each check looks at how things are now, so it is right whatever version the user came from, and doing it twice changes nothing. Do all of them after every update (step 3g), when `t3tots_fetch.py` prints `NEXT:`, in a weekly update run, and when the user says "check my T3 Tots setup". Then save one memory note: "T3 Tots bot-side checks done for <tag>". If that note names an older tag than the installed `VERSION`, or is missing, the checks are still owed: do them before anything else in a T3 Tots update or setup conversation.
+
+| Check | If so |
+|---|---|
+| Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
+
+A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
 
 ## Weekly update run
 The **T3 Tots weekly update** routine (t3-getting-started section 6) runs this. Turning it on is the user's yes for each later run, so don't ask.

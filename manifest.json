@@ -277,8 +277,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 29425,
-   "sha256": "0c28f7b7cfb62b2e61314aef74fd2bef0c9518519dcb4b29ba3ea37c87a0ed73"
+   "bytes": 30734,
+   "sha256": "3e718c7c56afb692e80c7703aa4de2f000e94d0f1c09701da672be52278754b5"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",

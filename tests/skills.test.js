@@ -126,3 +126,13 @@ test("phone answers: the routine prompt and t3-event stay small, complete and sa
   assert.match(ev, /--request '<requestId>' --decision <option> --user-approved/); assert.match(ev, /--decision decline --redirect/);
   assert.match(ev, /Never accept an approval/); assert.match(ev, /never answer a question the user didn't see/);
 });
+
+test("updates: the fetcher's last line sends the bot to the bot-side checks, which name the current routine prompt", () => {
+  const inst = read(__dirname, "..", "skills", "t3-install-tools", "SKILL.md"), phone = read(__dirname, "..", "skills", "t3-phone-answers", "SKILL.md");
+  assert.match(inst, /print\('NEXT: open the t3-install-tools skill as it is now[^\n]*"After an update"/);
+  const section = inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run"));
+  assert.ok(section.length > 200, "the section exists");
+  const marker = section.match(/doesn't start with "([^"]+)"/); assert.ok(marker, "the check names the prompt's first words");
+  assert.ok(phone.includes("```\n" + marker[1]), "and they are the first words of the routine prompt in t3-phone-answers");
+  assert.match(inst, /g\. Do every check under "After an update"/);
+});
