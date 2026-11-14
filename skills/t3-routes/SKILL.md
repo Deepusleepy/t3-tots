@@ -17,20 +17,20 @@ T3 Tots can reach a computer's T3 Code through **T3's MCP** (a connector named "
 
 | Action | MCP tool |
 |---|---|
-| List, read, wait for threads; see what a thread is asking | `t3_thread_list`, `t3_thread_read`, `t3_thread_wait`, `t3_pending_request` (`list`, `read`) |
+| List, read, wait for threads; see what a thread is asking | `t3_thread_list`, `t3_thread_read`, `t3_thread_wait`, `t3_pending_request` (`list`, `read`; both need the thread id) |
 | Projects, models | `t3_project_list`, `orchestrator_capabilities` |
 | Start a thread | `t3_thread_launch`. See "Starting a thread" |
 | Send, steer, queue | `t3_thread_send`, `t3_queue` |
 | Stop, interrupt | `t3_thread_interrupt` (`stop: true` stops it like the Stop button) |
 | Settle, unsettle, snooze, archive, pin | `t3_thread_organize` |
-| Rename; change the model | `t3_thread_update`; `t3_thread_configure` |
+| Rename; change the model | `t3_thread_update` with `action: "rename"`; `t3_thread_configure` |
 | Scheduled tasks | `schedule_task`, `list_scheduled_tasks`, `run_scheduled_task_now`, `delete_scheduled_task` |
 
 Two more MCP tools are used only when that computer's Grok app is off: `t3_thread_search` ("Finding a thread") and `t3_pending_request` `respond` ("Answering").
 
 **List 2: what MCP can't do. Always the local tools.** Approvals (`t3ctl answer --decision`), phone answers setup and `t3listen`, every `t3q.py` report (waiting, digest, usage, health), `limits`, `resume-at-reset`, `snooze-until-reset`, `queue --resume`, `diff`, `files`, `prs`, `pr`, `watch`, `export.js`, `survey.js`, archived threads. Anything in neither list uses the local tools too.
 
-When the Grok app on that computer is off, List 2 and anything in neither list are unavailable there: say so in one line and never fake them through MCP. In particular, don't build "what's waiting" from `t3_pending_request`: it never lists approvals.
+When the Grok app on that computer is off, List 2 and anything in neither list are unavailable there: say so in one line and never fake them through MCP. In particular, don't build "what's waiting" from `t3_pending_request`: it works one thread at a time and never lists approvals.
 
 **An approval never goes through MCP.** `t3_pending_request` answers questions only. A permission request is accepted only with `t3ctl answer --request <id> --decision <option> --user-approved` after the user's yes (t3-tots-rules "Decisions"). If that computer's Grok app is off, tell the user to approve it in T3 Code.
 
@@ -49,6 +49,9 @@ Every one of these acts on X, the computer that owns the thread. Never run one c
 - Give every change whose tool takes a `clientRequestId` a new one (launch, send, interrupt, rename, `schedule_task`). Reuse one only to retry that same action with the same content.
 - Access levels, lowest first: `approval-required`, `auto-accept-edits`, `auto`, `full-access`. `t3_thread_configure` with only the thread id reads a thread's level. If it is above the connector's level in the note, MCP will refuse a change: don't call it, go straight to "When T3 refuses". If you don't know the level, make the call; a refusal goes there too.
 - Archive: read the thread first and don't archive one that is running.
+- `t3_thread_read` with no position can return the oldest items. For the newest, pass a `beforePosition` above the thread's `itemCount`.
+- `t3_thread_wait`: pass `timeoutMs` of 30000 or less. A wait that times out is a failed read, often a thread blocked on a question: check `t3_pending_request` for that thread.
+- `schedule_task` can't pick a model. In a project with no default model it fails with `invalid_request` ("has no default model") and nothing is made: use `t3ctl tasks --upsert` for that task. Never set a project's default model to get past it.
 
 ## Starting a thread
 - Mode: use the runtime mode the user names. If they name none, use the mode that project's own threads run in. Pass it as `runtimeMode`. If that is above the connector's level, it is a refusal case: ask first ("When T3 refuses"). With the local tools, pass the mode as `t3ctl new --runtime <mode>`; without it `t3ctl new` starts in Full access.
