@@ -66,6 +66,8 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
+Every event starts a new bot run, so what that run reads is kept small. The routine's own prompt (about 2,000 characters) handles finishes, failures, summaries and closes without reading any file. A question or approval adds one small skill, [t3-event](skills/t3-event/SKILL.md) (about 5,400 characters). Before v1.4.33 every event read two skills, about 48,000 characters. A routine set up before v1.4.33 keeps working with its old prompt; "update T3 Tots" replaces the prompt, or say "update the phone answers routine".
+
 ### Active-use suppression (optional, macOS and Windows desktop)
 
 Set `"suppressWhileActive": true` in `listen.json` to skip automatic webhook notifications while T3 Code is foreground and system input was used within the last 15 minutes. Set `"activeIdleMinutes": 5`, for example, to choose a shorter window (a positive number). Suppression is off by default and applies to questions, approvals, run ends, failure batches and the missed-run summary, including retries and catch-up. It works on macOS and Windows; on Linux the setting has no effect, and `t3listen status` says so. A burst of events shares one check for 10 seconds. Suppressed events are remembered, not sent later; the resolution of a suppressed question stays quiet too. Resolutions of delivered questions still go through, so the receiver can close its cards (unless `filters.resolved` is false). Test and dry-run/preview commands still work.
@@ -116,21 +118,22 @@ Each POST can start work on the receiving side, so the listener limits bursts by
 
 Built in, with no setting:
 
-- **Run ends are combined when there are too many or they are old.** A finish or cancel gets its own message only when it is fresh and few are going out. It is counted instead when it is older than `catchUpMinutes` at a restart or reconnect, when more than `runEndsPerMinute` (default 10) went out in the last minute, when the webhook is rate limited, or when it could not be delivered for an hour. The counted ones are sent together as one `thread.missed.summary`, usually within a few seconds. Failures and questions are never combined. Run ends your `filters` would hold back are left out of the count too. The count is saved, so a refused summary is tried again, also after a restart.
+- **Run ends are combined when there are too many or they are old.** A finish or cancel gets its own message only when it is fresh and few are going out. It is counted instead when it is older than `catchUpMinutes` at a restart or reconnect, when more than `runEndsPerMinute` (default 10) went out in the last minute, when the webhook is rate limited, or when it could not be delivered for an hour. The counted ones are sent together as one `thread.missed.summary`, usually within a few seconds. Failures and questions never go into this summary. Run ends your `filters` would hold back are left out of the count too. The count is saved, so a refused summary is tried again, also after a restart.
 - **A rate limit stops all sending.** When the webhook answers HTTP 429, or any reply that says "rate limit" or "too many requests", nothing more is posted until its `Retry-After` time, or for 15 minutes when it gives none. Questions and failures are kept and sent afterwards, first. Finishes and cancels from that time go into the summary. The pause survives a restart.
 - **Questions and failures don't wait.** Catch-up after a restart or reconnect runs beside the live stream, so a question or failure that happens meanwhile is sent at once. When the webhook gives no answer or a 5xx, the listener tries it once, keeps what follows without trying again for each event, retries after 5 seconds, then every 20 seconds while it is down and each minute otherwise, questions and failures first.
-- **No repeats.** An event already waiting to be retried is not queued again when T3 reconnects. A POST the webhook didn't answer in time is retried 3 times, since each try may have arrived. After that a finish or cancel goes into the summary, and a question or failure is kept and tried once an hour. A question T3 announces before its thread data shows it is looked up again until it does.
+- **Failures that come together are sent together.** Each failure waits 20 seconds for more (`failureWaveSeconds`). One alone is sent as a plain `thread.failed`. Two or more, such as a provider outage or a backlog after a restart, are sent once as `thread.failed.batch`.
+- **No repeats.** An event already waiting to be retried is not queued again when T3 reconnects. A POST the webhook didn't answer in time is retried 3 times, since each try may have arrived. After that a finish or cancel goes into the summary, and a question or failure is kept and tried once an hour for a day. HTTP 504 counts as no answer in time, and the summary follows the same rule. A question that closed before it could be sent is not sent late. A question T3 announces before its thread data shows it is looked up again every 15 seconds, for about ten minutes.
 
 | Setting | Default | What it does |
 |---|---|---|
 | `catchUpMinutes` | `30` | After a restart or a lost connection to T3, report finishes and cancels from at most this many minutes back. Older ones from the outage go into one `thread.missed.summary`. `0` reports none from before the reconnect; a large number such as `100000` sends every one, as before v1.4.32. Failures are always caught up back to the last connection, so a usage-limit stop from the outage still gets Resume at reset. Questions are not affected (`skipStaleMinutes` covers them). |
 | `runEndsPerMinute` | `10` | How many finishes and cancels may go out on their own in one minute. The rest are combined into `thread.missed.summary`. `0` combines every one. |
-| `failureWaveSeconds` | `0` (off) | Hold each `thread.failed` this many seconds for more failures. The wait starts again with each new failure. One failure alone is still sent as a plain `thread.failed`. Two or more are sent once as `thread.failed.batch`. `20` works well. Turn it on only after the receiving routine knows `thread.failed.batch` (update the t3-phone-answers skill first): an older routine ignores events it doesn't know. |
+| `failureWaveSeconds` | `20` | Hold each `thread.failed` this many seconds for more failures. The wait starts again with each new failure. One failure alone is still sent as a plain `thread.failed`. Two or more are sent once as `thread.failed.batch`. `0` turns it off, so every failure is sent at once on its own. It was off by default before v1.4.33. The receiving routine must know `thread.failed.batch` (the t3-phone-answers skill has since v1.4.31): an older routine ignores events it doesn't know. |
 | `failureWaveMaxSeconds` | `120` | The longest a wave is held after its first failure, however many follow. |
 | `repeatFailureHours` | `0` (off) | When a thread fails again with the same error as its last sent failure within this many hours, hold it back. Ids, timestamps, clock times and numbers of 4 or more digits in the error don't count as a difference; shorter numbers such as HTTP status codes do. A usage-limit stop is held only when Resume at reset is set for it, so one that needs you is always sent. The next failure that is sent for that thread carries `repeatsSuppressed` (how many were held back) and `repeatsSince`, even after a restart. |
 
 ```json
-{ "url": "https://...", "headers": { "Authorization": "..." }, "catchUpMinutes": 2, "failureWaveSeconds": 20, "failureWaveMaxSeconds": 120, "repeatFailureHours": 6 }
+{ "url": "https://...", "headers": { "Authorization": "..." }, "catchUpMinutes": 2, "failureWaveSeconds": 45, "failureWaveMaxSeconds": 120, "repeatFailureHours": 6 }
 ```
 
 A `thread.missed.summary` event carries `machine`, `count`, `firstAt`/`firstAtLocal`, `lastAt`/`lastAtLocal`, `threads` (up to 20 thread titles), `text` and `eventId`. Update the t3-phone-answers skill with the listener: an older routine ignores events it doesn't know, so it would say nothing about those run ends.
@@ -218,3 +221,10 @@ Report issues in [SECURITY.md](SECURITY.md).
 - `scripts/sync-skills --from <folder>` (or `T3TOTS_SKILLS_SRC`) copies live skills into `skills/`, scans for private details, and updates the manifest. It copies nothing if the scan fails.
 - Never decide an approval by reading its text. T3 often shows a description instead of the command. Approval decisions go through `approvalAuthority`.
 - Release only from a tag. Installers download by tag and check every hash.
+
+## Thanks
+
+- [@mzkmnk](https://github.com/mzkmnk): the idea behind project bots. Their fork ran a separate listener per project, which led to bots that subscribe to projects and events (v1.4.33).
+- [@0xmythril](https://github.com/0xmythril): the report of the notification flood after a long outage, with the numbers that made it fixable (#40, fixed in v1.4.32).
+- [@pablog12](https://github.com/pablog12): notification filters and grouped failures (#38, #39, v1.4.31).
+- [@balasivagn](https://github.com/balasivagn): staying quiet while you are at T3 Code, on macOS (#41, v1.4.32).

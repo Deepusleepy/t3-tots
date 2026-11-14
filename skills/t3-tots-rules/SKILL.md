@@ -1,7 +1,8 @@
 ---
 name: t3-tots-rules
 description: >-
-  Shared rules and tools for every t3-* (T3 Tots) skill. Read before running any of them.
+  Shared rules and tools for every t3-* (T3 Tots) skill. Read before running any of them,
+  except in a run of the "T3 questions to chat" webhook routine, which t3-event covers alone.
 ---
 # T3 Tots rules
 
@@ -14,7 +15,7 @@ Change nothing on the user's computers unless the user approved that exact chang
 |---|---|
 | t3-new-thread, t3-templates, t3-get-output, t3-pm-thread | Prompts into T3 |
 | t3-thread-actions | The thread action asked: `settle`, `unsettle`, `archive`, `unarchive`, `rename`, `interrupt`, `stop`, `subagent-stop`, `fork`, `model`, `snooze`, `unsnooze`, `resume-at-reset`, `snooze-until-reset` (and `--cancel`), and `queue` changes (`--steer`, `--cancel`, `--edit`, `--move`, `--resume`) |
-| t3-waiting, t3-phone-answers, t3-watch | Answers to questions and approvals, under "Decisions" below |
+| t3-waiting, t3-phone-answers, t3-event, t3-watch | Answers to questions and approvals, under "Decisions" below |
 | t3-watch (delegated mode) | One nudge per stall (`send`), `queue --resume` once for a stuck queue, and `resume-at-reset` on a usage limit |
 | t3-phone-answers | `t3listen` setup, after a yes, and its bots and subscriptions when the user asks for a change. `t3listen` itself arms Resume at reset for threads T3 Tots started and for projects in `autoresume.json` ("Tools on each computer"). In delegated mode also `resume-at-reset` for a thread that stopped on a usage limit |
 | t3-update, t3-sync | The items the user picked |
@@ -115,7 +116,7 @@ Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows 
 Read-only database queries. It needs no token. Commands: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. Settings: `T3_DAYS`, `T3_ALL=1`, `T3_Q` (thread words or id), `T3_LAST`, `T3_WEEK=1`.
 
 ### t3ctl
-Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Updating". Don't retry other spellings.
+Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Update T3 Tots (scripts and skills)". Don't retry other spellings.
 
 | Area | Commands |
 |---|---|
@@ -174,7 +175,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `T3_NOT_RUNNING`, `T3_NOT_REACHABLE`, `NO_T3` | Open T3 Code |
 | `NO_TOKEN`, `TOKEN_REJECTED` | Issue or reissue the token ("Token" below) |
 | `NODE_TOO_OLD`, `PYTHON_TOO_OLD` | Upgrade (t3-getting-started lists per-OS commands) |
-| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Updating"); use `t3ctl` meanwhile |
+| `T3_SCHEMA_CHANGED` | This T3 Code version changed its database. The read-only queries need an update (t3-install-tools "Update T3 Tots (scripts and skills)"); use `t3ctl` meanwhile |
 | `T3_DB_BUSY` | Retry in a few seconds |
 | `BAD_SETTING` | A number setting such as `T3_DAYS` or `T3_LAST` isn't a whole number of 1 or more. Fix it and rerun |
 | `USAGE` | A flag that needs a value got none (for example `--from --to dir`). Nothing ran. Give the value, as `--key=value` if it starts with `--` |
@@ -186,7 +187,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
 | `WRITE_STATE: none`, `WRITE_STATE: unknown` | Last line of a failed write command. `none`: no write request left for T3. `unknown`: one left and may have happened, so read the thread before doing anything again, and never repeat it another way while unsure |
 | `RECORDED` | `t3ctl record` saved the note |
-| `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--user-approved` |
+| `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--request <id> --user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
 | `REDIRECT_NOT_DELIVERED` | The approval was declined, but the follow-up didn't reach the thread. Don't rerun `answer` (the request is closed). Run the `t3ctl send ... --prompt-file` command it prints |
 | `THREAD_RUNNING` | `t3ctl archive` won't archive a running thread. Wait until it finishes, or stop it first only with the user's OK for that stop |
@@ -217,7 +218,7 @@ The token gives write access to T3. Issue or reissue it only after the user's ye
 Check the token only by running `t3ctl projects`. Record the issue date and the 90-day expiry in `README.md`, with how to revoke it: `t3 auth session list`, then `t3 auth session revoke <id>`.
 
 ## Opt-in features
-Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. Turning on T3 Tots weekly update also counts as the yes for its runs to install a newer T3 Tots release (t3-install-tools "Weekly update run"). "Update T3 Tots" in chat still shows the plan and asks. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
+Digests, the recurring cleanup scan, stale-thread lists, watches and phone answers run only after the user turns them on. Leave out usage and cost figures unless the user asks (t3-usage). The shipped routines (t3-getting-started section 6) stay paused until the user turns them on. Turning one on counts as asking for what it reports. T3 Tots weekly update follows the update mode the user chose (t3-install-tools "Update mode"): only "Update by myself" (auto) is the yes for its runs to install a newer T3 Tots release; in "Tell me first" (notify) it reports and installs nothing. "Update T3 Tots" in chat still shows the plan and asks. To turn one on, resume the shipped routine and update the "Routines on" memory note. Never create a duplicate.
 
 ## Memory
 - Save decisions, modes and preferences, not activity. A check where nothing changed is not worth a memory entry or a journal line.
