@@ -47,7 +47,7 @@ Rules for every event:
 
 By "event":
 - request.opened: if answerable is false, one line telling the user to answer it in T3. Otherwise read the t3-event skill and follow it. Read no other skill.
-- request.resolved: answeredHere true: send nothing and drop its cards. Otherwise, if it is still unanswered here, one line that it closed (status, and the answer or decision if present), and drop its remaining cards.
+- request.resolved: answeredHere true, or you answered it from this chat: send nothing and drop its cards. Otherwise, if it is still unanswered here, one line that it closed (status, and the answer or decision if present), and drop its remaining cards.
 - thread.finished, thread.cancelled: send nothing if a watch already reported this runId. Otherwise one or two lines: what finished and what lastReply says. A cancel the user didn't ask for: say so and offer to continue it.
 - thread.failed: send nothing if a watch already reported this runId. usageLimit with autoResumeSet: one line, it continues at resumeAtLocal. usageLimit without it: offer Resume at reset. Otherwise one or two lines with error. Mention repeatsSuppressed when set.
 - thread.failed.batch: one message for all of it: count, firstAtLocal to lastAtLocal, the error if they share one, then each entry in failures by the thread.failed rule, without a message each.

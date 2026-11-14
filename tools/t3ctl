@@ -14,8 +14,8 @@ const die = (code, msg) => { console.error(`${code}: ${msg}`); writeState(); pro
 // A bot that reaches T3 by more than one route (the t3-routes skill) must never repeat an "unknown" write another way.
 const WRITE_TAGS = new Set(["orchestration.dispatchCommand", "orchestration.launchThread", "scheduledTasks.upsert", "scheduledTasks.setEnabled", "scheduledTasks.runNow", "scheduledTasks.delete"]);
 const READ_CMDS = ["projects", "models", "threads", "read", "pending", "diff", "files", "status", "raw", "limits", "search", "prs", "pr", "subtasks", "watch", "record"];
-let WROTE = false;
-function writeState() { const c = process.argv[2]; if (typeof CMDS !== "undefined" && CMDS.includes(c) && !READ_CMDS.includes(c)) console.error(WROTE ? "WRITE_STATE: unknown (the change may have reached T3: look before trying again, and never repeat it another way)" : "WRITE_STATE: none (nothing was sent)"); }
+let WROTE = false, DELIVERED = "";
+function writeState() { const c = process.argv[2]; if (typeof CMDS !== "undefined" && CMDS.includes(c) && !READ_CMDS.includes(c)) console.error(DELIVERED && (c === "send" || c === "new") ? `WRITE_STATE: sent (${DELIVERED}; only the wait for a reply ended, so don't send it again)` : WROTE ? "WRITE_STATE: unknown (the change may have reached T3: look before trying again, and never repeat it another way)" : "WRITE_STATE: none (nothing was sent)"); }
 function t3Dir() { // same for stable and Nightly; T3_HOME may point at the base or the userdata folder
   for (let v of [process.env.T3_HOME, process.env.T3CODE_HOME]) {
     v = (v || "").trim(); if (!v) continue; if (v.startsWith("~")) v = path.join(HOME, v.slice(1));
@@ -494,7 +494,7 @@ async function verifyDelivery(t, messageId, wantQueue) {
   }
   if (d === "held") { console.log(`QUEUE_HELD: the message is queued but this thread's queue is held (someone stopped it on purpose). Ask the user before starting it: t3ctl queue --thread ${t.id} --resume`); return d; }
   if (d === "queued" && !wantQueue) { console.log(`queued: the steer became a queued message and runs after the current run. To push it in now: list it with t3ctl queue --thread ${t.id}, then add --steer <runId>`); return d; }
-  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); return d; }
+  if (d === "started" || d === "steered" || d === "queued") { console.log(fixed ? `DELIVERY_FIXED: the message was stuck in the queue; resumed the queue and it is now ${d}` : `delivered: ${d}`); DELIVERED = `the message was delivered: ${d}`; return d; }
   if (d === "unknown") { console.log("delivery not confirmed yet (T3 didn't show the message within 8s); check with: t3ctl queue --thread " + t.id); return d; }
   throw new Error(`SEND_STUCK: the message is ${d} in "${t.title}" and resuming the queue didn't start it. Try: t3ctl queue --thread ${t.id} --resume, then t3ctl status --thread ${t.id}`);
 }
@@ -584,7 +584,7 @@ const main = async () => {
       modelSelection: sel, runtimeMode: o.runtime || "full-access", interactionMode: o.mode === "plan" ? "plan" : "default", workspaceStrategy: workspaceOf(o),
       initialMessage: { messageId: uuid(), text: prompt, attachments: await uploadImages(o.attach) } });
     try { addStarted(res.threadId); } catch (e) { console.log(`note: couldn't record the new thread for auto-resume (${e.message}); fix with: t3ctl record --started ${res.threadId}`); }
-    console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}`);
+    console.log(`thread ${res.threadId}  project=${p.title}  model=${JSON.stringify(sel)}`); DELIVERED = `thread ${res.threadId} was started`;
     if (o.wait) { const t = await wait(res.threadId, +o.timeout || 300); console.log(`title: ${t.title}  status: ${t.status}`); await printLast(res.threadId, 2); }
   }
   else if (cmd === "send") {

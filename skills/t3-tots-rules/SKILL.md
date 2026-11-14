@@ -151,7 +151,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `TOOLS_INCOMPLETE` | A helper file is missing from the tools folder. Reinstall with t3-install-tools |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
-| `WRITE_STATE: none`, `WRITE_STATE: unknown` | Last line of a failed write command. `none`: no change to a thread or a scheduled task left for T3. `unknown`: one left and may have happened, so read the thread before doing anything again, and never repeat it another way while unsure |
+| `WRITE_STATE: none`, `WRITE_STATE: unknown` | Last line of a failed write command. `none`: no change to a thread or a scheduled task left for T3. `unknown`: one left and may have happened, so read the thread before doing anything again, and never repeat it another way while unsure `WRITE_STATE: sent`: it was delivered and only the wait for a reply ended, so never send it again |
 | `RECORDED` | `t3ctl record` saved the note |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--request <id> --user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |

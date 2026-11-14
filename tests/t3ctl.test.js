@@ -363,6 +363,8 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     dispatchMode = "ok";
     r = await run("send", "--thread", "no-such-thread-anywhere", "--prompt", "continue");
     assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: none \(nothing was sent\)\n$/, "stopped before any write request left"); assert.equal(sent.filter((x) => x.type === "message.dispatch").length, 1);
+    r = await run("send", "--thread", thread.id, "--prompt", "continue", "--wait", "--timeout", "1");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /delivered: started[\s\S]*timed out waiting for reply\nWRITE_STATE: sent \(the message was delivered: started; only the wait for a reply ended, so don't send it again\)\n$/, "a wait that ends is not a lost send");
     r = await run("send", "--thread", thread.id, "--prompt", "Fix", "the", "bug");
     assert.match(r.out, /^USAGE: unexpected "the"[^\n]*\nWRITE_STATE: none \(nothing was sent\)\n$/);
     r = await run("read", "--thread", "no-such-thread-anywhere");
