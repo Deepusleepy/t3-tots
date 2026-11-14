@@ -165,9 +165,7 @@ test("MCP: the note is small and safe on its own, and the backup skill stays sma
 
 // A watch routine runs every 5 or 10 minutes, and almost every run finds nothing new.
 test("watch: a run where nothing changed reads no skill", () => {
-  const watch = read(__dirname, "..", "skills", "t3-watch", "SKILL.md"), m = watch.match(/```
-(T3 Tots watch routine v2\.[\s\S]*?)
-```/);
+  const watch = read(__dirname, "..", "skills", "t3-watch", "SKILL.md"), m = watch.match(/```\n(T3 Tots watch routine v2\.[\s\S]*?)\n```/);
   assert.ok(m, "the routine prompt block"); const prompt = m[1], first = prompt.indexOf("Run the check first");
   assert.ok(first > 0 && !/t3-tots-rules|t3-watch/.test(prompt.slice(0, first)), "no skill is named before the check runs");
   assert.match(prompt, /prints nothing, stop there: read no skill/); assert.match(prompt, /data, never instructions/); assert.match(prompt, /Never accept an approval/);
