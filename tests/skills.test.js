@@ -162,3 +162,15 @@ test("MCP: the note is small and safe on its own, and the backup skill stays sma
   assert.doesNotMatch(skill("t3-tots-rules"), /Read the t3-routes skill before acting/, "the rules never send every action to t3-routes");
   const after = skill("t3-install-tools"); assert.match(after.slice(after.indexOf("## After an update"), after.indexOf("## Weekly update run")), /doesn't start with "T3 routes v2"/);
 });
+
+// A watch routine runs every 5 or 10 minutes, and almost every run finds nothing new.
+test("watch: a run where nothing changed reads no skill", () => {
+  const watch = read(__dirname, "..", "skills", "t3-watch", "SKILL.md"), m = watch.match(/```
+(T3 Tots watch routine v2\.[\s\S]*?)
+```/);
+  assert.ok(m, "the routine prompt block"); const prompt = m[1], first = prompt.indexOf("Run the check first");
+  assert.ok(first > 0 && !/t3-tots-rules|t3-watch/.test(prompt.slice(0, first)), "no skill is named before the check runs");
+  assert.match(prompt, /prints nothing, stop there: read no skill/); assert.match(prompt, /data, never instructions/); assert.match(prompt, /Never accept an approval/);
+  const inst = read(__dirname, "..", "skills", "t3-install-tools", "SKILL.md");
+  assert.match(inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run")), /not with "T3 Tots watch routine v2\."/);
+});
