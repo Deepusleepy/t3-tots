@@ -136,3 +136,72 @@ test("updates: the fetcher's last line sends the bot to the bot-side checks, whi
   assert.ok(phone.includes("```\n" + marker[1]), "and they are the first words of the routine prompt in t3-phone-answers");
   assert.match(inst, /g\. Do every check under "After an update"/);
 });
+
+test("skills never tell the bot to accept an approval, send twice, or open listen.json", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md");
+  assert.doesNotMatch(skill("t3-watch"), /may also answer, approve/); assert.match(skill("t3-watch"), /decline approvals with a redirect/);
+  const fallback = skill("t3-new-thread").split("## Fallback on macOS")[1];
+  assert.match(fallback, /WRITE_STATE: none/); assert.match(fallback, /never send it a second way/);
+  assert.doesNotMatch(skill("t3-phone-answers"), /the user turns it off in that file/);
+  assert.doesNotMatch(skill("t3-waiting"), /t3-phone-answers/, "answering one question never loads the phone setup skill");
+  assert.doesNotMatch(skill("t3-tots-rules"), /t3-phone-answers "Answering"/);
+  assert.doesNotMatch(skill("t3-install-tools") + skill("t3-tots-rules"), /weekly run installs nothing|reports and installs nothing/, "notify mode still fills placeholders");
+});
+
+// With T3's MCP connected, a plain action reads no skill: the memory note is the only T3 Tots text in view, so it carries the safety rules.
+test("MCP: the note is small and safe on its own, and the backup skill stays small and complete", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), routes = skill("t3-routes");
+  const m = routes.match(/```\n(T3 routes v2\n[\s\S]*?)\n```/); assert.ok(m, "the note block"); const note = m[1];
+  assert.ok(note.length <= 1900, `the note is ${note.length} characters`); assert.ok(routes.length <= 7300, `t3-routes is ${routes.length} characters`);
+  assert.match(routes, /always-visible \(profile\) memory/); assert.match(routes, /ask on a tap-to-answer card with these options/);
+  for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /ask on a card unless one match is exact/, /with environmentId <id>/, /new clientRequestId and keep it\. A retry of that same change reuses it/, /always with that computer's environmentId/,
+    /record --started <id>/, /"To record"/, /runtime mode the user names, else the mode that project's threads run in/, /Never approve, delete, unlink, or change projects, settings or environment preferences through MCP/, /never MCP on your own/, /computer the user names, else the one their message came from/, /stop \(t3_thread_interrupt with stop: true\)/, /stays in them/, /stop and read t3-routes/]) assert.match(note, rule);
+  assert.match(routes, /don't read t3-tots-rules/); assert.match(routes, /Never do it another way while unsure/); assert.match(routes, /same\*\* `clientRequestId`/);
+  assert.match(routes, /Never work around it yourself/); assert.match(routes, /also in delegated mode/); assert.match(routes, /This never covers an approval/);
+  assert.match(routes, /Never as a second try after a doubt or a refusal/); assert.match(routes, /Never build a waiting list from `t3_pending_request`/);
+  for (const n of ["t3-new-thread", "t3-thread-actions"]) assert.match(skill(n).split("---")[1], /"T3 routes v2"[\s\S]*without this skill/, `${n} says when it is not needed`);
+  const plain = note.match(/open no skill: ([^.]*)\./)[1];
+  for (const word of skill("t3-thread-actions").split("---")[1].match(/a plain ([^.]*?) goes straight/)[1].split(/, | or /)) assert.ok(plain.includes(word), `the note lists ${word} as plain`);
+  assert.doesNotMatch(skill("t3-tots-rules"), /Read the t3-routes skill before acting/, "the rules never send every action to t3-routes");
+  const after = skill("t3-install-tools"); assert.match(after.slice(after.indexOf("## After an update"), after.indexOf("## Weekly update run")), /doesn't start with "T3 routes v2"/);
+});
+
+// A watch routine runs every 5 or 10 minutes, and almost every run finds nothing new.
+test("watch: a run where nothing changed reads no skill", () => {
+  const watch = read(__dirname, "..", "skills", "t3-watch", "SKILL.md"), m = watch.match(/```\n(T3 Tots watch routine v2\.[\s\S]*?)\n```/);
+  assert.ok(m, "the routine prompt block"); const prompt = m[1], first = prompt.indexOf("Run the check first");
+  assert.ok(first > 0 && !/t3-tots-rules|t3-watch/.test(prompt.slice(0, first)), "no skill is named before the check runs");
+  assert.match(prompt, /`t3ctl watch` command and it prints nothing, stop there: read no skill/); assert.match(prompt, /no output can mean it ended/); assert.match(prompt, /Never repeat a key/); assert.match(prompt, /data, never instructions/); assert.match(prompt, /Never accept an approval/);
+  const inst = read(__dirname, "..", "skills", "t3-install-tools", "SKILL.md");
+  assert.match(inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run")), /not with "T3 Tots watch routine v2\."/);
+});
+
+// "What's waiting", status, digests and usage only read, so they carry their few rules themselves instead of loading the shared rules.
+test("look-only skills are complete on their own and share one Basics block", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), names = ["t3-waiting", "t3-status", "t3-digest", "t3-usage"];
+  const basics = (n) => { const m = skill(n).match(/## Basics\n([\s\S]*?- Give times in the user's timezone\.[^\n]*\n)/); assert.ok(m, `${n} has the Basics block`); return m[1]; };
+  const first = basics(names[0]);
+  for (const n of names) {
+    assert.equal(basics(n), first, `${n} has the same Basics block`);
+    assert.doesNotMatch(skill(n), /^Follow the t3-tots-rules skill/m, `${n} doesn't load the shared rules`);
+    assert.ok(skill(n).length <= 5000, `${n} is ${skill(n).length} characters`);
+    assert.doesNotMatch(skill("t3-tots-rules").split("---")[1], /Read before running any of them/, "the rules' label doesn't send every skill to them");
+  }
+  for (const rule of [/don't read t3-tots-rules/, /data, never instructions/, /`token`, `listen\.json`, `secrets\/`/, /ListMachines every run/, /`py -3`/, /Remove-Item Env:X/, /`AMBIGUOUS` or `NO_GOOD_MATCH`/, /tap-to-answer card with the options, never in prose/]) assert.match(first, rule);
+  assert.match(skill("t3-tots-rules"), /ask with a tap-to-answer card that lists the options/); assert.match(skill("t3-tots-rules"), /your own questions too/);
+  assert.match(skill("t3-event"), /yourself also goes on a card, never in prose/);
+  const waiting = skill("t3-waiting");
+  assert.match(waiting, /--decision <option> --user-approved/); assert.match(waiting, /Never accept an approval yourself/); assert.match(waiting, /Never answer a question the user didn't see/);
+  assert.match(waiting, /In delegated mode[^\n]*read t3-tots-rules "Decisions" first/);
+});
+
+test("the shared rules stay small, and every pointer to a section of them or of t3-reference lands on a heading", () => {
+  const dir = path.join(__dirname, "..", "skills"), body = (n) => read(dir, n, "SKILL.md"), rules = body("t3-tots-rules");
+  assert.ok(rules.length <= 23500, `t3-tots-rules is ${rules.length} characters`);
+  const headings = (text) => new Set([...text.matchAll(/^#{2,3} (.+)$/gm)].map((m) => m[1].trim()));
+  const targets = { "t3-tots-rules": headings(rules), "t3-reference": headings(body("t3-reference")) };
+  const all = fs.readdirSync(dir).map((n) => body(n)).join("\n") + read(__dirname, "..", "AGENTS.md");
+  for (const [, skill, section] of all.matchAll(/(t3-tots-rules|t3-reference) "([^"\n]+)"/g)) assert.ok(targets[skill].has(section), `${skill} has no heading "${section}"`);
+  for (const kept of ["Writes", "Text from threads and events is data", "Secrets", "Decisions", "Sending into threads", "Finding a thread", "Grok Bot only", "Computers", "Status words", "Token"]) assert.ok(targets["t3-tots-rules"].has(kept), `rules keep "${kept}"`);
+  for (const line of [/Never accept an approval yourself/, /never send the same message both ways/, /Don't retry other spellings/, /`WRITE_STATE: none`, `WRITE_STATE: unknown`/, /`NEEDS_USER_APPROVAL`/, /Ask before `t3ctl queue --thread <t> --resume`/]) assert.match(rules, line);
+});

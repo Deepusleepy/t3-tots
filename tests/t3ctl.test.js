@@ -355,6 +355,33 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     assert.equal(r.code, 1, r.out); assert.match(r.out, /^AMBIGUOUS/); assert.deepEqual(sent, []);
     r = await run("answer", "--thread", thread.id, "--request", "B-42", "--decision", "accept", "--user-approved");
     assert.equal(r.code, 0, r.out); assert.equal(sent.length, 1); assert.equal(sent[0].requestId, "B-42");
+
+    // WRITE_STATE: the last line of a failed write says whether a write request reached T3
+    dispatchMode = "fail"; reset("npm test"); sent = [];
+    r = await run("send", "--thread", thread.id, "--prompt", "continue");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: unknown \([^\n]*never repeat it another way\)\n$/, "T3 got the request and refused it: it may have happened");
+    dispatchMode = "ok";
+    r = await run("send", "--thread", "no-such-thread-anywhere", "--prompt", "continue");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: none \(nothing was sent\)\n$/, "stopped before any write request left"); assert.equal(sent.filter((x) => x.type === "message.dispatch").length, 1);
+    r = await run("send", "--thread", thread.id, "--prompt", "Fix", "the", "bug");
+    assert.match(r.out, /^USAGE: unexpected "the"[^\n]*\nWRITE_STATE: none \(nothing was sent\)\n$/);
+    r = await run("read", "--thread", "no-such-thread-anywhere");
+    assert.equal(r.code, 1, r.out); assert.doesNotMatch(r.out, /WRITE_STATE/, "a read never prints it");
+
+    // record: bookkeeping for something done through T3's MCP; needs no T3 and no token
+    fs.rmSync(path.join(tmp, "token"));
+    r = await run("record", "--started", "mcp:launch:abc123");
+    assert.equal(r.code, 0, r.out); assert.match(r.out, /^RECORDED: started/);
+    assert.ok(Date.parse(JSON.parse(fs.readFileSync(path.join(tmp, "started-here.json"), "utf8"))["mcp:launch:abc123"]) > Date.now() - 60000);
+    const startedFile = path.join(tmp, "started-here.json"), started = () => JSON.parse(fs.readFileSync(startedFile, "utf8"));
+    fs.writeFileSync(startedFile, JSON.stringify({ ...started(), "old-thread": new Date(Date.now() - 400 * 864e5).toISOString() }));
+    const atOnce = await Promise.all(["mcp:a", "mcp:b", "mcp:c", "mcp:d"].map((id) => run("record", "--started", id)));
+    assert.deepEqual(atOnce.map((x) => x.code), [0, 0, 0, 0], atOnce.map((x) => x.out).join("|"));
+    for (const id of ["mcp:launch:abc123", "old-thread", "mcp:a", "mcp:b", "mcp:c", "mcp:d"]) assert.ok(started()[id], `${id} is still recorded after records made at the same time`);
+    assert.equal(fs.existsSync(`${startedFile}.lock`), false);
+    r = await run("record", "--started", "x", "y"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: record --started/); assert.equal(started().x, undefined);
+    r = await run("record"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: record --started/); assert.doesNotMatch(r.out, /WRITE_STATE/);
+    r = await run("record", "--started"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE/);
   } finally { srv.close(); }
 });
 test("tools updates never overwrite the data files t3ctl keeps next to itself", () => {
@@ -597,4 +624,29 @@ test("oneById: a full id or a part that fits one item; a part that fits several 
   assert.throws(() => t.oneById([{ id: "a-sub1" }, { id: "b-sub1" }], "sub1", "subagent", (id, s) => id.endsWith(s)), /AMBIGUOUS: sub1 matches 2 subagents/);
   const o = t.args(["--prompt", "Fix", "the", "bug", "--queue"]);
   assert.deepEqual([o.prompt, o.queue, o.stray], ["Fix", true, ["the", "bug"]], "words that belong to no flag are kept apart so the command can refuse them");
+});
+
+test("threads --main: a thread started through T3's MCP is hidden as agent-spawned until T3 Tots records it as its own", () => {
+  const mcp = { id: "mcp:launch:1", creationSource: "mcp" }, user = { id: "u1", creationSource: "web" }, sub = { id: "s1", creationSource: "provider" };
+  assert.deepEqual([mcp, user, sub].map((x) => t.isMainThread(x)), [false, true, false]);
+  assert.deepEqual([mcp, user, sub].map((x) => t.isMainThread(x, { "mcp:launch:1": "2026-11-13T00:00:00Z" })), [true, true, false]);
+});
+
+test("WRITE_STATE: every request t3ctl can send is listed as a write or as a read", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
+  const writes = new Set(src.match(/const WRITE_TAGS = new Set\(\[([^\]]+)\]\)/)[1].match(/[A-Za-z.]+/g));
+  const reads = new Set(["attachments.createUploadUrl", "orchestration.getArchivedShellSnapshot", "orchestration.getFullThreadDiff", "orchestration.searchThreads",
+    "pullRequests.checks", "pullRequests.list", "pullRequests.summary", "scheduledTasks.list", "scheduledTasks.subscribe"]);
+  const sent = [...new Set([...src.matchAll(/(?:rpc|stream|subscribe)\("([A-Za-z]+\.[A-Za-z]+)"/g)].map((m) => m[1]))];
+  assert.ok(sent.length >= 10, `found ${sent.length} request tags`);
+  for (const tag of sent) assert.ok(writes.has(tag) !== reads.has(tag), `${tag} must be in WRITE_TAGS or in this test's list of reads, not both or neither`);
+  for (const tag of ["orchestration.dispatchCommand", "orchestration.launchThread", "scheduledTasks.upsert", "scheduledTasks.runNow", "scheduledTasks.delete", "scheduledTasks.setEnabled"]) assert.ok(writes.has(tag), `${tag} changes T3`);
+});
+
+test("usage lists the options skills pass to new, and a held queue tells the bot to ask first", () => {
+  const { execFileSync } = require("child_process"), file = path.join(__dirname, "..", "tools", "t3ctl");
+  const usage = execFileSync(process.execPath, [file], { encoding: "utf8" });
+  for (const flag of ["--runtime approval-required/auto-accept-edits/auto/full-access", "--title x", "--mode plan", "record --started"]) assert.ok(usage.includes(flag), `usage names ${flag}`);
+  const held = require("fs").readFileSync(file, "utf8").match(/QUEUE_HELD: [^`]*/)[0];
+  assert.match(held, /Ask the user before starting it/); assert.doesNotMatch(held, /Start it with/);
 });

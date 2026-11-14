@@ -4,7 +4,7 @@ description: >-
   Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", the T3 Tots weekly update routine, during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
 ---
 
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.4.34` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.5.0` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
@@ -45,23 +45,23 @@ Installs tools only. Live Grok Bot skills are applied by the main agent with Upd
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.4.34"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "01ff4476b33f3623b4e7c36a696e1fcc89f3b6101ef11c464235bc29d1fadc1b"],
+ "tools/t3q.py": ["t3q.py", "a66256c75eec2d5b762c106b2c1f8c16a35aaedde3d114700ddc3d05ddecf464"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
- "tools/t3ctl": ["t3ctl", "cafd839cb4275f9b69af6d1ab2d33ba158999a01320b9b47db256d36aeb63191"],
+ "tools/t3ctl": ["t3ctl", "8b171f91682eb2b73087e1255d2cab2f39873d42cd37051a3f29b378bc697f02"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "ac7aed7ed7dd23350b93997b7b1450e7197e4ac72eb50515332fa9054cae6aa0"],
- "tools/survey.js": ["survey.js", "7f9f6725612b20503dd52c8e1871db002ffc54045f0a4a26e70653ae4ad2f42f"],
+ "tools/export.js": ["export.js", "666093930cf3f2cafa270e7859635d243e81e490d4d8fee4f89da8e1c522773b"],
+ "tools/survey.js": ["survey.js", "2b7626993882eb6fccfef6bca90d366c8c3a3bc54542013e99882f36890047a1"],
  "tools/t3ui": ["t3ui", "221951527b7250375dc97ec63fababa09e693b3af0e5ae1132d42aee67f2b23f"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "a6b6c6d1acdab17a5c504f360423d1dc5196497a2c1fe335da5ce35df0c4eeb9"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "489c0b56200da6389233f049dd4e531f972489dbbdd017e94806af33b4486105"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
  "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }
@@ -520,7 +520,7 @@ The user may edit a t3-* skill. An update never replaces such an edit on its own
 ## Update mode
 One memory note says how updates happen: "T3 Tots updates: auto", "notify" or "off". t3-getting-started asks once. Later, "update automatically", "just tell me about updates" or "stop checking for updates" changes the note and resumes or pauses the **T3 Tots weekly update** routine to match (on for auto and notify, paused for off).
 - **auto**: the weekly run installs a new release by itself and tells the user after. Skills listed as `both` are left alone and asked about.
-- **notify**: the weekly run installs nothing. It tells the user a release is out, with 2 to 4 lines of its notes and any `yours` and `both` skills, and asks "Update to <tag>?". Their yes in chat runs "Update T3 Tots" from step 3.
+- **notify**: the weekly run installs no release (it still fills template placeholders, see "Weekly update run"). It tells the user a release is out, with 2 to 4 lines of its notes and any `yours` and `both` skills, and asks "Update to <tag>?". Their yes in chat runs "Update T3 Tots" from step 3.
 - **off**: the routine is paused. The user says "update T3 Tots" when they want it.
 No note yet (set up before v1.4.34): the routine being on means auto, paused means off. Don't ask; say once, at the end of the next update, that "notify" exists.
 
@@ -533,6 +533,8 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 | The **T3 Tots weekly update** routine's prompt doesn't start with the text under "Weekly update run" | Replace the prompt with that text (UpdateRoutine). Keep its schedule and whether it is on or paused |
 | First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of the `PLAN.json` in the folder it prints (`<tag>-placeholders`), in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are the user's own T3 Tots skills in their skill library, and a skill edited by hand is never touched. A `both` line in this pass is not handled here: it waits for the next full update check ("Skills you edited"). One line to the user: "Saved the full copies of N skills." |
 | Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
+| A watch routine's prompt starts with "Watch " and not with "T3 Tots watch routine v2." | Replace it with the text under t3-watch "Routine prompt", keeping its target, computer, mode and check (UpdateRoutine). A run where nothing changed then reads no skill |
+| Memory has a "T3 routes" note that doesn't start with "T3 routes v2" | Rewrite it as t3-routes "The note" says, keeping its computers, levels, dates, any saved refusal choice ("use the local tools") and any thread ids still to record |
 
 A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
 

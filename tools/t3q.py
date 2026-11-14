@@ -48,6 +48,14 @@ RQ = "orchestration_v2_projection_runtime_requests"; MS = "orchestration_v2_proj
 # a queued run whose queue was stopped on purpose is not running: it waits for someone to resume or cancel it
 RUNST = "case when r.status='queued' and json_extract(r.payload_json,'$.queueHeld') then 'queue held' else r.status end"
 SPAWNED = ("mcp", "provider")  # threads created by agents, not by the user
+def _started():  # threads T3 Tots started by any route (started-here.json next to this script); shown like the user's own
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "started-here.json"), encoding="utf-8") as f:
+            m = json.load(f)
+        return set(m) if isinstance(m, dict) else set()
+    except Exception: return set()
+STARTED = _started()
+def spawned(src, tid): return src in SPAWNED and tid not in STARTED
 # last real activity: newest message or run. updated_at also moves when a thread is settled, renamed or snoozed
 ACT = f"""max(coalesce(t.created_at,''), coalesce((select max(m.created_at) from {MS} m where m.thread_id=t.thread_id),''),
  coalesce((select max(coalesce(r.completed_at, r.requested_at)) from {RU} r where r.thread_id=t.thread_id),''))"""
@@ -83,17 +91,17 @@ def overview():
      {SETTLED}
      from {TH} t left join projection_projects p on p.project_id=t.project_id
      where t.archived_at is null and t.deleted_at is null) where act >= ? order by act desc""", (since(DAYS),))
-    mine = [r for r in rows if ALL or r[4] not in SPAWNED]
+    mine = [r for r in rows if ALL or not spawned(r[4], r[0])]
     print(f"T3 threads active in last {DAYS} days: {len(mine)} shown, {len(rows)-len(mine)} agent-spawned hidden (T3_ALL=1 shows them)")
     for tid, proj, title, upd, src, run, pend, last, settled in mine:
         role, _, text = (last or "\x1f").partition("\x1f")
-        st = "running" if run in LIVE else "needs you" if pend or run in ("waiting", "queue held") else "settled" if settled \
+        st = "needs you" if pend else "running" if run in LIVE else "needs you" if run in ("waiting", "queue held") else "settled" if settled \
             else "needs you" if role == "assistant" and asks_you(text) else (run or "idle")
         print(f"- [{proj}] {title} | {st} | {loc(upd)} | {role or '-'}: {flat(text,140)}")
-    spawned = {}
+    hidden = {}
     for r in rows:
-        if r not in mine: spawned[r[1]] = spawned.get(r[1], 0) + 1
-    if spawned: print("agent-spawned by project:", ", ".join(f"{k} {v}" for k, v in spawned.items()))
+        if r not in mine: hidden[r[1]] = hidden.get(r[1], 0) + 1
+    if hidden: print("agent-spawned by project:", ", ".join(f"{k} {v}" for k, v in hidden.items()))
 
 def waiting():
     DAYS = env_int("T3_DAYS", 14)
@@ -109,10 +117,11 @@ def waiting():
     n = 0
     ALL = os.environ.get("T3_ALL") == "1"
     for tid, proj, title, upd, run, pend, appr, src, last, settled in rows:
-        if src in SPAWNED and not ALL and not (pend or appr): continue
+        if spawned(src, tid) and not ALL and not (pend or appr): continue
         role, _, text = (last or "\x1f").partition("\x1f")
         asks = role == "assistant" and asks_you(text) and not settled  # settling a thread means its hand-back was dealt with
-        if run in LIVE or not (pend or appr or run in ("waiting", "queue held") or asks): continue
+        blocked = pend or appr
+        if not blocked and (run in LIVE or not (run in ("waiting", "queue held") or asks)): continue
         n += 1
         why = []
         if pend:
@@ -131,7 +140,7 @@ def thread():  # fuzzy match a user thread; prints state, git context, goal, las
     Q = " ".join(os.environ.get("T3_Q", "").lower().split()); ALL = os.environ.get("T3_ALL") == "1"
     th = q(f"select t.thread_id, t.title, coalesce(p.title,'(no project)'), p.workspace_root, t.payload_json, t.created_at, {ACT}, coalesce(json_extract(t.payload_json,'$.creationSource'),''), {SETTLED} from {TH} t left join projection_projects p on p.project_id=t.project_id where t.deleted_at is null order by 7 desc")
     byid = [r for r in th if Q and (r[0].lower() == Q or (len(Q) >= 8 and r[0].lower().startswith(Q)))]
-    if not ALL: th = [r for r in th if r[7] not in SPAWNED]  # agent-spawned threads only with T3_ALL=1 (or by id)
+    if not ALL: th = [r for r in th if not spawned(r[7], r[0])]  # agent-spawned threads only with T3_ALL=1 (or by id), unless T3 Tots started them
     if byid: th = byid
     if not th: print("no threads"); return
     al = lambda x: re.sub(r"[^a-z0-9]", "", x.lower())

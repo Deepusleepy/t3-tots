@@ -1,8 +1,11 @@
 ---
 name: t3-new-thread
 description: >-
-  Start a new T3 thread or send a follow-up into one. Use for "new thread", "/new",
-  "start a thread in <project>", "follow up in <thread>", "send this to T3".
+  Start a new T3 thread or send a follow-up into one with the local tools. Use for
+  "new thread", "/new", "start a thread in <project>", "follow up in <thread>",
+  "send this to T3" when memory has no "T3 routes v2" note, or when that note sent
+  you here. With that note, a plain start or send goes straight through the T3
+  connector as the note says, without this skill.
 ---
 Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md), including "Sending into threads". Send only the prompt the user asked for.
 
@@ -24,7 +27,7 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md), including "Sendi
 - `t3ctl new` records the thread in `started-here.json`, so t3listen arms Resume at reset if the thread later stops on a usage limit.
 
 ## Fallback on macOS
-Use the UI only if `t3ctl` fails and the user is OK with T3 taking focus: `t3ui new '<project search>' '<model search>' '<Low|Medium|High|Extra High|Max>' '<prompt>'` or `t3ui send '<exact sidebar title>' '<prompt>'`. Then check the result with `t3ctl read`. If macOS says the app isn't allowed assistive access, tell the user which app to allow in System Settings > Privacy & Security > Accessibility.
+Use the UI only when `t3ctl` ended with `WRITE_STATE: none` (nothing was sent) and the user is OK with T3 taking focus. After any other failure the message may already be in the thread or its queue: check with `t3ctl read` and `t3ctl queue` first, and never send it a second way while unsure. `t3ui new '<project search>' '<model search>' '<Low|Medium|High|Extra High|Max>' '<prompt>'` or `t3ui send '<exact sidebar title>' '<prompt>'`. Then check the result with `t3ctl read`. If macOS says the app isn't allowed assistive access, tell the user which app to allow in System Settings > Privacy & Security > Accessibility.
 
 ## Reply
 In 1 or 2 lines: the thread title and id, project, model and effort, and the reply or "running". Say whether the message was steered into a running run, queued, or not delivered.

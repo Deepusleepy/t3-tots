@@ -56,11 +56,11 @@ class Fetcher(unittest.TestCase):
         started = (ROOT / "skills" / "t3-getting-started" / "SKILL.md").read_text(encoding="utf-8")
         self.assertTrue(started.isascii(), "t3-getting-started must stay ASCII (no em dashes)")
         url = f"https://raw.githubusercontent.com/Deepusleepy/t3-tots/{pin}/assets/avatar.png"
-        fallback = "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.33/assets/avatar.png"
+        fallback = "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.34/assets/avatar.png"
         self.assertIn(url, started, "t3-getting-started must try the pinned-release avatar first")
         self.assertIn(fallback, started)
         if url != fallback:
-            self.assertLess(started.index(url), started.index(fallback), "a 404 on the pinned tag falls back to v1.4.33")
+            self.assertLess(started.index(url), started.index(fallback), "a 404 on the pinned tag falls back to v1.4.34")
         self.assertIn("UpdateAvatar", started)
         self.assertIn("action `set`", started)
         face = started.index("## Official face")

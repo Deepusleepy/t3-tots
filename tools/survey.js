@@ -16,7 +16,8 @@ const RED=new RegExp(`(${SECRET_KEYS}|eyJ[A-Za-z0-9_-]{15,}\\.[A-Za-z0-9_.-]+|\\
 const red=s=>String(s??"").replace(RED,"[redacted]").replaceAll(os.homedir(),"~"); // titles and project names are redacted like export.js
 (async()=>{const j=await get("/api/orchestration/shell");for(const t of j.threads)t.title=red(t.title);
 const P=Object.fromEntries(j.projects.map(p=>[p.id,red(p.title)]));const now=Date.now(),d=s=>(now-Date.parse(s))/864e5;
-const user=j.threads.filter(t=>!/^(mcp|provider)$/.test(t.creationSource));
+let started={};try{started=JSON.parse(fs.readFileSync(path.join(__dirname,"started-here.json"),"utf8"))||{}}catch{} // threads T3 Tots started count as the user's (same rule as t3ctl)
+const user=j.threads.filter(t=>!/^(mcp|provider)$/.test(t.creationSource)||!!started[t.id]);
 console.log("threads",j.threads.length,"user-made",user.length,"projects",j.projects.length);
 const by={};for(const t of user){const k=P[t.projectId]||"?";by[k]=by[k]||{n:0,n7:0,n30:0,last:""};by[k].n++;if(d(t.updatedAt)<7)by[k].n7++;if(d(t.updatedAt)<30)by[k].n30++;if(t.updatedAt>by[k].last)by[k].last=t.updatedAt}
 console.log("\nproject total/7d/30d/last");for(const [k,v] of Object.entries(by).sort((a,b)=>b[1].n30-a[1].n30))console.log(k,v.n,v.n7,v.n30,v.last.slice(0,10));

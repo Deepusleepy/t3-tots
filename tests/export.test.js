@@ -11,6 +11,8 @@ test("export.js: --project=Foo exports only Foo; two exact matches are AMBIGUOUS
   const projects = [["p-foo", "Foo", "/w/foo"], ["p-foobar", "FooBar", "/w/foobar"], ["p-d1", "Dup", "/w/d1"], ["p-d2", "dup", "/w/d2"], ["p-s", "key " + "sk-" + "ant-abcdefghijklmnopqrstuvwxyz0123", "/w/s"]]
     .map(([id, title, workspaceRoot]) => ({ id, title, workspaceRoot: path.resolve(workspaceRoot) }));
   const threads = projects.map((p) => ({ id: "t-" + p.id, projectId: p.id, title: "work on " + p.title, updatedAt: now, createdAt: now, status: "idle" }));
+  for (const id of ["mcp-recorded", "mcp-unrecorded"]) threads.push({ id, projectId: "p-foo", title: id, updatedAt: now, createdAt: now, status: "idle", creationSource: "mcp" });
+  fs.writeFileSync(path.join(tmp, "started-here.json"), JSON.stringify({ "mcp-recorded": now }));
   const srv = http.createServer((req, res) => {
     if (req.url === "/api/orchestration/shell") return res.end(JSON.stringify({ projects, threads }));
     if (req.url.startsWith("/api/orchestration/threads/")) return res.end(JSON.stringify({ projection: { turnItems: [], runs: [], checkpoints: [] } }));
@@ -23,6 +25,8 @@ test("export.js: --project=Foo exports only Foo; two exact matches are AMBIGUOUS
   const titles = (r) => JSON.parse(r.out).projects.map((p) => p.title);
   try {
     let r = await run("export.js", "--project=Foo"); assert.equal(r.code, 0, r.err); assert.deepEqual(titles(r), ["Foo"]);
+    const spawned = Object.fromEntries(JSON.parse(r.out).threads.map((t) => [t.title, t.spawned]));
+    assert.deepEqual(spawned, { "work on Foo": false, "mcp-recorded": false, "mcp-unrecorded": true }, "a thread T3 Tots started through MCP and recorded counts as the user's");
     r = await run("export.js", "--project", "foo", "--days=3"); assert.deepEqual(titles(r), ["Foo"]); assert.equal(JSON.parse(r.out).days, 3);
     r = await run("export.js", "--project=" + path.resolve("/w/foobar") + path.sep); assert.deepEqual(titles(r), ["FooBar"]);
     r = await run("export.js", "--project=p-d2"); assert.deepEqual(titles(r), ["dup"]);
@@ -34,6 +38,6 @@ test("export.js: --project=Foo exports only Foo; two exact matches are AMBIGUOUS
     for (const bad of [["--project="], ["--project"], ["--projet=Foo"], ["--days"], ["--days=0"], ["--out"]]) {
       r = await run("export.js", ...bad); assert.equal(r.code, 1, bad.join(" ")); assert.match(r.err, /USAGE/, bad.join(" "));
     }
-    r = await run("survey.js"); assert.equal(r.code, 0, r.err); assert.ok(!r.out.includes("sk-ant-"), "survey redacts titles and project names"); assert.match(r.out, /\[redacted\]/);
+    r = await run("survey.js"); assert.equal(r.code, 0, r.err); assert.match(r.out, /^threads 7 user-made 6 /, "survey counts the recorded MCP thread, not the unrecorded one"); assert.ok(!r.out.includes("sk-ant-"), "survey redacts titles and project names"); assert.match(r.out, /\[redacted\]/);
   } finally { srv.close(); }
 });

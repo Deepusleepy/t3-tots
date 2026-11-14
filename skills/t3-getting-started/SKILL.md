@@ -15,11 +15,11 @@ Open with one line: "I'm T3 Tots. Give me a few seconds to look at your setup."
 ## Official face (first setup, before any stop)
 Do this immediately after that opening line, before section 1. It does not need the helper tools, a token, or a connected desktop: only curl and UpdateAvatar on the box. It is this bot's picture, not a write to their computers.
 Skip it when memory has the "setup done" note that section 3 step 6 saves, or a note that the official face was set, or they asked to reinstall the tools, so an existing owner keeps their current picture. Notes that came with the bot template don't count: a first setup has no "setup done" note, so set the face now.
-Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.4.34`). Try that URL first. If it fails (404 until that tag is cut), download the same file from `v1.4.33`. Save it outside T3 and outside the tools folder:
+Download the pinned-release avatar on the box. The tag is the one t3-install-tools pins (`v1.5.0`). Try that URL first. If it fails (404 until that tag is cut), download the same file from `v1.4.34`. Save it outside T3 and outside the tools folder:
 ```
 f=/workspace/t3-tots-avatar.png
-curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.34/assets/avatar.png \
-  || curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.33/assets/avatar.png
+curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.5.0/assets/avatar.png \
+  || curl -fsSL -o "$f" https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.4.34/assets/avatar.png
 ```
 The file must be a PNG under 5 MB whose sha256 is `ae44bdac0842f21d74b7cc93975af0a3abc29e7c7b306e87f737d5f07c950f2e` (`sha256sum /workspace/t3-tots-avatar.png`). Then call UpdateAvatar with action `set` and path `/workspace/t3-tots-avatar.png`. Never open T3's `secrets/`, the tools folder `token` or `listen.json`, or any auth file. If both downloads fail, the hash does not match, or UpdateAvatar fails or is missing, say one line that they can set a picture later, and continue. Do not retry. Remember the result for this run.
 
@@ -78,6 +78,9 @@ Don't ask anything else. Name, timezone and projects folder use the defaults unl
 
 ## 5. Optional: answer from your phone
 Only if a token was issued. Offer it once, in one line: "Want me to message you here the moment a thread asks you something, so you can answer from this chat on your phone or computer? It needs a small listener on each computer and a webhook routine; say **phone answers** to set it up." On yes, follow t3-phone-answers "Setup": you open a setup window on each computer yourself, and the user only pastes two lines (the Webhook URL, then the Authorization header). On no, don't ask again.
+
+## 5b. Optional: T3's own MCP
+Grok Bot only. Offer it once, in one line: "T3 Code now has its own MCP. Connected, simple actions like sending and starting threads go straight through it, and still work when the Grok app on a computer is closed. Approvals, phone pings and reports keep using the local tools. Say **connect T3 MCP** to set it up." On yes, follow t3-routes "Setup". On no, don't ask again.
 
 ## 6. Routines (one tap each)
 First, if this bot has no **T3 Tots weekly update** routine (imported before it shipped), create it once, paused, with the prompt in t3-install-tools "Weekly update run". Then ask how T3 Tots itself should update, as its own card with nothing pre-selected: "How should I handle my own updates?" **Tell me first** (recommended: I check once a week, tell you what's new and wait for your yes), **Update by myself** (I check once a week, install it and tell you after; a skill you edited is never replaced without asking), **Don't check** (you say "update T3 Tots" when you want). Save the memory note "T3 Tots updates: notify", "auto" or "off" (t3-install-tools "Update mode"), and resume the **T3 Tots weekly update** routine for the first two or leave it paused for the third. The app may show the user a confirm card when you change a routine; tell them to tap it.

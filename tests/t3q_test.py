@@ -1,5 +1,5 @@
 """Tests for t3q.py against a tiny fake T3 database. Run: python3 tests/t3q_test.py"""
-import json, os, sqlite3, subprocess, sys, tempfile, datetime as dt, unittest
+import json, os, shutil, sqlite3, subprocess, sys, tempfile, datetime as dt, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__)); T3Q = os.path.join(HERE, "..", "tools", "t3q.py")
 NOW = dt.datetime.now(dt.timezone.utc)
@@ -34,9 +34,9 @@ def make_db(folder, legacy_approvals=False, extra_threads=False):
     db.execute("insert into orchestration_v2_projection_runtime_requests values ('t-done', 'command', 'pending', ?, '{}')", (iso(2),))
     db.commit(); db.close()
 
-def run(folder, cmd, rc=False, **env_extra):
+def run(folder, cmd, rc=False, script=T3Q, **env_extra):
     env = {**os.environ, "T3_HOME": folder, **env_extra}
-    r = subprocess.run([sys.executable, T3Q, cmd], capture_output=True, text=True, env=env, timeout=60)
+    r = subprocess.run([sys.executable, script, cmd], capture_output=True, text=True, env=env, timeout=60)
     return (r.stdout, r.returncode) if rc else r.stdout
 
 class T3qTest(unittest.TestCase):
@@ -62,6 +62,20 @@ class T3qTest(unittest.TestCase):
         self.assertNotIn("Behind a run", out)            # an ordinary queued run is still live
         ov = run(self.dir, "overview")
         self.assertIn("Held queue | needs you", ov); self.assertIn("Behind a run | running", ov)
+
+    def test_a_running_thread_blocked_on_a_request_is_waiting(self):
+        make_db(self.dir)
+        db = sqlite3.connect(os.path.join(self.dir, "statev2.sqlite"))
+        db.execute("insert into orchestration_v2_projection_threads values (?,?,?,?,?,null,null,?)", ("t-block", "p1", "Blocked on approval", iso(5), iso(1), json.dumps({"creationSource": "web"})))
+        db.execute("insert into orchestration_v2_projection_runs values (?,?,1,?,?,null,?)", ("r-t-block", "t-block", "running", iso(3), json.dumps({})))
+        db.execute("insert into orchestration_v2_projection_messages values (?,?,?,?)", ("t-block", "assistant", iso(1), json.dumps({"text": "Running the command."})))
+        db.execute("insert into orchestration_v2_projection_runtime_requests values ('t-block', 'command', 'pending', ?, '{}')", (iso(1),))
+        db.commit(); db.close()
+        out = run(self.dir, "waiting")
+        self.assertIn("Blocked on approval", out); self.assertIn("4 thread(s) waiting on you", out)
+        self.assertNotIn("Behind a run", out)
+        ov = run(self.dir, "overview")
+        self.assertIn("Blocked on approval | needs you", ov); self.assertIn("Behind a run | running", ov)
 
     def test_health_reports_held_queue_not_stuck(self):
         make_db(self.dir)
@@ -118,6 +132,14 @@ class T3qTest(unittest.TestCase):
         make_db(self.dir, extra_threads=True)
         self.assertNotIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task"))
         self.assertIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task", T3_ALL="1"))
+
+    def test_a_thread_t3_tots_started_and_recorded_shows_like_the_users_own(self):
+        make_db(self.dir, extra_threads=True)
+        installed = shutil.copy(T3Q, os.path.join(self.dir, "t3q.py"))
+        self.assertIn("agent-spawned by project", run(self.dir, "overview", script=installed))
+        with open(os.path.join(self.dir, "started-here.json"), "w", encoding="utf-8") as f: json.dump({"t-spawn": iso(0)}, f)
+        self.assertIn("THREAD Spawned helper task", run(self.dir, "thread", script=installed, T3_Q="spawned helper task"))
+        self.assertNotIn("agent-spawned by project", run(self.dir, "overview", script=installed))
 
     def test_health_size_skips_secret_folders_and_files_in_any_case(self):
         make_db(self.dir)

@@ -26,8 +26,11 @@ Show `approval.prompt`, the reason it asks (`approval.reason`; if missing, `node
 - Delegated mode: no card. `--request '<requestId>' --decision decline --redirect`, then one line: what was declined and why it asked.
 - `answerable: false`: one line telling the user to handle it in T3.
 
+A choice you put to the user yourself also goes on a card, never in prose.
+
 ## Commands
 Call ListMachines and use the computer whose label equals the event's `machine`; ask if none matches. Run from that computer's tools folder (in memory; else `~/t3-tots`). Use `node t3ctl`, single-quote every value, and pass ids in full. A `'` inside a value: write `'\''` in zsh or bash, and `''` in Windows PowerShell.
+- That computer can't run commands now (its Grok app is off) and memory has a "T3 routes" note with a connector for it: answer a **question** through that connector with `t3_pending_request` (`respond` with the user's exact picks, then `read` to see it closed). Never an approval or a decline that way: tell the user to handle it in T3 Code.
 - One question: `node t3ctl answer --thread '<threadId>' --request '<requestId>' --pick '<exact label>'`, or `--text '<their words>'` for a typed answer.
 - Several questions, or multi-select: one call with `--answers '{"<question id>": "<label>", "<id>": ["<label>", "<label>"], "<id>": "<their words>"}'`.
 - An approval: add the `--decision` flags above to `node t3ctl answer --thread '<threadId>'`.
