@@ -110,7 +110,7 @@ Run scripts from the tools folder. Use `python3` on macOS and Linux. On Windows 
 Read-only database queries. It needs no token. Commands: `overview`, `waiting`, `thread`, `projects`, `health`, `usage`. Settings: `T3_DAYS`, `T3_ALL=1`, `T3_Q` (thread words or id), `T3_LAST`, `T3_WEEK=1`.
 
 ### t3ctl
-Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. This is the full command list for this release; other skills use these names. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Update T3 Tots (scripts and skills)". Don't retry other spellings.
+Uses T3's local API and needs the token, except `skills`. Running it with no arguments prints usage. If a command prints the usage line instead of running, that computer has older tools: say so once and offer t3-install-tools "Update T3 Tots (scripts and skills)". Don't retry other spellings.
 
 For the command list run `node t3ctl` with no arguments (it needs no token). The full table is in t3-reference "t3ctl commands".
 

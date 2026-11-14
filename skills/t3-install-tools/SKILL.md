@@ -61,7 +61,7 @@ PINNED = {
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "7385a9c183070ac26fd25d2c7bb36a99399ed1c350e0d668c9972e99931d74bb"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "489c0b56200da6389233f049dd4e531f972489dbbdd017e94806af33b4486105"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
  "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }
@@ -534,7 +534,7 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 | First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of the `PLAN.json` in the folder it prints (`<tag>-placeholders`), in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are the user's own T3 Tots skills in their skill library, and a skill edited by hand is never touched. A `both` line in this pass is not handled here: it waits for the next full update check ("Skills you edited"). One line to the user: "Saved the full copies of N skills." |
 | Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
 | A watch routine's prompt starts with "Watch " and not with "T3 Tots watch routine v2." | Replace it with the text under t3-watch "Routine prompt", keeping its target, computer, mode and check (UpdateRoutine). A run where nothing changed then reads no skill |
-| Memory has a "T3 routes" note that doesn't start with "T3 routes v2" | Rewrite it as t3-routes "The note" says, keeping its computers, levels and dates |
+| Memory has a "T3 routes" note that doesn't start with "T3 routes v2" | Rewrite it as t3-routes "The note" says, keeping its computers, levels, dates, any saved refusal choice ("use the local tools") and any thread ids still to record |
 
 A check you can't carry out (no access to that routine, the user said no): say so in the finish line and leave the memory note at the older tag, so it is tried again.
 

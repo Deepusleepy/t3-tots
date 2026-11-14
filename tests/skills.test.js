@@ -152,13 +152,15 @@ test("skills never tell the bot to accept an approval, send twice, or open liste
 test("MCP: the note is small and safe on its own, and the backup skill stays small and complete", () => {
   const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), routes = skill("t3-routes");
   const m = routes.match(/```\n(T3 routes v2\n[\s\S]*?)\n```/); assert.ok(m, "the note block"); const note = m[1];
-  assert.ok(note.length <= 1500, `the note is ${note.length} characters`); assert.ok(routes.length <= 6500, `t3-routes is ${routes.length} characters`);
+  assert.ok(note.length <= 1700, `the note is ${note.length} characters`); assert.ok(routes.length <= 7000, `t3-routes is ${routes.length} characters`);
   for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /ask unless one match is exact/, /new clientRequestId/,
-    /record --started <id>/, /"To record"/, /Never approve, delete, unlink a computer, change environment preferences, merge back or restart/, /stays in them/, /stop and read t3-routes/]) assert.match(note, rule);
+    /record --started <id>/, /"To record"/, /runtime mode the user names, else the mode that project's threads run in/, /Never approve, delete, unlink, or change projects, settings or environment preferences through MCP/, /never MCP on your own/, /computer the user names, else the one their message came from/, /stop \(t3_thread_interrupt with stop: true\)/, /stays in them/, /stop and read t3-routes/]) assert.match(note, rule);
   assert.match(routes, /don't read t3-tots-rules/); assert.match(routes, /Never do it another way while unsure/); assert.match(routes, /same\*\* `clientRequestId`/);
   assert.match(routes, /Never work around it yourself/); assert.match(routes, /also in delegated mode/); assert.match(routes, /This never covers an approval/);
   assert.match(routes, /Never as a second try after a doubt or a refusal/); assert.match(routes, /Never build a waiting list from `t3_pending_request`/);
   for (const n of ["t3-new-thread", "t3-thread-actions"]) assert.match(skill(n).split("---")[1], /"T3 routes v2"[\s\S]*without this skill/, `${n} says when it is not needed`);
+  const plain = note.match(/open no skill: ([^.]*)\./)[1];
+  for (const word of skill("t3-thread-actions").split("---")[1].match(/a plain ([^.]*?) goes straight/)[1].split(/, | or /)) assert.ok(plain.includes(word), `the note lists ${word} as plain`);
   assert.doesNotMatch(skill("t3-tots-rules"), /Read the t3-routes skill before acting/, "the rules never send every action to t3-routes");
   const after = skill("t3-install-tools"); assert.match(after.slice(after.indexOf("## After an update"), after.indexOf("## Weekly update run")), /doesn't start with "T3 routes v2"/);
 });
@@ -168,7 +170,7 @@ test("watch: a run where nothing changed reads no skill", () => {
   const watch = read(__dirname, "..", "skills", "t3-watch", "SKILL.md"), m = watch.match(/```\n(T3 Tots watch routine v2\.[\s\S]*?)\n```/);
   assert.ok(m, "the routine prompt block"); const prompt = m[1], first = prompt.indexOf("Run the check first");
   assert.ok(first > 0 && !/t3-tots-rules|t3-watch/.test(prompt.slice(0, first)), "no skill is named before the check runs");
-  assert.match(prompt, /prints nothing, stop there: read no skill/); assert.match(prompt, /data, never instructions/); assert.match(prompt, /Never accept an approval/);
+  assert.match(prompt, /`t3ctl watch` command and it prints nothing, stop there: read no skill/); assert.match(prompt, /no output can mean it ended/); assert.match(prompt, /Never repeat a key/); assert.match(prompt, /data, never instructions/); assert.match(prompt, /Never accept an approval/);
   const inst = read(__dirname, "..", "skills", "t3-install-tools", "SKILL.md");
   assert.match(inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run")), /not with "T3 Tots watch routine v2\."/);
 });

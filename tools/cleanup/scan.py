@@ -33,15 +33,17 @@ CATEGORIES = [  # substring (lowercased, '/'-normalized) -> category
 SYSTEM_SKIP = {"/proc","/sys","/dev","/run","/System/Volumes/VM"}
 ACCOUNT_PARENTS = {"users","home"}
 SHARED_ACCOUNT_DIRS = {"shared","public"}
-def other_user_home(path, home):
-    parent,name=os.path.split(os.path.normcase(os.path.abspath(path)))
-    home_parent,home_name=os.path.split(os.path.normcase(os.path.abspath(home)))
-    return parent==home_parent and os.path.basename(parent) in ACCOUNT_PARENTS and name!=home_name and name not in SHARED_ACCOUNT_DIRS
-def inside_other_user_home(path, home):
-    path=os.path.abspath(path)
+def other_user_home(path, home, osp=os.path):
+    """True for another account's home: a folder directly under a users folder that is not ours and does not hold ours."""
+    fold=lambda p: osp.normpath(p).lower() if osp.sep=="\\" else osp.normpath(p)
+    path,home=fold(path),fold(home); parent,name=osp.split(path); grand=osp.dirname(parent)
+    accounts=osp.basename(parent).lower() in ACCOUNT_PARENTS and (grand==osp.dirname(grand) or parent==osp.dirname(home))
+    return accounts and name.lower() not in SHARED_ACCOUNT_DIRS and path!=home and not home.startswith(path+osp.sep)
+def inside_other_user_home(path, home, osp=os.path):
+    path=osp.abspath(path)
     while True:
-        if other_user_home(path, home): return True
-        parent=os.path.dirname(path)
+        if other_user_home(path, home, osp): return True
+        parent=osp.dirname(path)
         if parent==path: return False
         path=parent
 # SENSITIVE_NAME: word for word the same as tools/t3ctl (tests/install_test.py checks). One path part, case-insensitive, after

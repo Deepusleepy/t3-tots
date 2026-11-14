@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tools/cleanup/scan.py --dupes: duplicates are found, and secret, key, .env, .ssh and token files are never opened or hashed."""
-import builtins, io, json, os, pathlib, runpy, sys, tempfile, unittest, contextlib
+import builtins, io, json, ntpath, os, pathlib, posixpath, runpy, sys, tempfile, unittest, contextlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCAN = str(ROOT / "tools" / "cleanup" / "scan.py")
@@ -55,6 +55,22 @@ class OtherUsers(unittest.TestCase):
         self.assertEqual(res["other_users_skipped"], 1)
         self.assertFalse([p for p in seen if pathlib.Path(p).name == "other"], "the other account's folder is never listed")
         for kept in ("me", "Shared", "home2"): self.assertTrue([p for p in seen if pathlib.Path(p).name == kept], kept)
+
+    def test_other_accounts_are_recognised_on_every_layout(self):
+        out, argv = io.StringIO(), sys.argv
+        sys.argv = [SCAN, tempfile.mkdtemp(prefix="t3scan-"), "--jobs", "1"]
+        try:
+            with contextlib.redirect_stdout(out): other = runpy.run_path(SCAN, run_name="__main__")["other_user_home"]
+        finally: sys.argv = argv
+        for path, home, osp, want in [
+            ("/Users/other", "/Users/me", posixpath, True), ("/Users/me", "/Users/me", posixpath, False), ("/Users/Shared", "/Users/me", posixpath, False),
+            ("/home/other", "/root", posixpath, True), ("/home/other", "/home/me", posixpath, True), ("/home", "/home/me", posixpath, False),
+            ("/home/me/code/app/users/alice", "/home/me", posixpath, False), ("/srv/app/users/alice", "/home/me", posixpath, False),
+            ("/home/team", "/home/team/me", posixpath, False), ("/data/homes/other", "/data/homes/me", posixpath, False),
+            ("D:\\Users\\other", "C:\\Users\\me", ntpath, True), ("C:\\Users\\Other", "c:\\users\\me", ntpath, True), ("C:\\Users\\ME", "c:\\users\\me", ntpath, False),
+            ("C:\\Users\\Public", "C:\\Users\\me", ntpath, False), ("C:\\Users\\me\\src\\users\\bob", "C:\\Users\\me", ntpath, False),
+        ]:
+            self.assertEqual(other(path, home, osp), want, f"{path} with home {home}")
 
     def test_a_root_inside_another_users_home_is_refused(self):
         tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
