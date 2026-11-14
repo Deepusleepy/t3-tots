@@ -152,9 +152,9 @@ test("skills never tell the bot to accept an approval, send twice, or open liste
 test("MCP: the note is small and safe on its own, and the backup skill stays small and complete", () => {
   const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), routes = skill("t3-routes");
   const m = routes.match(/```\n(T3 routes v2\n[\s\S]*?)\n```/); assert.ok(m, "the note block"); const note = m[1];
-  assert.ok(note.length <= 1900, `the note is ${note.length} characters`); assert.ok(routes.length <= 7300, `t3-routes is ${routes.length} characters`);
+  assert.ok(note.length <= 2100, `the note is ${note.length} characters`); assert.ok(routes.length <= 7700, `t3-routes is ${routes.length} characters`);
   assert.match(routes, /always-visible \(profile\) memory/); assert.match(routes, /ask on a tap-to-answer card with these options/);
-  for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /ask on a card unless one match is exact/, /with environmentId <id>/, /Every change needs its own new clientRequestId/, /a retry of that same change reuses it, and it is never reused for different content/, /always with that computer's environmentId/,
+  for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /t3q\.py thread` from the tools folder finds it/, /ask on a card unless one match is exact/, /with environmentId <id>/, /Every change needs its own new clientRequestId/, /a retry of that same change reuses it, and it is never reused for different content/, /always with that computer's environmentId/,
     /record --started <id>/, /"To record"/, /runtime mode the user names, else the mode that project's threads run in/, /Never approve, delete, unlink, or change projects, settings or environment preferences through MCP/, /never MCP on your own/, /computer the user names, else the one their message came from/, /stop \(t3_thread_interrupt with stop: true\)/, /stays in them/, /stop and read t3-routes/]) assert.match(note, rule);
   assert.match(routes, /don't read t3-tots-rules/); assert.match(routes, /Never do it another way while unsure/); assert.match(routes, /same\*\* `clientRequestId`/);
   assert.match(routes, /Never work around it yourself/); assert.match(routes, /also in delegated mode/); assert.match(routes, /This never covers an approval/);
@@ -197,7 +197,7 @@ test("look-only skills are complete on their own and share one Basics block", ()
 
 test("the shared rules stay small, and every pointer to a section of them or of t3-reference lands on a heading", () => {
   const dir = path.join(__dirname, "..", "skills"), body = (n) => read(dir, n, "SKILL.md"), rules = body("t3-tots-rules");
-  assert.ok(rules.length <= 23500, `t3-tots-rules is ${rules.length} characters`);
+  assert.ok(rules.length <= 22000, `t3-tots-rules is ${rules.length} characters`);
   const headings = (text) => new Set([...text.matchAll(/^#{2,3} (.+)$/gm)].map((m) => m[1].trim()));
   const targets = { "t3-tots-rules": headings(rules), "t3-reference": headings(body("t3-reference")) };
   const all = fs.readdirSync(dir).map((n) => body(n)).join("\n") + read(__dirname, "..", "AGENTS.md");

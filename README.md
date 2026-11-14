@@ -186,7 +186,7 @@ T3 Code has its own MCP server, and T3 Tots can use it next to the local tools. 
 - **One action, one route.** The local tools take over only when it is certain nothing was sent. After a timeout the bot looks first and never repeats a change another way while unsure.
 - **When T3 refuses** a change because of the access level you gave the bot, it tells you why and offers four choices: local tools this once, always local tools on that computer, stop, or how to raise its level. It never works around a refusal on its own, also not while you are away.
 - After starting a thread through MCP the bot runs `t3ctl record --started <id>`, so the thread counts as yours in "what's waiting" and digests.
-- T3 Connect's free plan links 3 computers; the rest keep using the local tools. A sign-in lasts about 30 days.
+- T3 Connect limits how many computers a plan links; any it can't link keep using the local tools. A sign-in lasts 30 days.
 
 The backup and setup rules are in [t3-routes](skills/t3-routes/SKILL.md). The bot reads it only when a connector call fails or is refused.
 

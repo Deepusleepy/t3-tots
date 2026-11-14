@@ -62,7 +62,7 @@ def onsize(st):
 
 class Scanner:
     def __init__(s, a, root=""):
-        s.a=a; s.root=root; s.seen=set(); s.errors=0; s.symlinks=0; s.hardlink_dupes=0; s.sparse={}; s.other_users=set(); s.home=os.path.expanduser("~")
+        s.a=a; s.root=root; s.seen=set(); s.errors=0; s.symlinks=0; s.hardlink_dupes=0; s.sparse={}; s.other_users=set(); s.home=os.path.realpath(os.path.expanduser("~"))
         s.big={}; s.stale=[]; s.files_for_dupes={}; s.now=time.time()  # re-walks of subtrees revisit files: keep these keyed by path
     def walk(s, path, dev):
         """Return (alloc_bytes, apparent_bytes, newest_mtime, child_sizes dict)."""
@@ -155,7 +155,7 @@ def dupes(sc):
 def scan_one(root,a):
     root=os.path.abspath(os.path.expanduser(root))
     if not os.path.isdir(root): return {"root":root,"error":"not a folder or not reachable"}
-    if inside_other_user_home(root, os.path.expanduser("~")): return {"root":root,"error":"another user's folder, not scanned"}
+    if inside_other_user_home(os.path.realpath(root), os.path.realpath(os.path.expanduser("~"))): return {"root":root,"error":"another user's folder, not scanned"}
     sc=Scanner(a, root); dev=os.stat(root).st_dev
     du=shutil.disk_usage(root)
     t0=time.time()

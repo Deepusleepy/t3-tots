@@ -72,6 +72,13 @@ class OtherUsers(unittest.TestCase):
         ]:
             self.assertEqual(other(path, home, osp), want, f"{path} with home {home}")
 
+    def test_the_users_own_home_under_another_spelling_is_scanned(self):
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        p = tmp / "home" / "me" / "a.bin"; p.parent.mkdir(parents=True); p.write_bytes(b"x")
+        try: os.symlink(tmp / "home" / "me", tmp / "home" / "alias", target_is_directory=True)
+        except OSError: self.skipTest("this account can't create a symlink")
+        self.assertNotIn("error", self.scan(tmp / "home" / "me", tmp / "home" / "alias")[0])
+
     def test_a_root_inside_another_users_home_is_refused(self):
         tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
         for rel in ("home/me/a.bin", "home/other/deep/b.bin"):

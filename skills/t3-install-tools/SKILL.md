@@ -1,7 +1,11 @@
 ---
 name: t3-install-tools
 description: >-
-  Install, check or update T3 Tots: its helper scripts (t3q.py, t3ctl, t3listen, export/survey, t3ui, cleanup and report helpers) from the pinned, sha256-verified GitHub release onto the box and the user's T3 computers, and the live t3-* skills from the same release. Use for "update T3 Tots", "update T3 Tots tools", "update my T3 Tots skills", "what's new in T3 Tots", the T3 Tots weekly update routine, during setup, or when a skill says the tools are missing or differ. Not for updating T3 Code or dev tools (t3-update).
+  Install, check or update T3 Tots: its helper scripts and its t3-* skills, from the
+  pinned, verified release. Use for "update T3 Tots", "update T3 Tots tools", "update my
+  T3 Tots skills", "reinstall the tools", "what's new in T3 Tots", the T3 Tots weekly
+  update routine, during setup, or when a skill says the tools are missing or differ.
+  Not for updating T3 Code or dev tools (t3-update).
 ---
 
 Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.5.0` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
@@ -61,7 +65,7 @@ PINNED = {
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "489c0b56200da6389233f049dd4e531f972489dbbdd017e94806af33b4486105"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "5886defd259f579195d71efdb2835ecdba25591bc72666a7ccc05e7bbe0aa34e"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
  "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }

@@ -4,7 +4,7 @@ description: >-
   First conversation with a new owner of T3 Tots: detect their setup, install
   the helper tools, optionally issue the T3 token, verify, and show what to try.
   Use on the first chat, when no T3 Tots setup is saved in memory, or when the
-  user says "set up T3 Tots" / "getting started" / "reinstall the tools".
+  user says "set up T3 Tots" / "getting started".
 ---
 If you are not Grok Bot, stop here. Install and verify the tools by following AGENTS.md in this release, and skip every step below (box, ListMachines, routines, cards, memory, phone setup; t3-tots-rules "Grok Bot only" lists what to do instead).
 
