@@ -210,7 +210,12 @@ test("the shared rules stay small, and every pointer to a section of them or of 
 test("MCP is offered once: at first setup, and once to an owner who updates from before it existed", () => {
   const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), started = skill("t3-getting-started"), inst = skill("t3-install-tools");
   const offer = started.slice(started.indexOf("## 5b. Optional: T3's own MCP"), started.indexOf("## 6"));
-  assert.match(offer, /on a card with \*\*Connect T3 MCP\*\* and \*\*Not now\*\*/); assert.match(offer, /save the memory note "T3 Tots MCP offered" and don't ask again/); assert.match(offer, /t3-routes "Setup"/);
+  assert.match(offer, /on a card with \*\*Connect T3 MCP\*\* and \*\*Not now\*\*, never as a question in a sentence/); assert.match(offer, /On \*\*Connect T3 MCP\*\*, follow t3-routes "Setup", one step at a time/);
+  assert.match(offer, /save the note "T3 Tots MCP offered" in always-visible \(profile\) memory and don't ask again/);
+  assert.match(offer, /^Grok Bot only\. Skip this section when memory has a "T3 routes" note or a "T3 Tots MCP offered" note\./m, "setup doesn't offer it a second time");
+  assert.match(skill("t3-routes"), /one step at a time and wait for their reply after each/);
   const after = inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run"));
-  assert.match(after, /no "T3 routes" note and no "T3 Tots MCP offered" note in memory \| Offer T3's own MCP once, as t3-getting-started "5b\. Optional: T3's own MCP" says/);
+  const firstSetupPasses = started.match(/t3-install-tools "After an update"/g) || []; assert.ok(firstSetupPasses.length >= 2, "first setup runs the after-update checks twice, before its questions");
+  assert.match(after, /no "T3 Tots MCP offered" note in memory\. Not during first setup: t3-getting-started makes this offer itself in section 5b/, "so those two passes never make the offer");
+  assert.match(after, /after its questions \| Offer T3's own MCP once, as t3-getting-started "5b\. Optional: T3's own MCP" says/);
 });

@@ -44,7 +44,7 @@ Only after the user asks.
 1. T3 Connect limits how many computers a plan links. Any it can't link keep the local tools.
 2. Each computer's tools must be v1.5.0 or later: `node t3ctl record` prints `USAGE: record --started <threadId>`. Update with t3-install-tools first if not.
 3. Say once: "Through MCP I can only change threads at or below the level you pick. Pick Full access, or I'll ask before using the local tools on freer threads."
-4. Per computer the user does this: in T3 Code press Ctrl/Cmd+K, choose **Use T3 Code in another app (MCP)**, pick **Grok Bot**, sign in to T3 Connect if asked, pick the level, Approve.
+4. Per computer, give the user one step at a time and wait for their reply after each: in T3 Code press Ctrl/Cmd+K; choose **Use T3 Code in another app (MCP)**; pick **Grok Bot**; send you the message it gives them; on the sign-in page sign in to T3 Connect, pick the level and Approve.
 5. Check: `t3_project_list` through the new connector lists that computer's projects, and `orchestrator_capabilities` shows the level.
 6. Save the note below in always-visible (profile) memory, so it is in view without a search. One line per computer. Never save a URL, code or key. A sign-in lasts 30 days.
 
