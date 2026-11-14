@@ -49,7 +49,7 @@ REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "be5191864d8263a6f700aefac15f5008fe72f6589e6fbe7e933f5b342cd443cc"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
- "tools/t3ctl": ["t3ctl", "3be7e1a73e2175caf5222cdf64e92c5768e0f5156eb56b1251f9b19bad50dba1"],
+ "tools/t3ctl": ["t3ctl", "8b171f91682eb2b73087e1255d2cab2f39873d42cd37051a3f29b378bc697f02"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],

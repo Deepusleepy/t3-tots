@@ -359,12 +359,12 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     // WRITE_STATE: the last line of a failed write says whether a write request reached T3
     dispatchMode = "fail"; reset("npm test"); sent = [];
     r = await run("send", "--thread", thread.id, "--prompt", "continue");
-    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: unknown\n$/, "T3 got the request and refused it: it may have happened");
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: unknown \([^\n]*never repeat it another way\)\n$/, "T3 got the request and refused it: it may have happened");
     dispatchMode = "ok";
     r = await run("send", "--thread", "no-such-thread-anywhere", "--prompt", "continue");
-    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: none\n$/, "stopped before any write request left"); assert.equal(sent.filter((x) => x.type === "message.dispatch").length, 1);
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /\nWRITE_STATE: none \(nothing was sent\)\n$/, "stopped before any write request left"); assert.equal(sent.filter((x) => x.type === "message.dispatch").length, 1);
     r = await run("send", "--thread", thread.id, "--prompt", "Fix", "the", "bug");
-    assert.match(r.out, /^USAGE: unexpected "the"[^\n]*\nWRITE_STATE: none\n$/);
+    assert.match(r.out, /^USAGE: unexpected "the"[^\n]*\nWRITE_STATE: none \(nothing was sent\)\n$/);
     r = await run("read", "--thread", "no-such-thread-anywhere");
     assert.equal(r.code, 1, r.out); assert.doesNotMatch(r.out, /WRITE_STATE/, "a read never prints it");
 
@@ -641,4 +641,12 @@ test("WRITE_STATE: every request t3ctl can send is listed as a write or as a rea
   assert.ok(sent.length >= 10, `found ${sent.length} request tags`);
   for (const tag of sent) assert.ok(writes.has(tag) !== reads.has(tag), `${tag} must be in WRITE_TAGS or in this test's list of reads, not both or neither`);
   for (const tag of ["orchestration.dispatchCommand", "orchestration.launchThread", "scheduledTasks.upsert", "scheduledTasks.runNow", "scheduledTasks.delete", "scheduledTasks.setEnabled"]) assert.ok(writes.has(tag), `${tag} changes T3`);
+});
+
+test("usage lists the options skills pass to new, and a held queue tells the bot to ask first", () => {
+  const { execFileSync } = require("child_process"), file = path.join(__dirname, "..", "tools", "t3ctl");
+  const usage = execFileSync(process.execPath, [file], { encoding: "utf8" });
+  for (const flag of ["--runtime approval-required/auto-accept-edits/auto/full-access", "--title x", "--mode plan", "record --started"]) assert.ok(usage.includes(flag), `usage names ${flag}`);
+  const held = require("fs").readFileSync(file, "utf8").match(/QUEUE_HELD: [^`]*/)[0];
+  assert.match(held, /Ask the user before starting it/); assert.doesNotMatch(held, /Start it with/);
 });
