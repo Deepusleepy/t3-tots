@@ -64,6 +64,7 @@ Never invent the user's preferences. The thread decides how to do the work. The 
 Grok Bot only. When the "T3 routes" memory note exists, this bot also has T3's own MCP connector for one or more computers. Read the t3-routes skill before acting: it says what goes through MCP first, what always uses the local tools, and what to do when one fails or T3 refuses. With no such note, use the local tools for everything.
 
 ## Sending into threads
+With a "T3 routes" note, t3-routes picks the tool for a send; never send the same message both ways.
 - Before a follow-up, read the thread's recent history (`t3ctl read --thread <t> --last 6`) so you don't repeat or contradict it.
 - `t3ctl send` steers into a running run by default and checks that the message arrived. Relay its notes:
   - `DELIVERY_FIXED`: the queue was stuck and t3ctl resumed it.

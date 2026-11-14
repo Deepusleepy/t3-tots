@@ -47,14 +47,14 @@ goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "eb78787b876b27f17314527602923a4adae1072e5acd245518985bb447193c02"],
+ "tools/t3q.py": ["t3q.py", "be5191864d8263a6f700aefac15f5008fe72f6589e6fbe7e933f5b342cd443cc"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
- "tools/t3ctl": ["t3ctl", "0d6a77cbc97e80f10a6587449b9cc9406c718852d69f247e0a493fd5ab46ac37"],
+ "tools/t3ctl": ["t3ctl", "3be7e1a73e2175caf5222cdf64e92c5768e0f5156eb56b1251f9b19bad50dba1"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
  "tools/t3listen": ["t3listen", "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
- "tools/export.js": ["export.js", "a0b6d1ca974ba1123a8f77a92c7e26331cc8fb3ed2a528af1b856a81aed7431d"],
- "tools/survey.js": ["survey.js", "f2054798d5d3fd7b2c4a852eebf1fdf48a46dc12b9d872bf379273522dd17320"],
+ "tools/export.js": ["export.js", "666093930cf3f2cafa270e7859635d243e81e490d4d8fee4f89da8e1c522773b"],
+ "tools/survey.js": ["survey.js", "2b7626993882eb6fccfef6bca90d366c8c3a3bc54542013e99882f36890047a1"],
  "tools/t3ui": ["t3ui", "221951527b7250375dc97ec63fababa09e693b3af0e5ae1132d42aee67f2b23f"],
  "tools/macos/ui-dump.applescript": ["ui-dump.applescript", "c27003dd85b3ff3a67163b598d4afad1c1d09629f8f6ff5370bd1d69f5f16db1"],
  "tools/macos/ui-menuitem.applescript": ["ui-menuitem.applescript", "58280f8b42140398d98481549abb1a99cd5d83457e41cd53553813687732b111"],

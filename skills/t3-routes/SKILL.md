@@ -51,14 +51,14 @@ Every one of these acts on X, the computer that owns the thread. Never run one c
 - Archive: read the thread first and don't archive one that is running.
 
 ## Starting a thread
-- Mode: use the runtime mode the user names. If they name none, use the mode that project's own threads run in. If that is above the connector's level, it is a refusal case: ask first ("When T3 refuses"). With the local tools, pass the mode as `t3ctl new --runtime <mode>`; without it `t3ctl new` starts in Full access.
+- Mode: use the runtime mode the user names. If they name none, use the mode that project's own threads run in. Pass it as `runtimeMode`. If that is above the connector's level, it is a refusal case: ask first ("When T3 refuses"). With the local tools, pass the mode as `t3ctl new --runtime <mode>`; without it `t3ctl new` starts in Full access.
 - Wait for the result (`t3_thread_wait`) only when the user wants it.
 - After an MCP launch, record it: `t3ctl record --started <threadId>` on that computer (`t3ctl new` records by itself). Without it the thread is hidden from "what's waiting" and digests as agent-started, and Resume at reset isn't armed. If that computer's Grok app is off, add the thread id to a "to record" line in the "T3 routes" note. Before any action or report on a computer, run its "to record" lines first and clear them. While it stays offline, mention that those threads are missing from its reports.
 - A launch that may have been sent: through MCP, call `t3_thread_launch` again with the **same** `clientRequestId` and the same content; T3 returns the thread it already made. If you no longer have that id, or it was `t3ctl new` (use the thread id if it printed one), search the project for a thread with that title made in the last few minutes before starting another, and ask if unsure. Never launch a second one on a guess.
 
 ## Answering
 - A question card the user answered: when the Grok app on that computer is on, use `t3ctl answer` as t3-phone-answers says.
-- When that app is off: `t3_pending_request` with `respond`, the exact answers, then `read` to see that it closed. The listener's close will say it was answered in T3; that is expected, so don't report it as news.
+- When that app is off: `t3_pending_request` with `respond`, the exact answers, then `read` to see that it closed. The listener's close will then say it was answered in T3; that is expected.
 
 ## When it fails
 Decide by what is known about the request, never by guessing from the error text. A failed **read** changed nothing: try it on the next connection. For a **change**, three cases:
@@ -86,7 +86,7 @@ The user picked an access level when they connected this bot. T3 refuses a chang
 - **Yes**: do it with the local tools, once.
 - **Always**: save "refusals on <computer>: use the local tools" in the "T3 routes" note. From then on, for a thread above that connector's level, skip MCP, do it with the local tools, and say in the same message that you did. It holds for that computer until its connector is reconnected.
 - **No**: stop. Tell them they can do it in T3 Code, or raise the bot's level by reconnecting.
-- With nobody there to ask and no "Always" saved: in delegated mode only, what that mode already lets you do (t3-tots-rules "Decisions": answer routine questions, one nudge per stall, decline an approval) goes through the local tools, and you list each one in your report. Anything else, and any run outside delegated mode: don't do it; report what was refused.
+- With nobody there to ask and no "Always" saved: don't do it; report what was refused. Delegated mode doesn't change that. So when the user turns delegated mode on for a computer whose connector is below Full access, ask this question then.
 
 ## Setup ("connect T3 MCP")
 Only after the user asks. The local tools stay as they are; nothing is removed.

@@ -33,7 +33,7 @@ if(q!=="all"&&exact.length>1)die("AMBIGUOUS",`${exact.length} projects match "${
 const projs=exact.length?exact:sh.projects.filter(p=>String(p.title||"").toLowerCase().includes(q)); // several titles containing the words: all of them, and they are listed below
 if(!projs.length)die("NOT_FOUND",`no project matches "${red(q)}"`);if(!exact.length&&projs.length>1)console.error(`note: ${projs.length} projects contain "${red(q)}": ${projs.map(p=>red(p.title)).join(" | ")}`);const pid=new Set(projs.map(p=>p.id));
 const ts=sh.threads.filter(t=>pid.has(t.projectId)&&Date.parse(t.updatedAt)>=since);
-let started={};try{started=JSON.parse(fs.readFileSync(path.join(process.env.T3_TOTS_DIR||__dirname,"started-here.json"),"utf8"))||{}}catch{} // threads T3 Tots started count as the user's (same rule as t3ctl)
+let started={};try{started=JSON.parse(fs.readFileSync(path.join(__dirname,"started-here.json"),"utf8"))||{}}catch{} // threads T3 Tots started count as the user's (same rule as t3ctl)
 const out={generatedAt:new Date().toISOString(),days,computer:os.hostname(),projects:projs.map(p=>({title:red(p.title),root:red(p.workspaceRoot)})),threads:[]};
 for(const t of ts){const p=(await get("/api/orchestration/threads/"+encodeURIComponent(t.id))).projection;const items=p.turnItems;
  const files=new Map();for(const i of items)if(i.type==="file_change")files.set(red(i.fileName),(files.get(red(i.fileName))||0)+1);

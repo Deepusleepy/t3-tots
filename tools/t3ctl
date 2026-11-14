@@ -404,7 +404,7 @@ const isMainThread = (t, started = {}) => !/^(mcp|provider)$/.test(t.creationSou
 // started-here.json {threadId: ISO}: threads T3 Tots started, here with `new` or through T3's MCP and then `record --started`.
 // They show in the user's lists, and t3listen arms Resume at reset for them.
 const STARTED = path.join(__dirname, "started-here.json");
-const startedIds = () => { try { const m = JSON.parse(fs.readFileSync(STARTED, "utf8")); return m && typeof m === "object" ? m : {}; } catch { return {}; } };
+const startedIds = () => { try { const m = JSON.parse(fs.readFileSync(STARTED, "utf8")); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; } catch { return {}; } };
 const STARTED_KEPT = 5000;
 function withFileLock(file, change) {
   const lock = `${file}.lock`, giveUpAt = Date.now() + 5000;

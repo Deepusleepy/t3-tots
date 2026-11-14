@@ -48,9 +48,9 @@ RQ = "orchestration_v2_projection_runtime_requests"; MS = "orchestration_v2_proj
 # a queued run whose queue was stopped on purpose is not running: it waits for someone to resume or cancel it
 RUNST = "case when r.status='queued' and json_extract(r.payload_json,'$.queueHeld') then 'queue held' else r.status end"
 SPAWNED = ("mcp", "provider")  # threads created by agents, not by the user
-def _started():  # threads T3 Tots started by any route (started-here.json next to this script, or in T3_TOTS_DIR); shown like the user's own
+def _started():  # threads T3 Tots started by any route (started-here.json next to this script); shown like the user's own
     try:
-        with open(os.path.join(os.environ.get("T3_TOTS_DIR") or os.path.dirname(os.path.abspath(__file__)), "started-here.json"), encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "started-here.json"), encoding="utf-8") as f:
             m = json.load(f)
         return set(m) if isinstance(m, dict) else set()
     except Exception: return set()
