@@ -1,8 +1,11 @@
 ---
 name: t3-new-thread
 description: >-
-  Start a new T3 thread or send a follow-up into one. Use for "new thread", "/new",
-  "start a thread in <project>", "follow up in <thread>", "send this to T3".
+  Start a new T3 thread or send a follow-up into one with the local tools. Use for
+  "new thread", "/new", "start a thread in <project>", "follow up in <thread>",
+  "send this to T3" when memory has no "T3 routes v2" note, or when that note sent
+  you here. With that note, a plain start or send goes straight through the T3
+  connector as the note says, without this skill.
 ---
 Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md), including "Sending into threads". Send only the prompt the user asked for.
 

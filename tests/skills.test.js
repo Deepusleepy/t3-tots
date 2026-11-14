@@ -147,3 +147,18 @@ test("skills never tell the bot to accept an approval, send twice, or open liste
   assert.doesNotMatch(skill("t3-tots-rules"), /t3-phone-answers "Answering"/);
   assert.doesNotMatch(skill("t3-install-tools") + skill("t3-tots-rules"), /weekly run installs nothing|reports and installs nothing/, "notify mode still fills placeholders");
 });
+
+// With T3's MCP connected, a plain action reads no skill: the memory note is the only T3 Tots text in view, so it carries the safety rules.
+test("MCP: the note is small and safe on its own, and the backup skill stays small and complete", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), routes = skill("t3-routes");
+  const m = routes.match(/```\n(T3 routes v2\n[\s\S]*?)\n```/); assert.ok(m, "the note block"); const note = m[1];
+  assert.ok(note.length <= 1500, `the note is ${note.length} characters`); assert.ok(routes.length <= 6500, `t3-routes is ${routes.length} characters`);
+  for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /ask unless one match is exact/, /new clientRequestId/,
+    /record --started <id>/, /"To record"/, /Never approve, delete, unlink a computer, change environment preferences, merge back or restart/, /stays in them/, /stop and read t3-routes/]) assert.match(note, rule);
+  assert.match(routes, /don't read t3-tots-rules/); assert.match(routes, /Never do it another way while unsure/); assert.match(routes, /same\*\* `clientRequestId`/);
+  assert.match(routes, /Never work around it yourself/); assert.match(routes, /also in delegated mode/); assert.match(routes, /This never covers an approval/);
+  assert.match(routes, /Never as a second try after a doubt or a refusal/); assert.match(routes, /Never build a waiting list from `t3_pending_request`/);
+  for (const n of ["t3-new-thread", "t3-thread-actions"]) assert.match(skill(n).split("---")[1], /"T3 routes v2"[\s\S]*without this skill/, `${n} says when it is not needed`);
+  assert.doesNotMatch(skill("t3-tots-rules"), /Read the t3-routes skill before acting/, "the rules never send every action to t3-routes");
+  const after = skill("t3-install-tools"); assert.match(after.slice(after.indexOf("## After an update"), after.indexOf("## Weekly update run")), /doesn't start with "T3 routes v2"/);
+});

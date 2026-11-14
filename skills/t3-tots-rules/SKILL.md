@@ -61,10 +61,10 @@ The prompt T3 shows is often a short description ("Redo merges with PR names"), 
 Never invent the user's preferences. The thread decides how to do the work. The user decides what to build. Your prompts carry the user's context, not your design choices.
 
 ## T3's MCP (optional)
-Grok Bot only. When the "T3 routes" memory note exists, this bot also has T3's own MCP connector for one or more computers. Read the t3-routes skill before acting: it says what goes through MCP first, what always uses the local tools, and what to do when one fails or T3 refuses. With no such note, use the local tools for everything.
+Grok Bot only. A "T3 routes" memory note means this bot also has T3's own MCP connector for one or more computers. The note lists the plain actions that go straight through the connector. Read t3-routes only when a connector call fails, times out or is refused, or for setup. Everything in this skill and the other t3-* skills still uses the local tools. With no such note, use the local tools for everything.
 
 ## Sending into threads
-With a "T3 routes" note, t3-routes picks the tool for a send; never send the same message both ways.
+With a "T3 routes" note, a plain send goes through the connector as the note says; never send the same message both ways.
 - Before a follow-up, read the thread's recent history (`t3ctl read --thread <t> --last 6`) so you don't repeat or contradict it.
 - `t3ctl send` steers into a running run by default and checks that the message arrived. Relay its notes:
   - `DELIVERY_FIXED`: the queue was stuck and t3ctl resumed it.
@@ -128,7 +128,7 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved \| --redirect])` |
 | Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
 | Thread actions | `settle`, `unsettle`, `archive`, `unarchive`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
-| Records | `record --started <threadId>` (after starting a thread through T3's MCP; needs no token; t3-routes "Starting a thread") |
+| Records | `record --started <threadId>` (after starting a thread through T3's MCP; needs no token) |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
 
