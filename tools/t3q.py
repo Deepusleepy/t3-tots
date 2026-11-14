@@ -136,7 +136,7 @@ def waiting():
         if asks and not why: why.append("last reply asks you a question or hands a decision back")
         print(f"\n## [{proj}] {title}\nid {tid} | last activity {loc(upd)}{' | settled' if settled else ''} | " + "; ".join(why))
         msg = " ".join((text or "").split())
-        if msg: print("last assistant message:", flat(msg, 900) if len(msg) <= 900 else flat(msg[:400], 400) + " … " + flat(msg[-500:], 500))
+        if msg: print("last assistant message:" if role == "assistant" else "no reply yet; the user's last message:", flat(msg, 900) if len(msg) <= 900 else flat(msg[:400], 400) + " … " + flat(msg[-500:], 500))
     print(f"\n{n} thread(s) waiting on you (last {DAYS} days)" if n else f"Nothing waiting on you (last {DAYS} days)")
 
 def thread():  # fuzzy match a user thread; prints state, git context, goal, last N messages

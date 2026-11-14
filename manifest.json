@@ -12,8 +12,8 @@
    "path": "tools/t3q.py",
    "dest": "t3q.py",
    "kind": "tool",
-   "bytes": 27606,
-   "sha256": "3558a5e46c22e06b94e58bc81729867c9410d9532916d076b01d355d9215f620",
+   "bytes": 27675,
+   "sha256": "12d29e79ae4db85a25ee89385255195bc1fd3680715065c55d2a91160ba7e023",
    "targets": [
     "macos",
     "linux",
@@ -278,7 +278,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 62054,
-   "sha256": "37daede2a908ec70be2e7fc0d2b741eca845aa8b48370c863b101c26388d71d6"
+   "sha256": "7150181cf43b2afc0907051e4a3394072e6d490a91259a5b8b661a1f2b6e66fc"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",

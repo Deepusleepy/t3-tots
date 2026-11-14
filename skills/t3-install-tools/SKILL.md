@@ -51,7 +51,7 @@ goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "3558a5e46c22e06b94e58bc81729867c9410d9532916d076b01d355d9215f620"],
+ "tools/t3q.py": ["t3q.py", "12d29e79ae4db85a25ee89385255195bc1fd3680715065c55d2a91160ba7e023"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/t3ctl": ["t3ctl", "a72400871c4ed86aece4712db083d9d01406248d87d48fd9785cf9047fc0028d"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
