@@ -1,12 +1,12 @@
 ---
 name: t3-tots-rules
 description: >-
-  Shared rules and tools for every t3-* (T3 Tots) skill. Read before running any of them,
-  except in a run of the "T3 questions to chat" webhook routine, which t3-event covers alone.
+  Shared rules for the t3-* (T3 Tots) skills that change or decide something. Read it when a
+  t3-* skill says to follow it. Skills that say they are complete on their own don't need it.
 ---
 # T3 Tots rules
 
-Every t3-* skill follows these rules. Other skills link here instead of repeating them.
+The t3-* skills that say "Follow the t3-tots-rules skill" follow these rules. A skill that says it is complete on its own carries the rules it needs.
 
 ## Writes
 Change nothing on the user's computers unless the user approved that exact change in chat. Approval for one change is not approval for the next. These skills may write, and only the thing named:

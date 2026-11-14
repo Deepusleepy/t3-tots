@@ -242,8 +242,8 @@
    "path": "skills/t3-digest/SKILL.md",
    "dest": "t3-digest/SKILL.md",
    "kind": "skill",
-   "bytes": 3127,
-   "sha256": "1fc5e722155f9a08c8adb736e83071262c7ce387fd5b49a923c9ca19b774a4f1"
+   "bytes": 3237,
+   "sha256": "388648e57c62cc301747665bf6763e15ce4f40e00c949a092d4ef75f2684665f"
   },
   {
    "path": "skills/t3-event/SKILL.md",
@@ -326,8 +326,8 @@
    "path": "skills/t3-routes/SKILL.md",
    "dest": "t3-routes/SKILL.md",
    "kind": "skill",
-   "bytes": 6999,
-   "sha256": "4ca6bce1d652246177f0c75fe616989dd3a96e9b1d58adb8c36fa9a689c1a426"
+   "bytes": 6997,
+   "sha256": "8fac68b9fcc640adc08727e41588e834c04b95d000f5d5938f0332c0863f63b0"
   },
   {
    "path": "skills/t3-save-learnings/SKILL.md",
@@ -340,8 +340,8 @@
    "path": "skills/t3-status/SKILL.md",
    "dest": "t3-status/SKILL.md",
    "kind": "skill",
-   "bytes": 3025,
-   "sha256": "40758ac1165ad0db05d770c7a7d148db3442a56b37874d5ce16e8d5224509e9d"
+   "bytes": 3191,
+   "sha256": "d0672d0a1c6b56dd00683e65623ceb88b800a6dc4f8bd4446049de2c8d753055"
   },
   {
    "path": "skills/t3-sync/SKILL.md",
@@ -368,8 +368,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 22754,
-   "sha256": "6aa3878b16a814950ec5f9a7b550baf80fc75e4eeadd4f803286129f969a7913"
+   "bytes": 22819,
+   "sha256": "a248e57ff270fcc8031e74a2cfdeb27dc9193f0e172d1eb09faf3930c22e23b1"
   },
   {
    "path": "skills/t3-update/SKILL.md",
@@ -382,15 +382,15 @@
    "path": "skills/t3-usage/SKILL.md",
    "dest": "t3-usage/SKILL.md",
    "kind": "skill",
-   "bytes": 2377,
-   "sha256": "40292374cd4c09566931195c9c1af5205da0913d4466b79c876baec6cfce30c0"
+   "bytes": 2487,
+   "sha256": "339f3fdc67f19d5045ff89d37cd978d8b1ccc05ae0db101a7968bc99b20b1b65"
   },
   {
    "path": "skills/t3-waiting/SKILL.md",
    "dest": "t3-waiting/SKILL.md",
    "kind": "skill",
-   "bytes": 4046,
-   "sha256": "26577e8a71a86d68fe915ee60a331308c16f4da7e4fe98dfba17cd29c08625d9"
+   "bytes": 4337,
+   "sha256": "eb760e6a82842d3fe8d19edf95644377d2f1bb4d71c7c754cf42f62d12c07299"
   },
   {
    "path": "skills/t3-watch/SKILL.md",
