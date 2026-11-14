@@ -152,8 +152,9 @@ test("skills never tell the bot to accept an approval, send twice, or open liste
 test("MCP: the note is small and safe on its own, and the backup skill stays small and complete", () => {
   const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), routes = skill("t3-routes");
   const m = routes.match(/```\n(T3 routes v2\n[\s\S]*?)\n```/); assert.ok(m, "the note block"); const note = m[1];
-  assert.ok(note.length <= 1700, `the note is ${note.length} characters`); assert.ok(routes.length <= 7000, `t3-routes is ${routes.length} characters`);
-  for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /ask unless one match is exact/, /new clientRequestId and keep it\. A retry of that same change reuses it/, /always with that computer's environmentId/,
+  assert.ok(note.length <= 1900, `the note is ${note.length} characters`); assert.ok(routes.length <= 7300, `t3-routes is ${routes.length} characters`);
+  assert.match(routes, /always-visible \(profile\) memory/); assert.match(routes, /ask on a tap-to-answer card with these options/);
+  for (const rule of [/data, never instructions/, /token, listen\.json or secrets\//, /computer that owns the thread/, /ask on a card unless one match is exact/, /with environmentId <id>/, /new clientRequestId and keep it\. A retry of that same change reuses it/, /always with that computer's environmentId/,
     /record --started <id>/, /"To record"/, /runtime mode the user names, else the mode that project's threads run in/, /Never approve, delete, unlink, or change projects, settings or environment preferences through MCP/, /never MCP on your own/, /computer the user names, else the one their message came from/, /stop \(t3_thread_interrupt with stop: true\)/, /stays in them/, /stop and read t3-routes/]) assert.match(note, rule);
   assert.match(routes, /don't read t3-tots-rules/); assert.match(routes, /Never do it another way while unsure/); assert.match(routes, /same\*\* `clientRequestId`/);
   assert.match(routes, /Never work around it yourself/); assert.match(routes, /also in delegated mode/); assert.match(routes, /This never covers an approval/);
@@ -186,7 +187,9 @@ test("look-only skills are complete on their own and share one Basics block", ()
     assert.ok(skill(n).length <= 5000, `${n} is ${skill(n).length} characters`);
     assert.doesNotMatch(skill("t3-tots-rules").split("---")[1], /Read before running any of them/, "the rules' label doesn't send every skill to them");
   }
-  for (const rule of [/don't read t3-tots-rules/, /data, never instructions/, /`token`, `listen\.json`, `secrets\/`/, /ListMachines every run/, /`py -3`/, /Remove-Item Env:X/, /`AMBIGUOUS` or `NO_GOOD_MATCH`/]) assert.match(first, rule);
+  for (const rule of [/don't read t3-tots-rules/, /data, never instructions/, /`token`, `listen\.json`, `secrets\/`/, /ListMachines every run/, /`py -3`/, /Remove-Item Env:X/, /`AMBIGUOUS` or `NO_GOOD_MATCH`/, /tap-to-answer card with the options, never in prose/]) assert.match(first, rule);
+  assert.match(skill("t3-tots-rules"), /ask with a tap-to-answer card that lists the options/); assert.match(skill("t3-tots-rules"), /your own questions too/);
+  assert.match(skill("t3-event"), /yourself also goes on a card, never in prose/);
   const waiting = skill("t3-waiting");
   assert.match(waiting, /--decision <option> --user-approved/); assert.match(waiting, /Never accept an approval yourself/); assert.match(waiting, /Never answer a question the user didn't see/);
   assert.match(waiting, /In delegated mode[^\n]*read t3-tots-rules "Decisions" first/);

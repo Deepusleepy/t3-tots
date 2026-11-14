@@ -13,7 +13,7 @@ This skill is complete on its own: don't read t3-tots-rules for it.
 - Computers: call ListMachines every run and use every connected computer with T3 data, unless the user names one. Label results by computer and say which were offline. Other agents: only the computer you run on. Where a step says SendToUser give the file path, skip CopyToBox, and write pages to `<tools folder>/out/` instead of `/workspace`.
 - Tools: run them from the tools folder saved in memory (default `~/t3-tots`). Python is `python3`, on Windows `py -3` (else `python`). Run Node scripts as `node <file>`. On Windows a setting goes as `$env:X='v'; <command>; Remove-Item Env:X`.
 - A line that starts with a word in capitals is a status: pass on its sentence. `AMBIGUOUS` or `NO_GOOD_MATCH`: list the closest threads it printed and ask. A usage line instead of a result means older tools: say so and offer "update T3 Tots".
-- Give times in the user's timezone. Answer first, in short plain words, and say what you couldn't check. Leave out usage and cost figures unless the user asked for them; asking for usage, or turning on its routine, is that ask.
+- Give times in the user's timezone. Answer first, in short plain words, and say what you couldn't check. A choice you put to the user goes on a tap-to-answer card with the options, never in prose (other agents: numbered options). Leave out usage and cost figures unless the user asked for them; asking for usage, or turning on its routine, is that ask.
 
 ## 1. Collect from every connected computer
 - T3: `node survey.js` for activity and stale threads, and `node export.js --project all --days <1|7> --out out/digest.json`, then CopyToBox the export. `t3q.py waiting` lists what needs the user.

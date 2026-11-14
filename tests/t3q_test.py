@@ -63,6 +63,20 @@ class T3qTest(unittest.TestCase):
         ov = run(self.dir, "overview")
         self.assertIn("Held queue | needs you", ov); self.assertIn("Behind a run | running", ov)
 
+    def test_a_running_thread_blocked_on_a_request_is_waiting(self):
+        make_db(self.dir)
+        db = sqlite3.connect(os.path.join(self.dir, "statev2.sqlite"))
+        db.execute("insert into orchestration_v2_projection_threads values (?,?,?,?,?,null,null,?)", ("t-block", "p1", "Blocked on approval", iso(5), iso(1), json.dumps({"creationSource": "web"})))
+        db.execute("insert into orchestration_v2_projection_runs values (?,?,1,?,?,null,?)", ("r-t-block", "t-block", "running", iso(3), json.dumps({})))
+        db.execute("insert into orchestration_v2_projection_messages values (?,?,?,?)", ("t-block", "assistant", iso(1), json.dumps({"text": "Running the command."})))
+        db.execute("insert into orchestration_v2_projection_runtime_requests values ('t-block', 'command', 'pending', ?, '{}')", (iso(1),))
+        db.commit(); db.close()
+        out = run(self.dir, "waiting")
+        self.assertIn("Blocked on approval", out); self.assertIn("4 thread(s) waiting on you", out)
+        self.assertNotIn("Behind a run", out)
+        ov = run(self.dir, "overview")
+        self.assertIn("Blocked on approval | needs you", ov); self.assertIn("Behind a run | running", ov)
+
     def test_health_reports_held_queue_not_stuck(self):
         make_db(self.dir)
         out = run(self.dir, "health")

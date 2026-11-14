@@ -12,8 +12,8 @@
    "path": "tools/t3q.py",
    "dest": "t3q.py",
    "kind": "tool",
-   "bytes": 27148,
-   "sha256": "be5191864d8263a6f700aefac15f5008fe72f6589e6fbe7e933f5b342cd443cc",
+   "bytes": 27198,
+   "sha256": "a66256c75eec2d5b762c106b2c1f8c16a35aaedde3d114700ddc3d05ddecf464",
    "targets": [
     "macos",
     "linux",
@@ -242,15 +242,15 @@
    "path": "skills/t3-digest/SKILL.md",
    "dest": "t3-digest/SKILL.md",
    "kind": "skill",
-   "bytes": 3237,
-   "sha256": "388648e57c62cc301747665bf6763e15ce4f40e00c949a092d4ef75f2684665f"
+   "bytes": 3362,
+   "sha256": "5e8349b38f11642b50aecb6937b47f14150a98f879cc2cb1016f7d81a4648062"
   },
   {
    "path": "skills/t3-event/SKILL.md",
    "dest": "t3-event/SKILL.md",
    "kind": "skill",
-   "bytes": 5772,
-   "sha256": "5513c197eba8a8db02c174628ccbef6dfeb0c24b08084c4e77fbb534d806b5e9"
+   "bytes": 5848,
+   "sha256": "9c5c0493dfd1f1d13aa6e9c50125049e3550a6a19dfebd1bf4f4bdf0d1cf2d53"
   },
   {
    "path": "skills/t3-get-output/SKILL.md",
@@ -278,7 +278,7 @@
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
    "bytes": 62180,
-   "sha256": "d4b10c7900d2ba5e473f76b23d216706d016a44ca8025dcda5d68af8058a36eb"
+   "sha256": "9f2efbb4121f1ef667894e8cfee1ac6092ffb408f204a4e242843a8a68c70b5c"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -326,8 +326,8 @@
    "path": "skills/t3-routes/SKILL.md",
    "dest": "t3-routes/SKILL.md",
    "kind": "skill",
-   "bytes": 6997,
-   "sha256": "8fac68b9fcc640adc08727e41588e834c04b95d000f5d5938f0332c0863f63b0"
+   "bytes": 7261,
+   "sha256": "b58d669f39a81ee4cf632841fc16616f64f38153269d043cd95b057278c8c78c"
   },
   {
    "path": "skills/t3-save-learnings/SKILL.md",
@@ -340,8 +340,8 @@
    "path": "skills/t3-status/SKILL.md",
    "dest": "t3-status/SKILL.md",
    "kind": "skill",
-   "bytes": 3191,
-   "sha256": "d0672d0a1c6b56dd00683e65623ceb88b800a6dc4f8bd4446049de2c8d753055"
+   "bytes": 3316,
+   "sha256": "9aee1df278f9ab7bb5d1d8a391ff12907c9a823fca9ae8ca01681270ec999783"
   },
   {
    "path": "skills/t3-sync/SKILL.md",
@@ -368,8 +368,8 @@
    "path": "skills/t3-tots-rules/SKILL.md",
    "dest": "t3-tots-rules/SKILL.md",
    "kind": "skill",
-   "bytes": 22819,
-   "sha256": "a248e57ff270fcc8031e74a2cfdeb27dc9193f0e172d1eb09faf3930c22e23b1"
+   "bytes": 23309,
+   "sha256": "40aa6ad9dc0b4dc43b115d1240428fedf62e6b1a8f40cbbe1cbe8c7c0a99bc0f"
   },
   {
    "path": "skills/t3-update/SKILL.md",
@@ -382,15 +382,15 @@
    "path": "skills/t3-usage/SKILL.md",
    "dest": "t3-usage/SKILL.md",
    "kind": "skill",
-   "bytes": 2487,
-   "sha256": "339f3fdc67f19d5045ff89d37cd978d8b1ccc05ae0db101a7968bc99b20b1b65"
+   "bytes": 2612,
+   "sha256": "16095e7b58838f1a9e3f6bab72e546f1fe22061bb700278d5f23bd8254178e6c"
   },
   {
    "path": "skills/t3-waiting/SKILL.md",
    "dest": "t3-waiting/SKILL.md",
    "kind": "skill",
-   "bytes": 4337,
-   "sha256": "eb760e6a82842d3fe8d19edf95644377d2f1bb4d71c7c754cf42f62d12c07299"
+   "bytes": 4506,
+   "sha256": "d924216903ac4da00d7a936bc8f63bc6f0673b942ade1dda24f1db5920158186"
   },
   {
    "path": "skills/t3-watch/SKILL.md",

@@ -95,7 +95,7 @@ def overview():
     print(f"T3 threads active in last {DAYS} days: {len(mine)} shown, {len(rows)-len(mine)} agent-spawned hidden (T3_ALL=1 shows them)")
     for tid, proj, title, upd, src, run, pend, last, settled in mine:
         role, _, text = (last or "\x1f").partition("\x1f")
-        st = "running" if run in LIVE else "needs you" if pend or run in ("waiting", "queue held") else "settled" if settled \
+        st = "needs you" if pend else "running" if run in LIVE else "needs you" if run in ("waiting", "queue held") else "settled" if settled \
             else "needs you" if role == "assistant" and asks_you(text) else (run or "idle")
         print(f"- [{proj}] {title} | {st} | {loc(upd)} | {role or '-'}: {flat(text,140)}")
     hidden = {}
@@ -120,7 +120,8 @@ def waiting():
         if spawned(src, tid) and not ALL and not (pend or appr): continue
         role, _, text = (last or "\x1f").partition("\x1f")
         asks = role == "assistant" and asks_you(text) and not settled  # settling a thread means its hand-back was dealt with
-        if run in LIVE or not (pend or appr or run in ("waiting", "queue held") or asks): continue
+        blocked = pend or appr
+        if not blocked and (run in LIVE or not (run in ("waiting", "queue held") or asks)): continue
         n += 1
         why = []
         if pend:
