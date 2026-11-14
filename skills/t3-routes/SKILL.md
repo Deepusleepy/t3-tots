@@ -12,7 +12,7 @@ A failed **read** changed nothing: fix the call.
 
 **1. Nothing was sent.** The connector is missing or can't connect, HTTP 401 (also tell the user that computer needs reconnecting), or HTTP 429 after one retry 10 seconds later. Do it with the local tools on that computer, through its t3-* skill.
 
-**2. The call was wrong.** `invalid_request`, `target_required`, `thread_not_found`, a missing field: fix the call and send it again. `provider_unavailable`, `model_unavailable`: tell the user.
+**2. The call was wrong.** `invalid_request`, `target_required`, `thread_not_found`, a missing field: fix the call and send it again with a new `clientRequestId`, since the content changed. `provider_unavailable`, `model_unavailable`: tell the user.
 - `thread_not_found` for a thread on another computer: pass that computer's `environmentId`.
 - `t3_pending_request` always needs the thread id. `t3_thread_update` needs `action: "rename"`.
 - `schedule_task` says the project "has no default model": nothing was made. Use `t3ctl tasks --upsert`. Never set a project's default model to get past it.
@@ -22,7 +22,7 @@ A failed **read** changed nothing: fix the call.
 - It is there: stop. It clearly is not: the same call again with the same `clientRequestId`.
 - Never do it another way while unsure: ask the user. After a reconnect an old `clientRequestId` no longer protects, so look and then ask.
 
-A `t3_thread_wait` that times out is a failed read, often a thread blocked on a question: check `t3_pending_request` for it. After `promote_to_steer`, or after a queued message was cancelled, a wait or the thread status can say "cancelled" while the real turn runs or completed: read the thread before reporting.
+A `t3_thread_wait` that times out is a failed read, often a thread blocked on a question: check `t3_pending_request` for it.
 
 ## When T3 refuses
 `capability_denied`, `runtime_mode_escalation_denied`, `interaction_mode_escalation_denied` or HTTP 403: the thread runs with more freedom than the level the user gave this bot. Never work around it yourself. Say in one line what was refused and why, and ask on a tap-to-answer card with these options:
@@ -66,5 +66,6 @@ Plain actions go straight through that computer's connector and open no skill: s
 - After starting a thread, run `node t3ctl record --started <id>` from the tools folder on that computer. If it can't run commands now, add the id to "To record" and run it before the next report there.
 - Never approve, delete, unlink, or change projects, settings or environment preferences through MCP.
 - A bot made for some projects stays in them.
+- A wait or a status that says cancelled can be wrong after a steer or a cancelled queued message: read the thread before reporting or continuing it.
 - A change failed, timed out or was refused: stop and read t3-routes before anything else.
 ```
