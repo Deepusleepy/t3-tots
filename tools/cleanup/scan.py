@@ -31,6 +31,19 @@ CATEGORIES = [  # substring (lowercased, '/'-normalized) -> category
  ("/.cursor/","Cursor data"),("/.codex/","Codex data"),("/.claude/","Claude data"),("worktrees","agent worktrees"),
 ]
 SYSTEM_SKIP = {"/proc","/sys","/dev","/run","/System/Volumes/VM"}
+ACCOUNT_PARENTS = {"users","home"}
+SHARED_ACCOUNT_DIRS = {"shared","public"}
+def other_user_home(path, home):
+    parent,name=os.path.split(os.path.normcase(os.path.abspath(path)))
+    home_parent,home_name=os.path.split(os.path.normcase(os.path.abspath(home)))
+    return parent==home_parent and os.path.basename(parent) in ACCOUNT_PARENTS and name!=home_name and name not in SHARED_ACCOUNT_DIRS
+def inside_other_user_home(path, home):
+    path=os.path.abspath(path)
+    while True:
+        if other_user_home(path, home): return True
+        parent=os.path.dirname(path)
+        if parent==path: return False
+        path=parent
 # SENSITIVE_NAME: word for word the same as tools/t3ctl (tests/install_test.py checks). One path part, case-insensitive, after
 # acronyms then camelCase are split ("HTTPAuth" -> "HTTP_Auth", "googleAuth" -> "google_Auth"): token, secret, credential, password, keys, .env, .ssh, .gnupg, "auth" as its own word
 SENSITIVE_NAME = r"token|secret|credential|passw|keychain|private[-_.]?key|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:rc)?(?![a-z])|\.pem$|\.p12$|\.pfx$|\.key$|^\.(?:ssh|gnupg|aws|netrc|npmrc|pypirc)$|(?:^|[^a-z0-9])o?auth(?!or(?!i[sz]))"
@@ -47,7 +60,7 @@ def onsize(st):
 
 class Scanner:
     def __init__(s, a, root=""):
-        s.a=a; s.root=root; s.seen=set(); s.errors=0; s.symlinks=0; s.hardlink_dupes=0; s.sparse={}
+        s.a=a; s.root=root; s.seen=set(); s.errors=0; s.symlinks=0; s.hardlink_dupes=0; s.sparse={}; s.other_users=set(); s.home=os.path.expanduser("~")
         s.big={}; s.stale=[]; s.files_for_dupes={}; s.now=time.time()  # re-walks of subtrees revisit files: keep these keyed by path
     def walk(s, path, dev):
         """Return (alloc_bytes, apparent_bytes, newest_mtime, child_sizes dict)."""
@@ -64,6 +77,7 @@ class Scanner:
                 if stat.S_ISDIR(st.st_mode):
                     # Windows scandir leaves st_dev at 0, so only compare devices when both are known
                     if (st.st_dev and dev and st.st_dev!=dev) or e.path in SYSTEM_SKIP: continue
+                    if other_user_home(e.path, s.home): s.other_users.add(e.path); continue
                     t,ap,nw,_=s.walk(e.path, dev); kids[e.path]=(t,nw)
                     tot+=t; app+=ap; newest=max(newest,nw)
                 elif stat.S_ISREG(st.st_mode):
@@ -139,6 +153,7 @@ def dupes(sc):
 def scan_one(root,a):
     root=os.path.abspath(os.path.expanduser(root))
     if not os.path.isdir(root): return {"root":root,"error":"not a folder or not reachable"}
+    if inside_other_user_home(root, os.path.expanduser("~")): return {"root":root,"error":"another user's folder, not scanned"}
     sc=Scanner(a, root); dev=os.stat(root).st_dev
     du=shutil.disk_usage(root)
     t0=time.time()
@@ -149,7 +164,7 @@ def scan_one(root,a):
          "disk_free_gb":round(du.free/1e9,1),"scanned_gb":round(total/1e9,1),
          "unaccounted_gb":round((du.used-total)/1e9,1),
          "note":"unaccounted = other dirs on same volume, permission-denied, snapshots, system-managed (pagefile/hiberfil/APFS/VM), other mounts",
-         "seconds":round(time.time()-t0,1),"errors":br.errors,"symlinks_skipped":br.symlinks,
+         "seconds":round(time.time()-t0,1),"errors":br.errors,"symlinks_skipped":br.symlinks,"other_users_skipped":len(br.other_users),
          "hardlinks_counted_once":br.hardlink_dupes,
          "sparse_files":[{"path":p,"apparent_gb":round(x/1e9,2),"alloc_gb":round(y/1e9,2)} for p,(x,y) in list(sc.sparse.items())[:20]],
          "tree":tree,"stale_artifacts":sorted(sc.stale,key=lambda x:-x["gb"])[:200],

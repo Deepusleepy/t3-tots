@@ -31,5 +31,38 @@ class Dupes(unittest.TestCase):
         self.assertFalse(touched & set(sensitive), touched & set(sensitive))
 
 
+class OtherUsers(unittest.TestCase):
+    def scan(self, home, *roots):
+        out, argv, env = io.StringIO(), sys.argv, dict(os.environ)
+        sys.argv = [SCAN, *map(str, roots), "--jobs", "1", "--min-gb", "0"]
+        os.environ["HOME"] = os.environ["USERPROFILE"] = str(home)
+        try:
+            with contextlib.redirect_stdout(out): runpy.run_path(SCAN, run_name="__main__")
+        finally:
+            sys.argv = argv; os.environ.clear(); os.environ.update(env)
+        return json.loads(out.getvalue())["results"]
+
+    def test_a_wide_scan_never_enters_another_users_home(self):
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        for rel in ("home/me/mine.bin", "home/other/theirs.bin", "home/Shared/all.bin", "data/home2/x.bin"):
+            p = tmp / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b"x" * 300000)
+        seen, real_scandir = [], os.scandir
+        def spy(path="."):
+            seen.append(os.fspath(path)); return real_scandir(path)
+        os.scandir = spy
+        try: res = self.scan(tmp / "home" / "me", tmp)[0]
+        finally: os.scandir = real_scandir
+        self.assertEqual(res["other_users_skipped"], 1)
+        self.assertFalse([p for p in seen if pathlib.Path(p).name == "other"], "the other account's folder is never listed")
+        for kept in ("me", "Shared", "home2"): self.assertTrue([p for p in seen if pathlib.Path(p).name == kept], kept)
+
+    def test_a_root_inside_another_users_home_is_refused(self):
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        for rel in ("home/me/a.bin", "home/other/deep/b.bin"):
+            p = tmp / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b"x")
+        res = self.scan(tmp / "home" / "me", tmp / "home" / "other" / "deep", tmp / "home" / "me")
+        self.assertIn("another user", res[0]["error"]); self.assertNotIn("error", res[1])
+
+
 if __name__ == "__main__":
     unittest.main()

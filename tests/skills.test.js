@@ -136,3 +136,14 @@ test("updates: the fetcher's last line sends the bot to the bot-side checks, whi
   assert.ok(phone.includes("```\n" + marker[1]), "and they are the first words of the routine prompt in t3-phone-answers");
   assert.match(inst, /g\. Do every check under "After an update"/);
 });
+
+test("skills never tell the bot to accept an approval, send twice, or open listen.json", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md");
+  assert.doesNotMatch(skill("t3-watch"), /may also answer, approve/); assert.match(skill("t3-watch"), /decline approvals with a redirect/);
+  const fallback = skill("t3-new-thread").split("## Fallback on macOS")[1];
+  assert.match(fallback, /WRITE_STATE: none/); assert.match(fallback, /never send it a second way/);
+  assert.doesNotMatch(skill("t3-phone-answers"), /the user turns it off in that file/);
+  assert.doesNotMatch(skill("t3-waiting"), /t3-phone-answers/, "answering one question never loads the phone setup skill");
+  assert.doesNotMatch(skill("t3-tots-rules"), /t3-phone-answers "Answering"/);
+  assert.doesNotMatch(skill("t3-install-tools") + skill("t3-tots-rules"), /weekly run installs nothing|reports and installs nothing/, "notify mode still fills placeholders");
+});

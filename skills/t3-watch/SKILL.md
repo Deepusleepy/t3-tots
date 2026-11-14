@@ -7,10 +7,10 @@ description: >-
   me", "let me know when <X> is done", "monitor <X>", "keep it going overnight",
   "I'm away, handle it".
 ---
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". A watch is a routine you create only when the user asks for one. It reports by default. In delegated mode (t3-tots-rules "Decisions") it may also answer, approve, nudge and resume.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". A watch is a routine you create only when the user asks for one. It reports by default. In delegated mode (t3-tots-rules "Decisions") it may also answer questions, decline approvals with a redirect, nudge and resume. It never accepts an approval.
 
 ## Pick the check
-- A T3 thread on a computer where `t3listen` runs with phone answers on: finished, failed and cancelled events already reach chat (t3-phone-answers). A watch is still useful for stalls, approvals and queue problems, which t3listen doesn't report.
+- A T3 thread on a computer where `t3listen` runs with phone answers on: finished, failed and cancelled events already reach chat (t3-phone-answers). A watch is still useful for stalls and queue problems, which t3listen doesn't report, and for approvals unless `node t3listen status` says the listener sends them.
 - A T3 thread: `t3ctl watch --thread '<id>[,<id2>]' --state watch-<name>.json --json`. One call covers several threads and prints nothing when nothing changed. Give each watch routine its own state file, so two watches on one thread don't hide changes from each other.
 - A log: `tail -n 30 <log>`. A process: `pgrep -fl <name>`.
 - A PR: `gh pr view <n> -R <owner/repo> --json state,statusCheckRollup,reviews,comments`.

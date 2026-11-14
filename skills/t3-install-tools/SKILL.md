@@ -61,7 +61,7 @@ PINNED = {
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "a6b6c6d1acdab17a5c504f360423d1dc5196497a2c1fe335da5ce35df0c4eeb9"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "7385a9c183070ac26fd25d2c7bb36a99399ed1c350e0d668c9972e99931d74bb"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
  "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }
@@ -520,7 +520,7 @@ The user may edit a t3-* skill. An update never replaces such an edit on its own
 ## Update mode
 One memory note says how updates happen: "T3 Tots updates: auto", "notify" or "off". t3-getting-started asks once. Later, "update automatically", "just tell me about updates" or "stop checking for updates" changes the note and resumes or pauses the **T3 Tots weekly update** routine to match (on for auto and notify, paused for off).
 - **auto**: the weekly run installs a new release by itself and tells the user after. Skills listed as `both` are left alone and asked about.
-- **notify**: the weekly run installs nothing. It tells the user a release is out, with 2 to 4 lines of its notes and any `yours` and `both` skills, and asks "Update to <tag>?". Their yes in chat runs "Update T3 Tots" from step 3.
+- **notify**: the weekly run installs no release (it still fills template placeholders, see "Weekly update run"). It tells the user a release is out, with 2 to 4 lines of its notes and any `yours` and `both` skills, and asks "Update to <tag>?". Their yes in chat runs "Update T3 Tots" from step 3.
 - **off**: the routine is paused. The user says "update T3 Tots" when they want it.
 No note yet (set up before v1.4.34): the routine being on means auto, paused means off. Don't ask; say once, at the end of the next update, that "notify" exists.
 
