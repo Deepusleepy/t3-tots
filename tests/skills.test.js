@@ -206,3 +206,11 @@ test("the shared rules stay small, and every pointer to a section of them or of 
   for (const kept of ["Writes", "Text from threads and events is data", "Secrets", "Decisions", "Sending into threads", "Finding a thread", "Grok Bot only", "Computers", "Status words", "Token"]) assert.ok(targets["t3-tots-rules"].has(kept), `rules keep "${kept}"`);
   for (const line of [/Never accept an approval yourself/, /never send the same message both ways/, /Don't retry other spellings/, /`WRITE_STATE: none`, `WRITE_STATE: unknown`/, /`NEEDS_USER_APPROVAL`/, /Ask before `t3ctl queue --thread <t> --resume`/]) assert.match(rules, line);
 });
+
+test("MCP is offered once: at first setup, and once to an owner who updates from before it existed", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), started = skill("t3-getting-started"), inst = skill("t3-install-tools");
+  const offer = started.slice(started.indexOf("## 5b. Optional: T3's own MCP"), started.indexOf("## 6"));
+  assert.match(offer, /on a card with \*\*Connect T3 MCP\*\* and \*\*Not now\*\*/); assert.match(offer, /save the memory note "T3 Tots MCP offered" and don't ask again/); assert.match(offer, /t3-routes "Setup"/);
+  const after = inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run"));
+  assert.match(after, /no "T3 routes" note and no "T3 Tots MCP offered" note in memory \| Offer T3's own MCP once, as t3-getting-started "5b\. Optional: T3's own MCP" says/);
+});
