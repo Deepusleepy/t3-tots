@@ -8,9 +8,10 @@ const { pickThread, lookupThread } = (() => { try { return require("./thread-mat
 } })();
 const HOME = os.homedir();
 const die = (code, msg) => { console.error(`${code}: ${msg}`); writeState(); process.exit(1); };
-// WRITE_STATE: the last line of a failed write command. "none" = no write request left for T3, so trying another way is safe.
-// "unknown" = one left and may have happened (a timeout, a dropped socket), so read the thread before doing anything again.
-// A bot that reaches T3 by more than one route (t3-tots-rules "Routes") must never repeat an "unknown" write another way.
+// WRITE_STATE: the last line of a failed write command. "none" = no change to a thread or a scheduled task left for T3, so trying
+// another way is safe (an attachment may have been uploaded; nothing uses it). "unknown" = one left and may have happened
+// (a timeout, a dropped socket), so read the thread before doing anything again.
+// A bot that reaches T3 by more than one route (the t3-routes skill) must never repeat an "unknown" write another way.
 const WRITE_TAGS = new Set(["orchestration.dispatchCommand", "orchestration.launchThread", "scheduledTasks.upsert", "scheduledTasks.setEnabled", "scheduledTasks.runNow", "scheduledTasks.delete"]);
 const READ_CMDS = ["projects", "models", "threads", "read", "pending", "diff", "files", "status", "raw", "limits", "search", "prs", "pr", "subtasks", "watch", "record"];
 let WROTE = false;
@@ -404,18 +405,33 @@ const isMainThread = (t, started = {}) => !/^(mcp|provider)$/.test(t.creationSou
 // They show in the user's lists, and t3listen arms Resume at reset for them.
 const STARTED = path.join(__dirname, "started-here.json");
 const startedIds = () => { try { const m = JSON.parse(fs.readFileSync(STARTED, "utf8")); return m && typeof m === "object" ? m : {}; } catch { return {}; } };
-function addStarted(threadId) {
-  const m = startedIds(), cut = Date.now() - 60 * 864e5; for (const [k, v] of Object.entries(m)) if (!(Date.parse(v) > cut)) delete m[k];
-  m[threadId] = new Date().toISOString(); const t = `${STARTED}.${process.pid}.part`; fs.writeFileSync(t, JSON.stringify(m)); fs.renameSync(t, STARTED);
+const STARTED_KEPT = 5000;
+function withFileLock(file, change) {
+  const lock = `${file}.lock`, giveUpAt = Date.now() + 5000;
+  for (;;) {
+    try { fs.closeSync(fs.openSync(lock, "wx")); break; } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 15000) fs.rmSync(lock, { force: true }); } catch {}
+      if (Date.now() > giveUpAt) throw new Error(`another t3ctl is writing ${path.basename(file)}; try again`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try { return change(); } finally { fs.rmSync(lock, { force: true }); }
 }
-// record: bookkeeping on this computer for something done through T3's MCP, so reports, auto-resume and "answered from chat" still
-// work for it. Needs no T3 and no token.
+function addStarted(threadId) {
+  withFileLock(STARTED, () => {
+    const m = startedIds(); m[threadId] = new Date().toISOString();
+    const newest = Object.entries(m).filter(([, at]) => Number.isFinite(Date.parse(at))).sort((a, b) => Date.parse(b[1]) - Date.parse(a[1])).slice(0, STARTED_KEPT);
+    const json = JSON.stringify(Object.fromEntries(newest)), t = `${STARTED}.${process.pid}.part`;
+    try { fs.writeFileSync(t, json); fs.renameSync(t, STARTED); } catch { fs.writeFileSync(STARTED, json); fs.rmSync(t, { force: true }); } // Windows: rename can hit a brief lock
+  });
+}
+// record: notes on this computer a thread T3 Tots started through T3's MCP, so reports and auto-resume treat it like one
+// started with `t3ctl new`. Needs no T3 and no token.
 function recordCmd(o) {
-  const id = (v, what) => { if (typeof v !== "string" || !v.trim()) throw new Error(`USAGE: ${what} needs an id`); return v.trim(); };
-  if (o.started !== undefined) { addStarted(id(o.started, "--started")); console.log("RECORDED: started"); }
-  else if (o.answered !== undefined) { markHere(id(o.answered, "--answered"), true); console.log("RECORDED: answered"); }
-  else if (o.unanswered !== undefined) { markHere(id(o.unanswered, "--unanswered"), false); console.log("RECORDED: unanswered"); }
-  else throw new Error("USAGE: record --started <threadId> | --answered <requestId> | --unanswered <requestId>");
+  const threadId = typeof o.started === "string" ? o.started.trim() : "";
+  if (!threadId || threadId.length > 200 || o.stray.length) throw new Error("USAGE: record --started <threadId>");
+  addStarted(threadId); console.log("RECORDED: started");
 }
 // limitLine: one row of `t3ctl limits`, reset time in local time, marked when it has already passed (a stale limit)
 const limitLine = (t, autoResume, now = Date.now()) => { const at = t.usageLimitResetAt, past = at && Date.parse(at) < now;
@@ -722,7 +738,7 @@ const main = async () => {
     const tmp = `${sf}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(st, null, 1)); fs.renameSync(tmp, sf);
     if (o.json) { if (out.length) console.log(JSON.stringify({ changes: out, threads: snaps.map(({ reply, ...x }) => x) })); return; }
     for (const e of out) console.log(`${e.kind}  "${e.title}"  ${e.text}`); }
-  else console.log("t3ctl record --started threadId | --answered requestId | --unanswered requestId   (after acting through T3's MCP)\nt3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] [--include path,path] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
+  else console.log("t3ctl record --started threadId   (after starting a thread through T3's MCP)\nt3ctl projects | models | threads [--project p] [--main] [--limit n] | new --project p --prompt t [--model m --effort e] [--worktree base-branch] [--wait [--timeout seconds]] | send --thread id|title --prompt t [--wait [--timeout seconds]] [--queue] | queue --thread t [--steer runId|all | --cancel runId|all] | read --thread id|title [--last N] | settle|unsettle --thread t | archive|unarchive --thread t | rename --thread t --title x | interrupt --thread t [--hold] | status --thread t [--json] | pending --thread t [--json] | answer --thread t [--request id] (--pick label | --text txt | --answers json | --decision accept|decline|... [--user-approved] [--redirect]) | diff --thread t | files --thread t [--last-turn] [--copy no] [--include path,path] | limits [--json] | snooze --thread t --until +2h|HH:MM|ISO | unsnooze --thread t | queue --thread t (--resume | --edit runId --text x | --move runId [--before runId|end | --first]) | model --thread t [--model m] [--effort e] [--provider p] | search --query q [--limit n] | tasks [--upsert ... [--prompt-file f] | --enable id | --disable id | --run id | --delete id --yes] | prs --project p [--state open] | pr --thread t [--number n] [--all] | pr --project p --repo o/r --number n | fork --thread t [--run runId] [--title x] | stop --thread t | subtasks --thread t [--all] | subagent-stop --thread t --subagent id | resume-at-reset --thread t [--cancel] | snooze-until-reset --thread t [--cancel] | watch --thread a[,b] [--state file] [--stall-min 20] [--json] | new/send ... --attach img1.png,img2.jpg | new/send ... --prompt-file p.md | send ... --no-verify | skills [list] [--from dir] [--to dir] | skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]");
 };
 if (require.main !== module) module.exports = { addStarted, startedIds, WRITE_TAGS, READ_CMDS, oneById, skillHash, args, missingValue, pickThread, pickProject, outPath, insideProject, modelSel, workspaceOf, sensitivePath, sensitiveName, SENSITIVE_NAME, isMainThread, limitLine, localT, tzName, isSettled, threadLine, decodeText, approvalAllowed, redirectText, deliveryOf, stallHint, watchSnap, watchDiff, pendingOf, requestInfo, parseWhen, parseEvery, buildAnswer, matchOption };
 else main().catch((e) => { const m = String(e.message).match(/"message":"([^"]{3,300})"/); const msg = m && /^\[\{"_tag":"Fail"/.test(e.message) ? m[1] : e.message; console.error(/^[A-Z][A-Z0-9_]{3,}[: (]/.test(msg) ? msg : `error: ${msg}`); writeState(); process.exit(1); });

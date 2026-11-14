@@ -119,6 +119,13 @@ class T3qTest(unittest.TestCase):
         self.assertNotIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task"))
         self.assertIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task", T3_ALL="1"))
 
+    def test_a_thread_t3_tots_started_and_recorded_shows_like_the_users_own(self):
+        make_db(self.dir, extra_threads=True)
+        with open(os.path.join(self.dir, "started-here.json"), "w", encoding="utf-8") as f: json.dump({"t-spawn": iso(0)}, f)
+        self.assertIn("THREAD Spawned helper task", run(self.dir, "thread", T3_Q="spawned helper task", T3_TOTS_DIR=self.dir))
+        self.assertNotIn("agent-spawned by project", run(self.dir, "overview", T3_TOTS_DIR=self.dir))
+        self.assertIn("agent-spawned by project", run(self.dir, "overview"))
+
     def test_health_size_skips_secret_folders_and_files_in_any_case(self):
         make_db(self.dir)
         for rel in ("Secrets/blob", "SECRETS2/blob", "Auth.json", "MyToken.txt", "x/Credentials.db", "oauth/blob", "AuthSessions/blob", ".env", "keys/id_rsa", "x/server.pem", ".ssh/blob", ".gnupg/blob", "HTTPAuth.json", "getHTTPAuth.ts", "XMLAuth.json"):

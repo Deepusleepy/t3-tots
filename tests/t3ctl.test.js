@@ -373,9 +373,13 @@ test("answer: an approval goes through only with --user-approved; decline --redi
     r = await run("record", "--started", "mcp:launch:abc123");
     assert.equal(r.code, 0, r.out); assert.match(r.out, /^RECORDED: started/);
     assert.ok(Date.parse(JSON.parse(fs.readFileSync(path.join(tmp, "started-here.json"), "utf8"))["mcp:launch:abc123"]) > Date.now() - 60000);
-    const marks = () => Object.keys(JSON.parse(fs.readFileSync(path.join(tmp, "answered-here.json"), "utf8"))).length, before = marks();
-    r = await run("record", "--answered", "req-77"); assert.match(r.out, /^RECORDED: answered/); assert.equal(marks(), before + 1);
-    r = await run("record", "--unanswered", "req-77"); assert.match(r.out, /^RECORDED: unanswered/); assert.equal(marks(), before);
+    const startedFile = path.join(tmp, "started-here.json"), started = () => JSON.parse(fs.readFileSync(startedFile, "utf8"));
+    fs.writeFileSync(startedFile, JSON.stringify({ ...started(), "old-thread": new Date(Date.now() - 400 * 864e5).toISOString() }));
+    const atOnce = await Promise.all(["mcp:a", "mcp:b", "mcp:c", "mcp:d"].map((id) => run("record", "--started", id)));
+    assert.deepEqual(atOnce.map((x) => x.code), [0, 0, 0, 0], atOnce.map((x) => x.out).join("|"));
+    for (const id of ["mcp:launch:abc123", "old-thread", "mcp:a", "mcp:b", "mcp:c", "mcp:d"]) assert.ok(started()[id], `${id} is still recorded after records made at the same time`);
+    assert.equal(fs.existsSync(`${startedFile}.lock`), false);
+    r = await run("record", "--started", "x", "y"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: record --started/); assert.equal(started().x, undefined);
     r = await run("record"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE: record --started/); assert.doesNotMatch(r.out, /WRITE_STATE/);
     r = await run("record", "--started"); assert.equal(r.code, 1, r.out); assert.match(r.out, /^USAGE/);
   } finally { srv.close(); }
@@ -626,4 +630,15 @@ test("threads --main: a thread started through T3's MCP is hidden as agent-spawn
   const mcp = { id: "mcp:launch:1", creationSource: "mcp" }, user = { id: "u1", creationSource: "web" }, sub = { id: "s1", creationSource: "provider" };
   assert.deepEqual([mcp, user, sub].map((x) => t.isMainThread(x)), [false, true, false]);
   assert.deepEqual([mcp, user, sub].map((x) => t.isMainThread(x, { "mcp:launch:1": "2026-11-13T00:00:00Z" })), [true, true, false]);
+});
+
+test("WRITE_STATE: every request t3ctl can send is listed as a write or as a read", () => {
+  const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3ctl"), "utf8");
+  const writes = new Set(src.match(/const WRITE_TAGS = new Set\(\[([^\]]+)\]\)/)[1].match(/[A-Za-z.]+/g));
+  const reads = new Set(["attachments.createUploadUrl", "orchestration.getArchivedShellSnapshot", "orchestration.getFullThreadDiff", "orchestration.searchThreads",
+    "pullRequests.checks", "pullRequests.list", "pullRequests.summary", "scheduledTasks.list", "scheduledTasks.subscribe"]);
+  const sent = [...new Set([...src.matchAll(/(?:rpc|stream|subscribe)\("([A-Za-z]+\.[A-Za-z]+)"/g)].map((m) => m[1]))];
+  assert.ok(sent.length >= 10, `found ${sent.length} request tags`);
+  for (const tag of sent) assert.ok(writes.has(tag) !== reads.has(tag), `${tag} must be in WRITE_TAGS or in this test's list of reads, not both or neither`);
+  for (const tag of ["orchestration.dispatchCommand", "orchestration.launchThread", "scheduledTasks.upsert", "scheduledTasks.runNow", "scheduledTasks.delete", "scheduledTasks.setEnabled"]) assert.ok(writes.has(tag), `${tag} changes T3`);
 });

@@ -127,7 +127,7 @@ Uses T3's local API and needs the token, except `skills`. Running it with no arg
 | Answer | `answer --thread t [--request id] (--pick label \| --text words \| --answers json \| --decision d [--user-approved \| --redirect])` |
 | Queue | `queue --thread t [--steer id\|all \| --cancel id\|all \| --resume \| --edit id --text x \| --move id (--before id\|end \| --first)]` |
 | Thread actions | `settle`, `unsettle`, `archive`, `unarchive`, `rename --title x`, `interrupt [--hold]`, `stop`, `subagent-stop --subagent id`, `fork [--run id --title x]`, `model [--model m --effort e --provider p]`, `snooze --until +2h\|HH:MM\|ISO`, `unsnooze`, `resume-at-reset [--cancel]`, `snooze-until-reset [--cancel]` |
-| Records | `record --started <threadId> \| --answered <requestId> \| --unanswered <requestId>` (after acting through T3's MCP; needs no token; t3-routes "Starting a thread") |
+| Records | `record --started <threadId>` (after starting a thread through T3's MCP; needs no token; t3-routes "Starting a thread") |
 | Scheduled tasks | `tasks [--upsert ... \| --enable id \| --disable id \| --run id \| --delete id --yes]` |
 | Skills | `skills [list] [--from dir] [--to dir]`, `skills install --to dir [--from dir] [--only a,b] [--dry-run] [--force]` (copies these skills into another agent's skills folder; see the repo README) |
 
@@ -185,7 +185,7 @@ Scripts print these words. Relay them in plain words, not as errors. This is the
 | `TOOLS_INCOMPLETE` | A helper file is missing from the tools folder. Reinstall with t3-install-tools |
 | `NOT_PENDING` | That question was already answered or closed |
 | `NOT_ANSWERABLE` | Its run ended, so it can't be answered. Offer a follow-up instead |
-| `WRITE_STATE: none`, `WRITE_STATE: unknown` | Last line of a failed write command. `none`: no write request left for T3. `unknown`: one left and may have happened, so read the thread before doing anything again, and never repeat it another way while unsure |
+| `WRITE_STATE: none`, `WRITE_STATE: unknown` | Last line of a failed write command. `none`: no change to a thread or a scheduled task left for T3. `unknown`: one left and may have happened, so read the thread before doing anything again, and never repeat it another way while unsure |
 | `RECORDED` | `t3ctl record` saved the note |
 | `NEEDS_USER_APPROVAL` | `t3ctl answer` won't accept that approval on its own. Nothing was sent. Show it to the user, and after their yes for that request rerun with `--request <id> --user-approved` |
 | `REDIRECTED` | The approval was declined and the thread was told to skip it or take a safer way and keep going. Note it for the user's report |
