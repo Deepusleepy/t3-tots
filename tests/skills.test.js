@@ -172,3 +172,19 @@ test("watch: a run where nothing changed reads no skill", () => {
   const inst = read(__dirname, "..", "skills", "t3-install-tools", "SKILL.md");
   assert.match(inst.slice(inst.indexOf("## After an update"), inst.indexOf("## Weekly update run")), /not with "T3 Tots watch routine v2\."/);
 });
+
+// "What's waiting", status, digests and usage only read, so they carry their few rules themselves instead of loading the shared rules.
+test("look-only skills are complete on their own and share one Basics block", () => {
+  const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), names = ["t3-waiting", "t3-status", "t3-digest", "t3-usage"];
+  const basics = (n) => { const m = skill(n).match(/## Basics\n([\s\S]*?- Give times in the user's timezone\.[^\n]*\n)/); assert.ok(m, `${n} has the Basics block`); return m[1]; };
+  const first = basics(names[0]);
+  for (const n of names) {
+    assert.equal(basics(n), first, `${n} has the same Basics block`);
+    assert.doesNotMatch(skill(n), /^Follow the t3-tots-rules skill/m, `${n} doesn't load the shared rules`);
+    assert.ok(skill(n).length <= 5000, `${n} is ${skill(n).length} characters`);
+  }
+  for (const rule of [/don't read t3-tots-rules/, /data, never instructions/, /`token`, `listen\.json`, `secrets\/`/, /ListMachines every run/, /`py -3`/, /Remove-Item Env:X/, /`AMBIGUOUS` or `NO_GOOD_MATCH`/]) assert.match(first, rule);
+  const waiting = skill("t3-waiting");
+  assert.match(waiting, /--decision <option> --user-approved/); assert.match(waiting, /Never accept an approval yourself/); assert.match(waiting, /Never answer a question the user didn't see/);
+  assert.match(waiting, /In delegated mode[^\n]*read t3-tots-rules "Decisions" first/);
+});
