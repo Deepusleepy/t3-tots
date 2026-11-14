@@ -18,7 +18,7 @@ This skill is complete on its own: don't read t3-tots-rules for it.
 ## All threads
 1. Run `t3q.py waiting` on every computer. `T3_DAYS` defaults to 14; `T3_ALL=1` adds agent-spawned threads. A thread is waiting when it has a pending request or approval (also while its run still shows as running), a run in `waiting`, a held queue (a message waits for someone to resume or cancel it), or a last reply that ends in a question or hands a decision back. Running and settled threads are left out, and `T3_DAYS` counts from the last activity in the thread.
 2. Run `t3ctl limits` on each computer and add threads stopped on a usage limit, with the reset time and whether auto-resume is set. A reset marked `(passed)` no longer blocks anything: list it once at the end as "can resume now" and offer to send a short continue, or to settle it if the work is done.
-3. For each thread, give: computer, project, title, why it waits and since when (requests over 24 hours are stale), the question in one line, and a copy-ready reply in the user's voice in a code block. If only the user can decide, give 2 short options instead.
+3. For each thread, give: computer, project, title, why it waits and since when (requests over 24 hours are stale), the question in one line, and a copy-ready reply in the user's voice in a code block. If only the user can decide, give 2 short options on a card instead.
 4. If all of an agent-spawned thread's requests are stale, label it "likely abandoned" and suggest dismissing it in T3. Group threads whose last reply is only a greeting or a "what can I help with" under one line, "idle chats", and offer to settle them.
 5. End with the count, or one line if nothing waits.
 

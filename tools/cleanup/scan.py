@@ -153,9 +153,9 @@ def dupes(sc):
     return sorted(groups,key=lambda g:-g["wasted_gb"])
 
 def scan_one(root,a):
-    root=os.path.abspath(os.path.expanduser(root))
+    root=os.path.realpath(os.path.expanduser(root))
     if not os.path.isdir(root): return {"root":root,"error":"not a folder or not reachable"}
-    if inside_other_user_home(os.path.realpath(root), os.path.realpath(os.path.expanduser("~"))): return {"root":root,"error":"another user's folder, not scanned"}
+    if inside_other_user_home(root, os.path.realpath(os.path.expanduser("~"))): return {"root":root,"error":"another user's folder, not scanned"}
     sc=Scanner(a, root); dev=os.stat(root).st_dev
     du=shutil.disk_usage(root)
     t0=time.time()

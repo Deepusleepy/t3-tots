@@ -51,7 +51,7 @@ goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
 REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.0"
 PINNED = {
- "tools/t3q.py": ["t3q.py", "a66256c75eec2d5b762c106b2c1f8c16a35aaedde3d114700ddc3d05ddecf464"],
+ "tools/t3q.py": ["t3q.py", "3558a5e46c22e06b94e58bc81729867c9410d9532916d076b01d355d9215f620"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/t3ctl": ["t3ctl", "a72400871c4ed86aece4712db083d9d01406248d87d48fd9785cf9047fc0028d"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
@@ -65,7 +65,7 @@ PINNED = {
  "tools/macos/ui-model.applescript": ["ui-model.applescript", "518c532b196b75ac68268ac7276ce35bed22953958d27730fb61c12317a146ae"],
  "tools/macos/ui-press.applescript": ["ui-press.applescript", "2f53685d1eaac38d3e8b68e33d861d3c4297f57d8b30a56229392ed6a78ff858"],
  "tools/macos/ui-type.applescript": ["ui-type.applescript", "f1ca66a2352ad71fdcd213d11a5eb0ba8668f35511050d66901d542106e44125"],
- "tools/cleanup/scan.py": ["cleanup/scan.py", "5886defd259f579195d71efdb2835ecdba25591bc72666a7ccc05e7bbe0aa34e"],
+ "tools/cleanup/scan.py": ["cleanup/scan.py", "d2d4328dc9914c04f4d1ed83c746da2d82db0b4b5edbc703d04091f51e2ebc2c"],
  "tools/cleanup/make_report.py": ["cleanup/make_report.py", "a43ec1beb22c61460df490da170403c755b11431d48dc81ad65d190def9f00ca"],
  "tools/report/report.py": ["report/report.py", "f36cce5f7a06c95a3c2e7ac66ecf06c9b8627c5c0ee803e12845308a2cada84a"]
 }

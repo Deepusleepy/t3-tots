@@ -76,6 +76,8 @@ if CMD != "usage":
 q = lambda s, a=(): db.execute(s, a).fetchall()
 # Older T3 builds kept approvals in their own table; newer ones keep them in runtime_requests (already counted)
 APPROVALS = "0"
+ASKS_USER = "x.status='pending' and x.kind not in ('dynamic_tool_call','auth_refresh')"
+ANSWERABLE = ASKS_USER + " and coalesce(json_extract(x.payload_json,'$.responseCapability.type'),'')<>'not_resumable'"
 def legacy_approvals():
     global APPROVALS
     if CMD != "usage" and q("select 1 from sqlite_master where type='table' and name='projection_pending_approvals'"):
@@ -86,16 +88,17 @@ def overview():
     rows = q(f"""select * from (select t.thread_id, coalesce(p.title,'(no project)'), t.title, {ACT} act,
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
      (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
-     (select count(*) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
+     (select count(*) from {RQ} x where x.thread_id=t.thread_id and {ASKS_USER}),
+     (select count(*) from {RQ} x where x.thread_id=t.thread_id and {ANSWERABLE}),
      (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1),
      {SETTLED}
      from {TH} t left join projection_projects p on p.project_id=t.project_id
      where t.archived_at is null and t.deleted_at is null) where act >= ? order by act desc""", (since(DAYS),))
     mine = [r for r in rows if ALL or not spawned(r[4], r[0])]
     print(f"T3 threads active in last {DAYS} days: {len(mine)} shown, {len(rows)-len(mine)} agent-spawned hidden (T3_ALL=1 shows them)")
-    for tid, proj, title, upd, src, run, pend, last, settled in mine:
+    for tid, proj, title, upd, src, run, pend, blocks, last, settled in mine:
         role, _, text = (last or "\x1f").partition("\x1f")
-        st = "needs you" if pend else "running" if run in LIVE else "needs you" if run in ("waiting", "queue held") else "settled" if settled \
+        st = "needs you" if blocks else "running" if run in LIVE else "needs you" if pend or run in ("waiting", "queue held") else "settled" if settled \
             else "needs you" if role == "assistant" and asks_you(text) else (run or "idle")
         print(f"- [{proj}] {title} | {st} | {loc(upd)} | {role or '-'}: {flat(text,140)}")
     hidden = {}
@@ -107,7 +110,8 @@ def waiting():
     DAYS = env_int("T3_DAYS", 14)
     rows = q(f"""select * from (select t.thread_id, coalesce(p.title,'(no project)'), t.title, {ACT} act,
      (select {RUNST} from {RU} r where r.thread_id=t.thread_id order by ordinal desc limit 1),
-     (select group_concat(kind||'@'||created_at) from {RQ} x where x.thread_id=t.thread_id and x.status='pending'),
+     (select group_concat(kind||'@'||created_at) from {RQ} x where x.thread_id=t.thread_id and {ASKS_USER}),
+     (select count(*) from {RQ} x where x.thread_id=t.thread_id and {ANSWERABLE}),
      {APPROVALS},
      coalesce(json_extract(t.payload_json,'$.creationSource'),'?'),
      (select role||char(31)||coalesce(json_extract(payload_json,'$.text'),'') from {MS} m where m.thread_id=t.thread_id order by created_at desc limit 1),
@@ -116,12 +120,12 @@ def waiting():
      where t.archived_at is null and t.deleted_at is null) where act >= ? order by act desc""", (since(DAYS),))
     n = 0
     ALL = os.environ.get("T3_ALL") == "1"
-    for tid, proj, title, upd, run, pend, appr, src, last, settled in rows:
+    for tid, proj, title, upd, run, pend, blocks, appr, src, last, settled in rows:
         if spawned(src, tid) and not ALL and not (pend or appr): continue
         role, _, text = (last or "\x1f").partition("\x1f")
         asks = role == "assistant" and asks_you(text) and not settled  # settling a thread means its hand-back was dealt with
-        blocked = pend or appr
-        if not blocked and (run in LIVE or not (run in ("waiting", "queue held") or asks)): continue
+        if run in LIVE and not (blocks or appr): continue
+        if run not in LIVE and not (pend or appr or run in ("waiting", "queue held") or asks): continue
         n += 1
         why = []
         if pend:
@@ -241,7 +245,7 @@ def health():
         h = ago_h(at); quiet = ago_h(upd)
         if st == "queue held": print(f"queue held: {title} | a message has waited {h:.1f}h for someone to resume or cancel it"); continue  # stuck = live over 1h AND no thread activity for 30+ min
         print(f"{'STUCK? ' if h > 1 and quiet > 0.5 else ''}live run: {title} | {st} for {h:.1f}h, last activity {quiet*60:.0f} min ago")
-    for title, kind, at in q(f"select t.title, x.kind, x.created_at from {RQ} x join {TH} t using(thread_id) where x.status='pending'"):
+    for title, kind, at in q(f"select t.title, x.kind, x.created_at from {RQ} x join {TH} t using(thread_id) where {ASKS_USER}"):
         print(f"pending {kind}: {title} since {loc(at)}" + (" (stale >24h)" if ago_h(at) > 24 else ""))
     tot = 0
     for root, dirs, files in os.walk(D):

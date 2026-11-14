@@ -8,7 +8,7 @@ SCAN = str(ROOT / "tools" / "cleanup" / "scan.py")
 
 class Dupes(unittest.TestCase):
     def test_dupes_skip_sensitive_paths_before_opening(self):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        tmp = pathlib.Path(os.path.realpath(tempfile.mkdtemp(prefix="t3scan-")))
         body = b"same bytes " * 20000
         plain = ["a/movie.bin", "b/movie copy.bin", "author.md", "docs/authority.bin"]
         sensitive = ["secrets/movie.bin", ".ssh/id_backup", "app/.env", "app/.env.development", "MyToken.bin", "keys/server.pem", "auth/cache.bin", "googleAuth.bin", "x/id_ed25519", "HTTPAuth.bin", "getHTTPAuth.ts", "XMLAuth.bin"]
@@ -43,7 +43,7 @@ class OtherUsers(unittest.TestCase):
         return json.loads(out.getvalue())["results"]
 
     def test_a_wide_scan_never_enters_another_users_home(self):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        tmp = pathlib.Path(os.path.realpath(tempfile.mkdtemp(prefix="t3scan-")))
         for rel in ("home/me/mine.bin", "home/other/theirs.bin", "home/Shared/all.bin", "data/home2/x.bin"):
             p = tmp / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b"x" * 300000)
         seen, real_scandir = [], os.scandir
@@ -73,14 +73,23 @@ class OtherUsers(unittest.TestCase):
             self.assertEqual(other(path, home, osp), want, f"{path} with home {home}")
 
     def test_the_users_own_home_under_another_spelling_is_scanned(self):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        tmp = pathlib.Path(os.path.realpath(tempfile.mkdtemp(prefix="t3scan-")))
         p = tmp / "home" / "me" / "a.bin"; p.parent.mkdir(parents=True); p.write_bytes(b"x")
         try: os.symlink(tmp / "home" / "me", tmp / "home" / "alias", target_is_directory=True)
         except OSError: self.skipTest("this account can't create a symlink")
         self.assertNotIn("error", self.scan(tmp / "home" / "me", tmp / "home" / "alias")[0])
 
+    def test_another_account_reached_through_a_link_to_the_accounts_folder_is_skipped(self):
+        tmp = pathlib.Path(os.path.realpath(tempfile.mkdtemp(prefix="t3scan-")))
+        for rel in ("home/me/a.bin", "home/other/b.bin"):
+            p = tmp / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b"x")
+        try: os.symlink(tmp / "home", tmp / "alias", target_is_directory=True)
+        except OSError: self.skipTest("this account can't create a symlink")
+        res = self.scan(tmp / "home" / "me", tmp / "alias")[0]
+        self.assertNotIn("error", res); self.assertEqual(res["other_users_skipped"], 1)
+
     def test_a_root_inside_another_users_home_is_refused(self):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="t3scan-"))
+        tmp = pathlib.Path(os.path.realpath(tempfile.mkdtemp(prefix="t3scan-")))
         for rel in ("home/me/a.bin", "home/other/deep/b.bin"):
             p = tmp / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b"x")
         res = self.scan(tmp / "home" / "me", tmp / "home" / "other" / "deep", tmp / "home" / "me")
