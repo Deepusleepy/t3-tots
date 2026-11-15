@@ -108,22 +108,24 @@ const reliability = (c) => ({ catchUpMinutes: numOr(c.catchUpMinutes, CATCH_UP_M
 // ---------- bots: who gets which events ----------
 // listen.json "url" and "headers" are the main bot. "bots" adds more webhooks. Every bot, the main one included, follows one rule:
 // it gets an event unless it has "only" rules and none matches, or one of its "skip" rules matches. A rule names projects (T3 ids),
-// event groups, or both. No rules means everything, which is how the main bot starts. An event no bot wants is sent to nobody.
-const EVENT_GROUPS = ["questions", "approvals", "finished", "cancelled", "failed"];
+// event groups, which threads, or a mix. "threads": "tots" is threads T3 Tots started (started-here.json) and their sub-tasks,
+// "others" is every other thread. No rules means everything, which is how the main bot starts. An event no bot wants is sent to nobody.
+const EVENT_GROUPS = ["questions", "approvals", "finished", "cancelled", "failed"], THREAD_KINDS = ["tots", "others"], RULE_PARTS = ["projects", "events", "threads"];
 const eventGroup = (e) => e.event === "thread.finished" ? "finished" : e.event === "thread.cancelled" ? "cancelled" : /^thread\.failed/.test(e.event) ? "failed"
   : /^request\./.test(e.event) ? (e.kind === "user_input" ? "questions" : "approvals") : null;
 const BOT_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 const hookUrlOk = (u) => /^https:\/\//.test(u || "") || /^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(u || "");
 function compileRule(r, where) {
-  if (!r || typeof r !== "object" || Array.isArray(r)) throw new Error(`${where} must be an object with "projects" and/or "events"`);
-  const odd = Object.keys(r).find((k) => k !== "projects" && k !== "events"); if (odd !== undefined) throw new Error(`${where} has "${String(odd).slice(0, 40)}"; a rule takes "projects" and/or "events"`);
-  if (r.projects === undefined && r.events === undefined) throw new Error(`${where} must name "projects" and/or "events"`);
+  if (!r || typeof r !== "object" || Array.isArray(r)) throw new Error(`${where} must be an object with "projects", "events" and/or "threads"`);
+  const odd = Object.keys(r).find((k) => !RULE_PARTS.includes(k)); if (odd !== undefined) throw new Error(`${where} has "${String(odd).slice(0, 40)}"; a rule takes "projects", "events" and/or "threads"`);
+  if (RULE_PARTS.every((k) => r[k] === undefined)) throw new Error(`${where} must name "projects", "events" and/or "threads"`);
+  if (r.threads !== undefined && !THREAD_KINDS.includes(r.threads)) throw new Error(`${where}.threads must be "tots" (threads T3 Tots started) or "others"`);
   const projects = r.projects === undefined ? null : [].concat(r.projects).map((x) => (x && typeof x === "object" ? x.id : x));
   if (projects && (!projects.length || projects.some((x) => typeof x !== "string" || !x))) throw new Error(`${where}.projects must list project ids`);
   const events = r.events === undefined ? null : [].concat(r.events);
   const bad = (events || []).find((x) => !EVENT_GROUPS.includes(x)); if (bad !== undefined) throw new Error(`${where}.events has "${bad}"; use ${EVENT_GROUPS.join(", ")}`);
   if (events && !events.length) throw new Error(`${where}.events must not be empty`);
-  return { projects, events };
+  return { projects, events, threads: r.threads || null };
 }
 const compileRules = (o, where) => ({ only: [].concat((o && o.only) || []).map((r, i) => compileRule(r, `${where}.only[${i}]`)), skip: [].concat((o && o.skip) || []).map((r, i) => compileRule(r, `${where}.skip[${i}]`)) });
 function compileRouting(c) { // -> { main: { only, skip }, bots: { name: { url, headers, only, skip } } }; throws with a message that never holds a URL or key
@@ -135,9 +137,9 @@ function compileRouting(c) { // -> { main: { only, skip }, bots: { name: { url, 
   }
   return { main: compileRules(c && c.main, "main"), bots };
 }
-const ruleHits = (r, projectId, group) => (!r.projects || r.projects.includes(projectId)) && (!r.events || r.events.includes(group));
-const botWants = (b, projectId, group) => (!b.only.length || b.only.some((r) => ruleHits(r, projectId, group))) && !b.skip.some((r) => ruleHits(r, projectId, group));
-const routeNames = (routing, projectId, group) => [...(botWants(routing.main, projectId, group) ? ["main"] : []), ...Object.keys(routing.bots).filter((n) => botWants(routing.bots[n], projectId, group))];
+const ruleHits = (r, projectId, group, tots) => (!r.projects || r.projects.includes(projectId)) && (!r.events || r.events.includes(group)) && (!r.threads || r.threads === (tots ? "tots" : "others"));
+const botWants = (b, projectId, group, tots) => (!b.only.length || b.only.some((r) => ruleHits(r, projectId, group, tots))) && !b.skip.some((r) => ruleHits(r, projectId, group, tots));
+const routeNames = (routing, projectId, group, tots = false) => [...(botWants(routing.main, projectId, group, tots) ? ["main"] : []), ...Object.keys(routing.bots).filter((n) => botWants(routing.bots[n], projectId, group, tots))];
 const configRouting = (c) => { try { return compileRouting(c); } catch (err) { die("BAD_LISTEN_CONFIG", `listen.json ${err.message}`); } };
 function loadConfig() {
   const c = readJSON(CONF, null);
@@ -600,8 +602,12 @@ const mainOnly = new WeakSet();
 function targetsFor(e) {
   if (mainOnly.has(e)) return [mainBot];
   const to = e.event === "request.resolved" && S.sent[e.requestId] && S.sent[e.requestId].to;
-  const names = to || routeNames(C.routing, e.projectId || null, eventGroup(e));
+  const names = to || routeNames(C.routing, e.projectId || null, eventGroup(e), startedByTots(e.threadId));
   return names.map((n) => bots.get(n)).filter(Boolean);
+}
+function startedByTots(threadId, started = readJSON(STARTED, {}) || {}) { // the thread, or a parent of this sub-task, is in started-here.json
+  for (let id = threadId, i = 0; id && i < 10; id = (meta.threads.get(id) || {}).parent, i++) if (started[id]) return true;
+  return false;
 }
 const routed = (e) => { const f = e.runId && !e.requestId && S.finished[e.runId]; if (f) f.routed = true; }; // the other bots have it in their own lists from here on
 async function sendTo(e, ds) { // -> true when the main bot has nothing left to keep (it took it, combined it, or isn't subscribed)
@@ -738,7 +744,7 @@ async function buildEnd(ep, t, runId, opts = {}) { // -> { e } or { skip: reason
   const replyText = filterReply ? String(txt(filterReply)) : null; // the run's whole own reply, for listen.json filters only (never sent or saved)
   // an old run is counted even when its thread has since started another one; only a fresh finish is dropped for a thread that is going on
   if (opts.since && endedAt(run) < (event === "thread.failed" && opts.failedSince ? opts.failedSince : opts.since)) return { skip: "ended before the listener's last run",
-    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, title: t.title || t.id, projectId: t.projectId || null, completedAt: run.completedAt, replyText } : null };
+    late: event !== "thread.failed" && opts.failedSince && endedAt(run) >= opts.failedSince ? { event, runId: run.id, threadId: t.id, title: t.title || t.id, projectId: t.projectId || null, completedAt: run.completedAt, replyText } : null };
   if (event !== "thread.failed" && isBusy(t) && !opts.preview) return { skip: "thread is going on with its next queued message" };
   const errItem = items.filter((x) => x.type === "error" && x.runId === run.id).at(-1);
   const errText = errItem ? (txt(errItem) || errItem.message || errItem.title) : t.lastError ? (t.lastError.message || "error") : null;
@@ -933,12 +939,13 @@ async function catchUp(ep, threads, ctx) {
   listening = next.listening;
   if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
 }
+const noteThread = (t) => meta.threads.set(t.id, { title: t.title, projectId: t.projectId, parent: (t.lineage && t.lineage.parentThreadId) || (meta.threads.get(t.id) || {}).parent || null });
 async function onItem(ep, v, full, ctx = {}) {
   if (v.kind === "snapshot") {
     for (const p of v.snapshot.projects || []) meta.projects.set(p.id, p.title);
     if (!full) return; // later snapshots are project-metadata refreshes with no threads
     const live = new Set();
-    for (const t of v.snapshot.threads || []) { live.add(t.id); meta.threads.set(t.id, { title: t.title, projectId: t.projectId }); known.set(t.id, t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null); }
+    for (const t of v.snapshot.threads || []) { live.add(t.id); noteThread(t); known.set(t.id, t.pendingRuntimeRequest ? t.pendingRuntimeRequest.id : null); }
     const check = new Set([...v.snapshot.threads.filter((t) => t.pendingRuntimeRequest).map((t) => t.id), ...Object.values(S.sent).map((s) => s.threadId)]);
     for (const tid of check) await reconcile(ep, tid, { startup: true, ...(live.has(tid) ? (known.get(tid) ? { expect: known.get(tid) } : {}) : { gone: "archived-or-deleted" }) });
     for (const t of v.snapshot.threads || []) noteRun(t);
@@ -947,7 +954,7 @@ async function onItem(ep, v, full, ctx = {}) {
     else { pruneFinished(); saveState(); catchUpChain = catchUpChain.then(() => catchUp(ep, v.snapshot.threads, ctx)).then(watching).catch((err) => log("error:", err.message)); }
   } else if (v.kind === "project.updated") meta.projects.set(v.project.id, v.project.title);
   else if (v.kind === "thread.updated") {
-    const t = v.thread; meta.threads.set(t.id, { title: t.title, projectId: t.projectId });
+    const t = v.thread; noteThread(t);
     if (v.location === "archive") { if (Object.values(S.sent).some((s) => s.threadId === t.id)) await reconcile(ep, t.id, { gone: "archived" }); known.delete(t.id); runSeen.delete(t.id); return; }
     const prevRun = noteRun(t);
     if (VERBOSE && prevRun && (prevRun.status !== t.status || prevRun.activeRunId !== (t.activeRunId || null))) log(`thread.updated "${clean(t.title)}" status ${prevRun.status} -> ${t.status}, run ${prevRun.activeRunId ? prevRun.activeRunId.slice(-12) : "-"} -> ${t.activeRunId ? t.activeRunId.slice(-12) : "-"}`);
@@ -1122,14 +1129,17 @@ function projectRef(q, projects) { // a project named by title or id -> { id, ti
   return hits[0];
 }
 async function ruleFromArgs() {
-  const names = optAll("--project"), ev = optv("--events"), rule = {};
+  const names = optAll("--project"), ev = optv("--events"), th = optv("--threads"), rule = {};
   if (!ev && argv.some((a) => a === "--events" || a.startsWith("--events="))) die("USAGE", `--events takes ${EVENT_GROUPS.join(", ")}`);
+  if ((th !== undefined || argv.some((a) => a === "--threads" || a.startsWith("--threads="))) && !THREAD_KINDS.includes(th)) die("USAGE", "--threads takes tots (threads T3 Tots started, and their sub-tasks) or others (every other thread)");
+  if (th) rule.threads = th;
   if (names.length) { const all = await t3Projects(); rule.projects = names.map((n) => projectRef(n, all)); }
   if (ev) { rule.events = ev.split(",").map((x) => x.trim()).filter(Boolean); const bad = rule.events.find((x) => !EVENT_GROUPS.includes(x)); if (bad || !rule.events.length) die("USAGE", `--events takes ${EVENT_GROUPS.join(", ")}`); }
   return rule;
 }
-const ruleKey = (r) => JSON.stringify([(r.projects || []).map((x) => (x && typeof x === "object" ? x.id : x)).sort(), [...(r.events || [])].sort()]);
-const ruleText = (r) => `${r.events ? r.events.join(", ") : "every event"} from ${r.projects ? r.projects.map((x) => (x && typeof x === "object" ? clean(x.title || x.id) : x)).join(", ") : "every project"}`;
+const ruleKey = (r) => JSON.stringify([(r.projects || []).map((x) => (x && typeof x === "object" ? x.id : x)).sort(), [...(r.events || [])].sort(), r.threads || null]);
+const THREADS_TEXT = { tots: " in threads T3 Tots started", others: " in threads T3 Tots didn't start" };
+const ruleText = (r) => `${r.events ? r.events.join(", ") : "every event"} from ${r.projects ? r.projects.map((x) => (x && typeof x === "object" ? clean(x.title || x.id) : x)).join(", ") : "every project"}${THREADS_TEXT[r.threads] || ""}`;
 function botText(name, b) {
   const only = [].concat(b.only || []), skip = [].concat(b.skip || []);
   return `${name}: gets ${only.length ? only.map(ruleText).join("; and ") : "everything"}${skip.length ? `; not ${skip.map(ruleText).join("; nor ")}` : ""}`;
@@ -1139,21 +1149,21 @@ function saveBots(c) { try { compileRouting(c); } catch (err) { die("BAD_LISTEN_
   if (!c.approvals && [c.main || {}, ...Object.values(c.bots || {})].some((b) => [].concat(b.only || []).some((r) => (r.events || []).includes("approvals")))) console.log('Note: approvals are sent only when they are turned on ("approvals": true in listen.json, or install --approvals).'); console.log("A running listener picks this up within a few seconds."); }
 const confOrDie = () => { const c = readJSON(CONF, null); if (!c) die("NO_LISTEN_CONFIG", `run setup first: node "${path.join(DIR, "t3listen")}" setup`); return c; };
 async function botsCmd() { console.log(botLines(confOrDie()).join("\n")); }
-async function botCmd() { // bot add <name> [--project p]... [--events a,b] (URL and key on stdin) | bot remove <name>
+async function botCmd() { // bot add <name> [--project p]... [--events a,b] [--threads tots|others] (URL and key on stdin) | bot remove <name>
   const sub = argv[1], name = argv[2], c = confOrDie(); c.bots = c.bots || {};
-  if (!["add", "remove"].includes(sub) || !name) die("USAGE", "t3listen bot add <name> [--project p]... [--events a,b] | bot remove <name>");
+  if (!["add", "remove"].includes(sub) || !name) die("USAGE", "t3listen bot add <name> [--project p]... [--events a,b] [--threads tots|others] | bot remove <name>");
   if (sub === "remove") { if (!c.bots[name]) die("NOT_FOUND", `no bot called "${clean(name)}"`); delete c.bots[name]; return saveBots(c); }
   if (!BOT_NAME.test(name) || name.toLowerCase() === "main") die("USAGE", `"${clean(name)}" is not a usable bot name (letters, digits, - and _; "main" is the main bot)`);
   const rule = await ruleFromArgs(), had = c.bots[name], ruled = Object.keys(rule).length > 0;
   if (had && !flag("--replace")) die("EXISTS", `a bot called "${name}" is already there. Change what it gets with subscribe / unsubscribe, or pass --replace to give it a new webhook`);
-  if (!had && !ruled && !flag("--everything")) die("USAGE", `say what "${name}" gets: --project <p> and/or --events ${EVENT_GROUPS.join(",")} (or --everything for a second copy of every event)`);
+  if (!had && !ruled && !flag("--everything")) die("USAGE", `say what "${name}" gets: --project <p>, --events ${EVENT_GROUPS.join(",")} and/or --threads tots|others (or --everything for a second copy of every event)`);
   const hook = await readHook(`T3 Tots bot "${name}"`);
   c.bots[name] = { ...hook, only: ruled ? [rule] : (had && had.only) || [], skip: (had && had.skip) || [] };
   saveBots(c);
 }
-async function subscribeCmd(un) { // subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]
+async function subscribeCmd(un) { // subscribe|unsubscribe <bot|main> [--project p]... [--events a,b] [--threads tots|others]
   const name = argv[1], c = confOrDie(), rule = await ruleFromArgs();
-  if (!name || !Object.keys(rule).length) die("USAGE", `t3listen ${un ? "unsubscribe" : "subscribe"} <bot|main> [--project p]... [--events ${EVENT_GROUPS.join(",")}]`);
+  if (!name || !Object.keys(rule).length) die("USAGE", `t3listen ${un ? "unsubscribe" : "subscribe"} <bot|main> [--project p]... [--events ${EVENT_GROUPS.join(",")}] [--threads tots|others]`);
   const b = name === "main" ? (c.main = c.main || {}) : (c.bots || {})[name]; if (!b) die("NOT_FOUND", `no bot called "${clean(name)}"`);
   const only = (b.only = [].concat(b.only || [])), skip = (b.skip = [].concat(b.skip || [])), same = (r) => ruleKey(r) === ruleKey(rule);
   if (un) {
@@ -1217,8 +1227,8 @@ const USAGE = `t3listen [run] [--dry-run] [--once [--timeout s]] [--approvals] [
 t3listen setup [--machine name]   read the webhook URL (line 1) and 'Name: value' header lines from stdin into listen.json (private)
 t3listen test [--dry-run] [--bot name]   send one test event to the main bot's webhook, or to one bot's
 t3listen bots                     list the bots and what each gets
-t3listen bot add <name> [--project p]... [--events a,b] [--everything] [--replace] | bot remove <name>   add a bot (its webhook URL and key are read from stdin, like setup) or remove one
-t3listen subscribe|unsubscribe <bot|main> [--project p]... [--events a,b]   change what a bot gets; events: questions, approvals, finished, cancelled, failed
+t3listen bot add <name> [--project p]... [--events a,b] [--threads tots|others] [--everything] [--replace] | bot remove <name>   add a bot (its webhook URL and key are read from stdin, like setup) or remove one
+t3listen subscribe|unsubscribe <bot|main> [--project p]... [--events a,b] [--threads tots|others]   change what a bot gets; events: questions, approvals, finished, cancelled, failed; threads: tots (T3 Tots started them) or others
 t3listen preview-finish --thread id|title   print the run-end event for a thread's latest ended run (sends nothing)
 t3listen install [--approvals] | uninstall | status   start at login (macOS LaunchAgent, Windows logon task, Linux systemd --user)`;
 if (require.main !== module) module.exports = { skillsNote, afterTimeouts, MAX_TIMEOUTS, pidIsListener, mergeMissed, compileRouting, routeNames, eventGroup, EVENT_GROUPS, botText, stableNode, runEndBudget, RUN_ENDS_PER_MINUTE, cachedPresence, PRESENCE_CACHE_MS, rateLimitPause, RATE_LIMIT_PAUSE_MS, staleRunEnd, RUN_END_KEEP_MS, newMissed, noteMissed, missedEvent, CATCH_UP_MINUTES, readPresence, presentInT3, PRESENT_IDLE_SECONDS, presenceSettings, post, settleDelivery, keepForRetry, refillFromState, MAX_RETRY_QUEUE, pickThread, idLike, systemdUnit, localTime, approvalsLine, staleMinutes, RED, clean, cleanEvent, summary, requestInfo, endedAt, tickLastAlive, catchUpThreads, afterSnapshotListen, usageLimitFields, shellReadyToArm, canArmResume, compileFilters, filterSkip, filterDecision, filtersLine, catchUpSince, reliability, settingsLine, failureKey, repeatCheck, waveDelay, batchEvent };

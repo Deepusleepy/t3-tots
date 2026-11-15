@@ -233,7 +233,7 @@ test("bots, live: with failure waves, a failure the main bot couldn't take stays
 test("rules: a rule with a mistyped key or with nothing in it is refused, never read as everything", () => {
   const bot = (rule) => ({ bots: { site: { url: "https://a.example/h", only: [rule] } } });
   assert.throws(() => l.compileRouting(bot({ project: ["p1"] })), /has "project"/);
-  assert.throws(() => l.compileRouting(bot({})), /must name "projects" and\/or "events"/);
+  assert.throws(() => l.compileRouting(bot({})), /must name "projects", "events" and\/or "threads"/);
   assert.throws(() => l.compileRouting({ main: { skip: [{}] } }), /must name/);
 });
 test("bots, live: an event still waiting its turn for a bot is not sent once that bot is removed", async () => {
@@ -268,5 +268,47 @@ test("bots, live: a new main webhook in listen.json is used by the running liste
     await f.waitFor(() => /listen\.json changed/.test(f.out), 8000, "the reload");
     await finish(f, "B", "p1"); await f.waitFor(() => moved.posts.length === 1, 5000, "the next finish at the new webhook"); await sleep(500);
     assert.deepEqual([runIds(f.posts), runIds(moved.posts)], [["A1"], ["B1"]]);
+  } finally { await f.close(); }
+});
+test("rules: threads picks threads T3 Tots started, or every other thread", () => {
+  const routing = l.compileRouting({ main: { skip: [{ threads: "others" }] }, bots: { team: { url: "https://a.example/h", only: [{ threads: "others", events: ["failed"] }] } } });
+  assert.equal(l.routeNames(routing, "p1", "questions", true).join(","), "main", "the main bot keeps threads T3 Tots started");
+  assert.equal(l.routeNames(routing, "p1", "questions", false).join(","), "", "and drops every other thread");
+  assert.equal(l.routeNames(routing, "p1", "failed", false).join(","), "team");
+  assert.equal(l.routeNames(l.compileRouting({}), "p1", "finished", false).join(","), "main", "without a threads rule every thread is sent, as before");
+  assert.throws(() => l.compileRouting({ main: { skip: [{ threads: "grok" }] } }), /main\.skip\[0\]\.threads must be "tots"/);
+  assert.throws(() => l.compileRouting({ main: { skip: [{ thread: "tots" }] } }), /has "thread"/);
+});
+test("bots, live: with the main bot unsubscribed from other threads, it hears only threads T3 Tots started and their sub-tasks", async () => {
+  const f = await startFake();
+  try {
+    require("fs").writeFileSync(path.join(f.dir, "started-here.json"), JSON.stringify({ T: isoNow() }));
+    f.writeConfig({ main: { skip: [{ threads: "others" }] } });
+    f.start(); await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    const sub = "thread:delegated-task:S";
+    f.setThread({ id: sub, title: "Sub-task", status: "idle", projectId: "p1", lineage: { parentThreadId: "T" } });
+    f.update({ ...busy(sub, "p1"), lineage: { parentThreadId: "T" } }, running(sub)); await sleep(150);
+    f.update({ ...failed(sub, "p1"), lineage: { parentThreadId: "T" } }, failRun(sub));
+    await finish(f, "T", "p1"); await finish(f, "U", "p1"); await finish(f, "V", "p1", "failed");
+    await f.waitFor(() => f.posts.length === 2, 9000, "the T3 Tots thread and its sub-task"); await sleep(600);
+    assert.deepEqual(runIds(f.posts), ["T1", `${sub}1`]);
+    assert.equal(f.count(/no bot is subscribed: thread\.finished/), 1, "the other thread's finish goes to nobody, and the log says so");
+    assert.equal(f.count(/no bot is subscribed: thread\.failed/), 1);
+  } finally { await f.close(); }
+});
+test("bot commands: --threads others turns a bot to T3 Tots threads only, and subscribe undoes it", async () => {
+  const f = await startFake();
+  try {
+    const out = (r) => `${r.stdout}${r.stderr}`, conf = () => JSON.parse(require("fs").readFileSync(path.join(f.dir, "listen.json"), "utf8"));
+    let r = await f.cli(["unsubscribe", "main", "--threads", "others"]); assert.equal(r.status, 0, out(r));
+    assert.match(r.stdout, /^main: gets everything; not every event from every project in threads T3 Tots didn't start\n/);
+    assert.deepEqual(conf().main.skip, [{ threads: "others" }]);
+    r = await f.cli(["unsubscribe", "main", "--threads", "others"]); assert.equal(r.status, 0, out(r));
+    assert.equal(conf().main.skip.length, 1, "the same unsubscribe twice is kept once");
+    for (const args of [["unsubscribe", "main", "--threads"], ["unsubscribe", "main", "--threads", "grok"], ["subscribe", "main", "--threads=all"]]) {
+      r = await f.cli(args); assert.equal(r.status, 1, args.join(" ")); assert.match(out(r), /^USAGE: --threads takes tots/, args.join(" "));
+    }
+    r = await f.cli(["subscribe", "main", "--threads", "others"]); assert.equal(r.status, 0, out(r));
+    assert.match(r.stdout, /^main: gets everything\n/); assert.deepEqual(conf().main.skip, []);
   } finally { await f.close(); }
 });
