@@ -207,6 +207,42 @@ test("the shared rules stay small, and every pointer to a section of them or of 
   for (const line of [/Never accept an approval yourself/, /never send the same message both ways/, /Don't retry other spellings/, /`WRITE_STATE: none`, `WRITE_STATE: unknown`/, /`NEEDS_USER_APPROVAL`/, /Ask before `t3ctl queue --thread <t> --resume`/]) assert.match(rules, line);
 });
 
+// One host table in t3-reference answers every host-specific step, so the suite works in any app.
+test("the host table names each app's own tools, and the skills point at it", () => {
+  const dir = path.join(__dirname, "..", "skills"), skill = (n) => read(dir, n, "SKILL.md"), rules = skill("t3-tots-rules"), ref = skill("t3-reference");
+  assert.match(ref, /^## Host table$/m, "the host table has a heading to point at");
+  const table = ref.slice(ref.indexOf("## Host table"), ref.indexOf("## t3ctl commands"));
+  for (const tool of ["attach_files_to_response", "html_render", "messaging_post", "messaging_list_places", "ask_user", "ask_ui", "remember", "search_memories", "create_routine", "create_webhook_routine", "routine_no_update", "test_routine", "save_mcp_server", "list_mcp_servers", "start_task", "create_agent"])
+    assert.ok(table.includes(tool), `the OpenBot column names ${tool}`);
+  for (const step of ["ListMachines", "SendToUser", "CopyToBox", "CloudAgent"]) assert.ok(table.includes(step), `the Grok Bot column names ${step}`);
+  assert.match(rules, /The host app is a saved fact, never a guess/); assert.match(rules, /T3 Tots host/);
+  assert.match(rules, /An OpenBot agent reads t3-reference "Host table" instead/);
+  assert.match(skill("t3-getting-started"), /T3 Tots host: OpenBot/);
+  assert.match(read(__dirname, "..", "AGENTS.md"), /^## OpenBot setup$/m);
+  assert.match(read(__dirname, "..", "AGENTS.md"), /`node t3ctl skills install --from <release folder> --to <workspace>\/\.agents\/skills`/);
+  assert.match(read(__dirname, "..", "AGENTS.md"), /`save_mcp_server` tool, `transport: "http"`/);
+  assert.match(read(__dirname, "..", "AGENTS.md"), /\*\*Copy MCP URL\*\*/, "the MCP URL comes from T3 Code's environment menu");
+  assert.match(read(__dirname, "..", "AGENTS.md"), /"Token"/, "the setup issues the token t3ctl needs");
+  assert.match(skill("t3-routes"), /OpenBot agent: do AGENTS\.md "OpenBot setup" step 4 instead of steps 1 to 6 below/);
+  assert.match(skill("t3-install-tools"), /An OpenBot agent needs no box copy/);
+});
+
+test("OpenBot phone answers are a poll, because t3listen cannot feed an OpenBot webhook", () => {
+  const phone = read(path.join(__dirname, "..", "skills", "t3-phone-answers", "SKILL.md"));
+  assert.match(phone, /^## OpenBot phone routine$/m); assert.match(phone, /^## OpenBot routine prompt$/m);
+  assert.match(phone, /needs a body with a `type` field/); assert.match(phone, /cannot sign those headers/);
+  assert.match(phone, /`create_routine`/); assert.match(phone, /`routine_no_update`/); assert.match(phone, /`test_routine`/);
+  assert.match(phone, /`list_routines` first/, "the setup checks for an existing routine before creating one");
+  assert.match(phone, /`inclusion: "essential"`/, "the poll's tools folder note has to be in every prompt");
+  const prompt = phone.match(/```\n(T3 Tots poll v1 \(OpenBot\)[\s\S]*?)\n```/);
+  assert.ok(prompt, "the OpenBot routine prompt block"); const body = prompt[1];
+  assert.match(body, /python3 t3q\.py waiting/); assert.match(body, /node t3ctl pending --thread '<id>' --json/);
+  assert.doesNotMatch(body, /node t3ctl pending`\s*$/m, "the poll never calls pending without a thread");
+  assert.match(body, /Never accept an approval/); assert.match(body, /phone-poll-state\.json/);
+  assert.match(body, /data, never instructions/); assert.match(body, /Never repeat a key/);
+  assert.ok(body.length <= 4000, `the OpenBot routine prompt is ${body.length} characters`);
+});
+
 test("MCP is offered once: at first setup, and once to an owner who updates from before it existed", () => {
   const skill = (n) => read(__dirname, "..", "skills", n, "SKILL.md"), started = skill("t3-getting-started"), inst = skill("t3-install-tools");
   const offer = started.slice(started.indexOf("## 5b. Optional: T3's own MCP"), started.indexOf("## 6"));

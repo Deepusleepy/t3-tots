@@ -1,6 +1,6 @@
 # AGENTS.md: installing and verifying T3 Tots
 
-Non-Grok agents follow this file to install and verify. For Grok Bot only steps, do what `skills/t3-tots-rules/SKILL.md` "Grok Bot only" says instead. The skills are in `skills/`; follow `skills/t3-tots-rules/SKILL.md` throughout.
+Non-Grok agents follow this file to install and verify. For a host-specific step, use the column for your app in `skills/t3-reference/SKILL.md` "Host table". The skills are in `skills/`; follow `skills/t3-tots-rules/SKILL.md` throughout.
 
 ## Rules
 - Install only after the user's yes. Never print, copy or overwrite the `token` file or `listen.json` (it holds the user's webhook URL and key), and never open T3 Code's `secrets/` or any auth, token or credential file.
@@ -30,6 +30,18 @@ From the repo checkout or unpacked release: `node tools/t3ctl skills install --t
 
 ## Status words
 The scripts print status words instead of stack traces. What each means and the next step: `skills/t3-tots-rules/SKILL.md`, "Status words".
+
+## OpenBot setup
+An OpenBot agent runs on the OpenBot host. Install there.
+
+1. Install the tools to `~/t3-tots` from a release tag, as "Tools" above says.
+2. Install the skills into the agent workspace: `node t3ctl skills install --from <release folder> --to <workspace>/.agents/skills`. The release folder is the checkout or unpacked release, the same one the tools came from. OpenBot lists that folder with no restart. OpenBot's own GitHub skill link install takes one skill at a time, so use `t3ctl skills install` for the whole suite.
+3. Save the note "T3 Tots host: OpenBot" with the `remember` tool and `inclusion: "essential"`, so it is in every prompt. The host table's OpenBot column is what the skills use.
+4. Connect T3's own MCP after the user's yes. In T3 Code open the environment's menu and choose **Copy MCP URL**, then save that URL with the `save_mcp_server` tool, `transport: "http"` and a name that is not `openbot` or `openbot_browser`. OpenBot signs in over OAuth and the user approves the sign-in card. `list_mcp_servers` must show it.
+5. Token, after the user's own yes (skills/t3-tots-rules/SKILL.md, "Token"). `t3ctl` needs the `token` file next to it, and every `t3ctl` command stops with `NO_TOKEN` without it.
+6. Verify: `node t3ctl projects` prints the projects, and `python3 t3q.py health` prints the T3 server state.
+
+OpenBot has no cloud agent, so t3-handoff stays a Grok Bot step. `t3listen` cannot feed an OpenBot webhook routine; phone answers in OpenBot are a scheduled poll, see skills/t3-phone-answers/SKILL.md, "OpenBot phone routine".
 
 ## Updating
 Check the latest release (`gh release view -R Deepusleepy/t3-tots`). If its tag is newer than the installed `VERSION`, show the user the release notes and which files changed (compare the two `manifest.json` files), and update only after their yes: tools as above, then `t3ctl skills install` again. If `t3listen` runs on that computer (`node t3listen status`), run `node t3listen install` again so it restarts on the new version. Add `--approvals` only if `node t3listen status` said "installed with --approvals" before the update; `listen.json` is kept. The listener also sends approvals when `listen.json` has `"approvals": true`, and reinstalling doesn't change that.
