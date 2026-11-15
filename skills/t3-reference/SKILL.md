@@ -7,6 +7,24 @@ description: >-
 ---
 Reference only. It changes nothing by itself: the rules for acting are in t3-tots-rules.
 
+## Host table
+The host app decides how a step reaches the user. It is a saved fact, never a guess: setup saves the note "T3 Tots host" with the app name (t3-tots-rules "Grok Bot only" says how). Use only your app's column. With no note, use the Other agents column.
+
+| Step | Grok Bot | OpenBot | Other agents |
+|---|---|---|---|
+| Computers | ListMachines every run; every connected computer, in parallel, labelled by name | Only the computer the agent runs on. A second computer is a second OpenBot host with its own agent. Label results with that computer | Only the computer you run on |
+| The box (`/workspace`, CopyToBox, CopyFromBox) | Build on the box, helpers at `/workspace/t3-tots-tools/` | Run the script from the tools folder and write to `<tools folder>/out/`. `cleanup/scan.py` is installed there; the HTML report helpers stay on the box | Run the same script from the tools folder and write to `<tools folder>/out/` (report helpers need local Python 3.9+; skip screenshots) |
+| Sending a file or report | SendToUser | `attach_files_to_response` for files in the chat, `html_render` for a page in the chat. `messaging_post` to a Slack, Discord, Telegram or WhatsApp chat, with place ids from `messaging_list_places`. Always give the path on their computer too | Give the file path |
+| Tap-to-answer cards | Cards | `ask_user` for up to 3 questions with options, `ask_ui` for a confirm card with up to 4 buttons. A T3 approval still follows "Decisions" | Ask in plain text with numbered options; answers still follow "Decisions" |
+| Memory | Always-visible profile memory | `remember` with `inclusion: "essential"` for facts needed in every prompt (the whole budget is 8 KiB), `search_memories` for the rest. Never save the token, a key, or a path to one | Ask, or use the notes file the user names |
+| Scheduled routines | A routine from the routine panel | `create_routine`. Each run starts a new session that sees only the newest chat messages, so the instruction must stand alone. `routine_no_update` when a run has nothing to report, `test_routine` to try one | Run the check once when asked; schedule it only with the user's own tools if they ask |
+| Webhook routines | A routine with a webhook trigger | `create_webhook_routine`. The body needs a `type` field and the signed `x-openbot-timestamp`, `x-openbot-delivery-id` and `x-openbot-signature` headers. The delivery id is the dedupe key | Skip unless the user gives their own webhook |
+| Watches | A watch routine you create | A scheduled routine that runs the `t3ctl watch` check. It is one run per routine run, not a live watcher | Same as routines |
+| Phone answers (`t3listen` to a chat webhook) | The "T3 questions to chat" webhook routine | None that `t3listen` can feed. `t3listen` sends no `type` field and cannot sign the headers above, so every POST is refused. Use the poll routine in t3-phone-answers "OpenBot phone routine" | Skip unless the user gives their own webhook |
+| Skill updates | A synced skill updates live, with no restart | `node t3ctl skills install --from <release folder> --to <workspace>/.agents/skills` again. OpenBot lists that folder with no restart | Follow AGENTS.md "Updating" |
+| T3's own MCP | The connector (t3-routes) | `save_mcp_server` with `transport: "http"` and the URL from T3 Code's "Copy MCP URL". OpenBot signs in over OAuth and the user approves the sign-in card. `list_mcp_servers` confirms | The connector, if the user set one up |
+| Cloud agent (t3-handoff) | CloudAgent; leave fast mode off | None. `start_task` for long work in a side thread of the same agent, `create_agent` for a teammate | None of Grok Bot's kind, so t3-handoff's launch step does not apply |
+
 ## t3ctl commands
 `node t3ctl` with no arguments prints the same list and needs no token.
 
