@@ -6,7 +6,7 @@ description: >-
   Use on the first chat, when no T3 Tots setup is saved in memory, or when the
   user says "set up T3 Tots" / "getting started".
 ---
-If you are not Grok Bot, stop here. Install and verify the tools by following AGENTS.md in this release, and skip every step below (box, ListMachines, routines, cards, memory, phone setup; t3-tots-rules "Grok Bot only" lists what to do instead).
+If you are not Grok Bot, stop here. Install and verify the tools by following AGENTS.md in this release, and skip every step below (box, ListMachines, routines, cards, memory, phone setup; t3-reference "Host table" lists what to do instead). An OpenBot agent follows AGENTS.md "OpenBot setup" and saves the note "T3 Tots host: OpenBot".
 
 Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Detection is read-only. Nothing is written to the user's computers until they say yes, and the token needs its own yes.
 

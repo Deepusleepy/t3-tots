@@ -13,6 +13,8 @@ Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use t
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
 ## Box copy
+An OpenBot agent needs no box copy: it runs `cleanup/scan.py` from its own tools folder and writes to `<tools folder>/out/` (t3-reference "Host table"). The HTML report helpers stay on the box.
+
 Save the fetcher below to `/workspace/t3tots_fetch.py` exactly as written. If it already exists with a different `PIN` or hashes, overwrite it with this one. Then run `python3 /workspace/t3tots_fetch.py box`. It downloads every tool from the pinned tag, verifies each sha256, and puts them in `/workspace/t3-tots-tools/` with the same flat layout as a computer's tools folder (each file at its manifest `dest`, so `tools/windows/t3ctl.cmd` becomes `t3ctl.cmd`). It also writes `manifest.json`, the reference for every other check, and `VERSION`.
 
 If it prints `REPO_PRIVATE_OR_MISSING`, the repo is private or the tag doesn't exist yet; follow "Private repo".

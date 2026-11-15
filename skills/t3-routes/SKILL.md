@@ -41,6 +41,7 @@ The other connector must list that computer in `t3_environment_links`. Never as 
 
 ## Setup ("connect T3 MCP")
 Only after the user asks.
+0. OpenBot agent: do AGENTS.md "OpenBot setup" step 4 instead of steps 1 to 6 below. It saves T3's MCP URL as an OpenBot MCP server over http.
 1. T3 Connect limits how many computers a plan links. Any it can't link keep the local tools.
 2. Each computer's tools must be v1.5.0 or later: `node t3ctl record` prints `USAGE: record --started <threadId>`. Update with t3-install-tools first if not.
 3. Say once: "Through MCP I can only change threads at or below the level you pick. Pick Full access, or I'll ask before using the local tools on freer threads."

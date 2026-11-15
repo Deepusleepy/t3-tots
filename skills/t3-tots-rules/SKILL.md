@@ -79,7 +79,7 @@ With a "T3 routes" note, a plain send goes through the connector as the note say
 Many skills start from words the user typed. Run `T3_Q='<words>' python3 t3q.py thread` on every computer and take the best score overall. `T3_Q` also takes a thread id or an id prefix of 8 or more characters. Threads that agents spawned match only with `T3_ALL=1`. t3q.py exits 1 with `AMBIGUOUS` when the top two are within 0.1 and with `NO_GOOD_MATCH` when the best is under 0.6; list the closest ones it prints and ask. If you act on the best and another match scored 0.6 or more, name it in one line so the user can correct you. If `worktreePath` is empty and the messages name another working folder, use that folder and say which one. A thread lives on one computer: search all, act only on the owner. With a token, `t3ctl search --query '<words>'` also finds a thread by content. `t3ctl --thread` takes a full id, an id prefix of 8 or more characters, an exact title, or words found in exactly one title. More than one match exits 1 with `AMBIGUOUS` and the candidates, so pass the full id.
 
 ## Grok Bot only
-These steps need tools only Grok Bot has. A skill that uses them points here in one line. Any other agent (Claude Code, Codex, Cursor and so on) runs on one computer and does this instead:
+These steps need tools only Grok Bot has. A skill that uses them points here in one line.
 
 | Grok Bot step | Other agents |
 |---|---|
@@ -90,6 +90,8 @@ These steps need tools only Grok Bot has. A skill that uses them points here in 
 | Tap-to-answer cards | Ask in plain text with numbered options; answers still follow "Decisions" |
 | Memory | Ask, or use the notes file the user names |
 | Phone answers (`t3listen` to a chat webhook) | Skip unless the user gives their own webhook |
+
+The host app is a saved fact, never a guess. Setup saves the note "T3 Tots host" with the app name. With no note, act as the "Other agents" column above. An OpenBot agent reads t3-reference "Host table" instead: it names the OpenBot tool for each row.
 
 ## Computers
 Grok Bot only (see "Grok Bot only"). Call ListMachines every run. Never hard-code machine ids or home paths. The default scope is every connected computer with T3 data, run in parallel and labelled by name. Narrow it only when the user names one ("mac only"). To create things, use the computer the user names, else the one their message came from. Say which computers were offline, once per outage, then check quietly until each is back. Keep a Mac awake (`caffeinate -dimsu -w <pid>` tied to the job, or ask the user to change the setting) when a watch or delegated run must last overnight.
