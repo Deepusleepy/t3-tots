@@ -1,8 +1,8 @@
 {
  "name": "t3-tots",
- "version": "v1.5.1",
+ "version": "v1.5.2",
  "repo": "https://github.com/Deepusleepy/t3-tots",
- "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.5.1/",
+ "raw_base": "https://raw.githubusercontent.com/Deepusleepy/t3-tots/v1.5.2/",
  "requires": {
   "python": ">=3.8",
   "node": ">=22 (t3ctl, t3listen), >=18 (export.js, survey.js)"
@@ -66,8 +66,8 @@
    "path": "tools/t3listen",
    "dest": "t3listen",
    "kind": "tool",
-   "bytes": 117981,
-   "sha256": "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8",
+   "bytes": 120933,
+   "sha256": "f150d360e3d89ed91b4221f5bbf23ffcf18207b3a0e06cc09b370e0da9409064",
    "targets": [
     "macos",
     "linux",
@@ -264,7 +264,7 @@
    "dest": "t3-getting-started/SKILL.md",
    "kind": "skill",
    "bytes": 16015,
-   "sha256": "94fd3621459d0cc288e6b8823182f2ed259e89bcfabf7e54f780e5746dd9350c"
+   "sha256": "8b2dcbce085f16af25db76f3e17db1d8e9d5d825761f00dce10cedd793b95c99"
   },
   {
    "path": "skills/t3-handoff/SKILL.md",
@@ -277,8 +277,8 @@
    "path": "skills/t3-install-tools/SKILL.md",
    "dest": "t3-install-tools/SKILL.md",
    "kind": "skill",
-   "bytes": 62394,
-   "sha256": "ff9bc83783f721ef97ee700264fdcb969433c4f045e6a492a049745810fa11b2"
+   "bytes": 62460,
+   "sha256": "5bfdefe70d9a57df67aa7b0bb3df8dafe6dba18ef983e8511c8de5c55ea8c198"
   },
   {
    "path": "skills/t3-new-thread/SKILL.md",
@@ -291,8 +291,8 @@
    "path": "skills/t3-phone-answers/SKILL.md",
    "dest": "t3-phone-answers/SKILL.md",
    "kind": "skill",
-   "bytes": 20975,
-   "sha256": "9d24b6c3d76d83e72e5a5950c2263af9267dd289f98832b74ab1a5ea5395f07b"
+   "bytes": 21600,
+   "sha256": "826aec2ee8a8f6d335a607e88985b5a87544e9c5afdfae9534910406a722bcd2"
   },
   {
    "path": "skills/t3-pm-thread/SKILL.md",
@@ -319,8 +319,8 @@
    "path": "skills/t3-reference/SKILL.md",
    "dest": "t3-reference/SKILL.md",
    "kind": "skill",
-   "bytes": 8165,
-   "sha256": "7054332bdcfe1f01b7f208035220b0b19ef46eba191e6e47db2529b3df49a1d5"
+   "bytes": 8423,
+   "sha256": "cfc9bec9d9a56e7c9411287831415afdd2018c3f2c2c41a3fe7bfe761f7d0453"
   },
   {
    "path": "skills/t3-routes/SKILL.md",

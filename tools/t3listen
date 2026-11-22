@@ -869,11 +869,11 @@ async function checkFinish(ep, t, prev) {
 function pruneFinished() { const cut = Date.now() - 14 * 864e5; for (const [k, v] of Object.entries(S.finished)) if (!v.at || v.at < cut) delete S.finished[k];
   const keep = Math.max(14 * 864e5, C.repeatFailureMs);
   for (const [k, r] of Object.entries(S.failRepeat)) if (!(C.repeatFailureMs > 0) || !(r.at > Date.now() - keep)) delete S.failRepeat[k]; }
-// lastAlive is a connected-session watermark. Do not advance it while the socket is down, or catch-up
-// `since` shrinks to ~2 min and finishes from a longer outage are skipped.
-let listening = false, liveGen = 0;
+// lastAlive is a connected-session watermark: the last message T3 sent while listening. Do not advance it while the socket
+// is down or silent, or catch-up `since` shrinks to ~2 min and finishes from a longer outage are skipped.
+let listening = false, liveGen = 0, heardAt = 0;
 const endedAt = (run, now = Date.now()) => { const t = Date.parse(run && run.completedAt); return Number.isFinite(t) ? t : now; };
-const tickLastAlive = (open, lastAlive, now = Date.now()) => open ? now : lastAlive;
+const tickLastAlive = (open, lastAlive, heard) => open && heard > (lastAlive || 0) ? heard : lastAlive;
 // afterSnapshotListen: stamp listening/lastAlive only if this snapshot's socket is still the live one.
 // onclose increments liveGen and sets listening=false; a late in-flight snapshot must not undo that.
 const afterSnapshotListen = ({ socketOpen, gen, liveGen: g, lastAlive, now = Date.now() }) =>
@@ -887,21 +887,47 @@ let resentSaved = false;
 const catchUpThreads = (threads, since) => (threads || []).filter((t) => Date.parse(t.updatedAt || 0) > since); // busy too: failed always fires
 setInterval(() => {
   if (DRY || !C) return;
-  const next = tickLastAlive(listening, S.lastAlive, Date.now());
+  const next = tickLastAlive(listening, S.lastAlive, heardAt);
   if (next === S.lastAlive) return;
   S.lastAlive = next; try { saveState(); } catch {};
 }, 60000).unref();
+
+// T3 answers each Ping, so three heartbeats of silence mean the connection is dead. On a half-open socket Node's WebSocket
+// stays CLOSING after close() and onclose never fires, so nothing would reconnect. A close that hasn't finished within
+// CLOSE_GRACE_MS ends the process with code 1: launchd, systemd and the Windows logon task (RestartCount 3) start a fresh
+// listener, and its catch-up covers the gap.
+const HEARTBEAT_MS = +process.env.T3LISTEN_HEARTBEAT_MS || 25000, SILENT_MS = 3 * HEARTBEAT_MS, CLOSE_GRACE_MS = Math.min(5000, HEARTBEAT_MS);
+const UNHEALTHY_EVERY_MS = 3600e3, MAX_STARTS_PER_HOUR = 3, startsLastHour = (st, now = Date.now()) => (st.starts || []).filter((t) => t > now - 3600e3);
+// listener.unhealthy goes to the main bot only, at most once an hour, so a T3 that keeps going silent doesn't flood the chat
+async function reportUnhealthy(reason, detail) {
+  if (Date.now() - (+S.unhealthyAt || 0) < UNHEALTHY_EVERY_MS) return;
+  const e = { event: "listener.unhealthy", kind: "listener-unhealthy", machine: C.machine, reason, lastAlive: S.lastAlive ? new Date(S.lastAlive).toISOString() : null,
+    startsLastHour: startsLastHour(S).length, text: `T3 Tots listener unhealthy on ${C.machine}: ${detail}`, sentAt: new Date().toISOString(), eventId: crypto.randomUUID() };
+  if (DRY) return log("DRY-RUN payload " + JSON.stringify(e));
+  const r = await post(e, { config: C });
+  log(r.ok ? `sent listener.unhealthy (${reason}) -> HTTP ${r.status}` : `listener.unhealthy (${reason}) not sent: ${r.status ? `webhook answered HTTP ${r.status}` : `webhook not reachable (${r.body})`}`);
+  if (r.ok) { S.unhealthyAt = Date.now(); saveState(); }
+}
+async function quitSilent(last) {
+  log(`T3_SILENT: nothing from T3 since ${new Date(last).toISOString()} and the connection won't close; exiting so the service starts a fresh listener`);
+  try { await reportUnhealthy("t3-silent", `T3 stopped answering at ${localTime(new Date(last).toISOString())}; the listener restarts and catches up`); } catch (err) { log("error:", err.message); }
+  process.exit(1);
+}
 
 function connect(ep) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${ep.base.replace("http", "ws")}/ws?orchestrationProtocol=2`, { headers: ep.H });
     const gen = ++liveGen;
-    let first = true, last = Date.now(), busy = Promise.resolve(); const id = String(Date.now());
+    let first = true, last = Date.now(), busy = Promise.resolve(), closed = false; const id = String(Date.now());
     const work = (fn) => { busy = busy.then(fn).catch((err) => log("error:", err.message)); };
-    const hb = setInterval(() => { if (Date.now() - last > 75000) { log("T3 stopped answering; reconnecting"); ws.close(); } else try { ws.send(JSON.stringify({ _tag: "Ping" })); } catch {} }, 25000);
+    const hb = setInterval(() => {
+      if (Date.now() - last <= SILENT_MS) { try { ws.send(JSON.stringify({ _tag: "Ping" })); } catch {} return; }
+      clearInterval(hb); log("T3 stopped answering; reconnecting"); ws.close();
+      setTimeout(() => { if (!closed) quitSilent(last); }, CLOSE_GRACE_MS);
+    }, HEARTBEAT_MS);
     ws.onopen = () => { log(`connected to T3 at ${ep.base}`); ws.send(JSON.stringify({ _tag: "Request", id, tag: "orchestration.subscribeShell", payload: {}, headers: [] })); };
     ws.onmessage = (ev) => {
-      last = Date.now(); let msgs; try { msgs = JSON.parse(ev.data); } catch { return; } if (!Array.isArray(msgs)) msgs = [msgs];
+      last = heardAt = Date.now(); let msgs; try { msgs = JSON.parse(ev.data); } catch { return; } if (!Array.isArray(msgs)) msgs = [msgs];
       for (const m of msgs) {
         if (m._tag === "Ping") { ws.send(JSON.stringify({ _tag: "Pong" })); continue; }
         if (m._tag === "Exit" || m._tag === "Defect") { log("T3 ended the stream:", clean(JSON.stringify(m.exit || m)).slice(0, 300)); ws.close(); continue; }
@@ -910,7 +936,7 @@ function connect(ep) {
         for (const v of m.values || []) work(() => onItem(ep, v, first && v.kind === "snapshot" && (first = false, true), { ws, gen }));
       }
     };
-    ws.onerror = () => {}; ws.onclose = () => { listening = false; if (liveGen === gen) liveGen++; clearInterval(hb); busy.then(() => resolve(!first)); };
+    ws.onerror = () => {}; ws.onclose = () => { closed = true; listening = false; if (liveGen === gen) liveGen++; clearInterval(hb); busy.then(() => resolve(!first)); };
   });
 }
 // Catch-up after a restart or reconnect can take minutes on a large T3 (one read per thread that changed). It runs beside the
@@ -929,7 +955,7 @@ async function catchUp(ep, threads, ctx) {
     if (failedSince) for (const t of catchUpThreads(threads, failedSince)) await reportEnd(ep, t, null, { since, failedSince });
   } finally { catchingUp = false; }
   for (const b of bots.values()) { if (!b.main) await b.retryRound(); else await b.flushMissed(); } // the other bots resend what they kept, then every bot sends its summary
-  const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: Date.now() });
+  const next = afterSnapshotListen({ socketOpen: !!(ctx.ws && ctx.ws.readyState === 1), gen: ctx.gen, liveGen, lastAlive: S.lastAlive, now: heardAt });
   listening = next.listening;
   if (next.listening) { S.lastAlive = next.lastAlive; saveState(); }
 }
@@ -969,12 +995,14 @@ async function run() {
     for (const st of [S, ...Object.values(S.bots)]) if (st.sending) { st.missed = mergeMissed({ ...newMissed(), ...st.sending }, { ...newMissed(), ...st.missed }); delete st.sending; }
     for (const st of Object.values(S.bots)) st.pausedUntil = Math.min(+st.pausedUntil || 0, Date.now() + 864e5);
     for (const s of Object.values(S.sent)) { delete s.parked; delete s.e; delete s.retryLater; } for (const f2 of Object.values(S.finished)) { delete f2.parked; delete f2.retryLater; }
+    S.starts = [...startsLastHour(S), Date.now()]; saveState(); // for listener.unhealthy
   }
   syncBots();
   if (!DRY) fs.watchFile(CONF, { interval: 2000, persistent: false }, (now, before) => { if (now.mtimeMs !== before.mtimeMs) reloadBots(); });
   for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => process.exit(0));
   log(`t3listen started${DRY ? " (dry run: payloads are printed, nothing is sent)" : ""}; machine "${C.machine}", approvals ${C.approvals ? "on" : "off"}`);
   if (C.filters && C.filters.ignored.length) log(`listen.json: ${C.filters.ignored.join(", ")} ${C.filters.ignored.length > 1 ? "are not settings" : "is not a setting"} this listener knows; ignored`);
+  if (!DRY && S.starts.length > MAX_STARTS_PER_HOUR) reportUnhealthy("restarts", `it started ${S.starts.length} times in the last hour; listen.log there says why`).catch((err) => log("error:", err.message));
   if (ONCE) { const t0 = Date.now(), limit = (+(optv("--timeout")) || 600) * 1000; setInterval(() => { if (delivered > 0) process.exit(0); if (Date.now() - t0 > limit) { log("--once: nothing happened before the timeout"); process.exit(2); } }, 500); }
   let delay = 2000, warned = "";
   for (;;) {
@@ -1104,8 +1132,10 @@ function status() {
   else { if (fs.existsSync(unitPath())) inst = "systemd user unit"; const r = tryRun("systemctl", ["--user", "show", "-p", "MainPID", "--value", unitName()]); if (r.ok && +r.out.trim() > 0) { running = true; pid = +r.out.trim(); } }
   if (!running) { const p = +(fs.existsSync(PID) && fs.readFileSync(PID, "utf8")); if (p && pidIsListener(p)) { running = true; pid = p; } }
   const st = readJSON(STATE, { sent: {} }), open = Object.values(st.sent || {}).filter((s) => !s.skipped).length;
+  const mins = Math.round((Date.now() - st.lastAlive) / 60000), starts = startsLastHour(st).length;
+  const alive = st.lastAlive ? `${localTime(new Date(st.lastAlive).toISOString())} (${mins < 1 ? "under a minute" : `${mins} min`} ago; the last message from T3)` : "never";
   let tail = ""; try { tail = fs.readFileSync(LOG, "utf8").trim().split("\n").slice(-3).join("\n"); } catch {}
-  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nfilters: ${filtersLine((readJSON(CONF, {}) || {}).filters)}\nlistener settings: ${settingsLine(readJSON(CONF, {}) || {})}\nbots:\n${botLines(readJSON(CONF, {}) || {}).map((l) => "  " + l).join("\n")}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
+  console.log(`autostart: ${inst}\nrunning: ${running ? `yes (pid ${pid})` : "no"}\nlast alive: ${alive}\nstarts in the last hour: ${starts}\nconfig: ${fs.existsSync(CONF) ? "listen.json present" : "no listen.json yet"}\napprovals: ${approvalsLine(readJSON(CONF, {}).approvals === true, /--approvals\b/.test(serviceArgs()))}\nfilters: ${filtersLine((readJSON(CONF, {}) || {}).filters)}\nlistener settings: ${settingsLine(readJSON(CONF, {}) || {})}\nbots:\n${botLines(readJSON(CONF, {}) || {}).map((l) => "  " + l).join("\n")}\nopen questions sent: ${open}${tail ? `\nlast log lines:\n${tail}` : ""}`);
 }
 // ---------- bots and subscriptions (edits listen.json; a running listener picks the change up within a minute) ----------
 const optAll = (f) => argv.flatMap((a, i) => (a === f && argv[i + 1] !== undefined ? [argv[i + 1]] : a.startsWith(f + "=") ? [a.slice(f.length + 1)] : []));

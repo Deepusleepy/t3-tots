@@ -34,7 +34,7 @@ async function startFake(given = {}) {
   fs.writeFileSync(path.join(dir, "token"), "test-fixture");
   const posts = [], commands = [], projects = [{ id: "p1", title: "proj" }, { id: "p2", title: "other" }], extraHooks = [], threads = new Map(), projections = new Map(), sockets = new Set(), threadReads = new Map();
   let readDelay = () => 0; // ms to hold a thread read, to stand in for a large thread
-  let hookStatus = () => 200, hits = 0; // hookStatus returns a status, or { status, body, headers } for a custom refusal
+  let hookStatus = () => 200, hits = 0, silent = false; // hookStatus returns a status, or { status, body, headers } for a custom refusal
   const hook = http.createServer((req, res) => {
     let b = ""; req.on("data", (c) => (b += c));
     req.on("end", () => {
@@ -58,8 +58,10 @@ async function startFake(given = {}) {
     sock.on("close", () => sockets.delete(st));
     st.sock = sock;
     sock.on("data", (chunk) => {
+      if (silent) return; // a half-open socket: TCP stays up, nothing is answered, not even the close
       const r = readFrames(st, chunk, (text) => {
         let msg; try { msg = JSON.parse(text); } catch { return; }
+        if (msg._tag === "Ping") return sock.write(frame({ _tag: "Pong" }));
         if (msg._tag !== "Request") return;
         if (msg.tag === "orchestration.subscribeShell") {
           st.sub = msg.id; sockets.add(st);
@@ -104,11 +106,12 @@ async function startFake(given = {}) {
     setThread(t, projection) { threads.set(t.id, { updatedAt: new Date().toISOString(), projectId: "p1", ...t }); if (projection) projections.set(t.id, projection); },
     push(values) { for (const s of sockets) s.sock.write(frame({ _tag: "Chunk", requestId: s.sub, values })); },
     update(t, projection) { f.setThread(t, projection); f.push([{ kind: "thread.updated", thread: threads.get(t.id) }]); },
+    silence() { silent = true; },
     dropSockets() { for (const s of sockets) s.sock.destroy(); sockets.clear(); },
     state() { try { return JSON.parse(fs.readFileSync(path.join(dir, "listen-state.json"), "utf8")); } catch { return null; } },
     count(re) { return (out.match(new RegExp(re.source, "g")) || []).length; },
-    start(args = []) {
-      child = cp.spawn(process.execPath, [path.join(dir, "t3listen"), "run", ...args], { env: { ...process.env, T3_HOME: path.join(dir, "t3") }, stdio: ["ignore", "pipe", "pipe"] });
+    start(args = [], env = {}) {
+      child = cp.spawn(process.execPath, [path.join(dir, "t3listen"), "run", ...args], { env: { ...process.env, T3_HOME: path.join(dir, "t3"), ...env }, stdio: ["ignore", "pipe", "pipe"] });
       child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (out += d));
       const c = child; c.exited = new Promise((r) => c.on("exit", (code) => r(code)));
       return c;

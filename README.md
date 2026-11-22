@@ -64,6 +64,8 @@ Then ask the agent to set up T3 Tots. It follows [AGENTS.md](AGENTS.md) (hash-ch
 
 `t3listen` POSTs live T3 events to a webhook you set up (`setup`, then `install` at login). Events: `request.opened` / `request.resolved`, and `thread.finished` / `failed` / `cancelled`. Approvals only if you turn them on. Usage-limit stops can arm T3's Resume at reset.
 
+When T3 stops answering on an open connection (after a T3 restart the socket can stay half-open, and Node's WebSocket then never finishes closing), the listener exits with code 1 within about two minutes. The macOS LaunchAgent and the Linux systemd unit start a fresh one, and its catch-up reports what ended meanwhile. The Windows logon task is set to restart it up to 3 times, which hasn't been tried on Windows yet; a Windows Startup shortcut doesn't restart it. That exit, or more than 3 starts in an hour, posts one `listener.unhealthy` event to the main bot, at most once an hour. `node t3listen status` shows `last alive`, the last message from T3, and the starts in the last hour.
+
 Setup, events, approvals, and autoresume: [t3-phone-answers](skills/t3-phone-answers/SKILL.md). Who may answer: [t3-tots-rules "Decisions"](skills/t3-tots-rules/SKILL.md).
 
 Every event starts a new bot run, so what that run reads is kept small. The routine's own prompt (about 2,000 characters) handles finishes, failures, summaries and closes without reading any file. A question or approval adds one small skill, [t3-event](skills/t3-event/SKILL.md) (about 5,400 characters). Before v1.4.33 every event read two skills, about 48,000 characters. A routine set up before v1.4.33 keeps working with its old prompt; "update T3 Tots" replaces the prompt, or say "update the phone answers routine".

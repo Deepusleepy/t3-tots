@@ -60,6 +60,7 @@ Optional. It needs the token and `listen.json`. It follows T3's live events and 
 | `WEBHOOK_REJECTED` | The webhook refused the event. HTTP 401 or 403 means a wrong key, so redo setup. A rate-limit reply clears on its own; the listener keeps retrying |
 | `WEBHOOK_UNREACHABLE` | The webhook can't be reached. The listener keeps retrying |
 | `ALREADY_RUNNING` | A listener already runs there |
+| `T3_SILENT` | In `listen.log`: T3 stopped answering on an open connection, so the listener exited for its service to start a fresh one, which catches up. Nothing to do unless it repeats; `t3listen status` shows last alive and the starts in the last hour |
 | `INSTALL_FAILED` | `t3listen install` couldn't register the autostart. Relay the message |
 | `HASH_MISMATCH`, `MANIFEST_MISMATCH`, `BAD_MANIFEST` | A file or manifest didn't match the pinned release, or `t3ctl skills install` found no `manifest.json` to check. Install nothing and tell the user |
 | `REPO_PRIVATE_OR_MISSING` | The box can't download the release. Use t3-install-tools "Private repo" |

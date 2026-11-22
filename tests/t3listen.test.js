@@ -97,11 +97,12 @@ test("endedAt: missing completedAt uses now, not Date.parse(0)", () => {
   assert.ok(l.endedAt({}, now) > 1e12); // a real "now", not epoch / year-2000 Date.parse(0)
 });
 
-test("tickLastAlive: freeze lastAlive while the socket is down", () => {
-  const last = Date.parse("2026-10-25T10:00:00Z"), now = Date.parse("2026-10-25T12:00:00Z");
-  assert.equal(l.tickLastAlive(true, last, now), now);
-  assert.equal(l.tickLastAlive(false, last, now), last);
-  assert.equal(l.tickLastAlive(false, undefined, now), undefined);
+test("tickLastAlive: follows the last message from T3; frozen while the socket is down or silent", () => {
+  const last = Date.parse("2026-10-25T10:00:00Z"), heard = Date.parse("2026-10-25T12:00:00Z");
+  assert.equal(l.tickLastAlive(true, last, heard), heard);
+  assert.equal(l.tickLastAlive(false, last, heard), last);
+  assert.equal(l.tickLastAlive(false, undefined, heard), undefined);
+  assert.equal(l.tickLastAlive(true, heard, last), heard, "an open socket T3 stopped answering on doesn't move it");
 });
 
 test("afterSnapshotListen: a close wins over an in-flight snapshot completion", async () => {
@@ -1661,4 +1662,37 @@ test("install: its output tells an agent on older skills that skills and tools m
   assert.match(note, /^NEXT \(for the agent that ran this\)/); assert.match(note, /"After an update"/); assert.match(note, /thread\.failed\.batch/);
   const src = require("fs").readFileSync(path.join(__dirname, "..", "tools", "t3listen"), "utf8");
   assert.equal((src.match(/installedLine\(`installed: /g) || []).length, 4, "every way install can succeed prints it");
+});
+
+test("silent T3, live: a half-open connection ends the listener with code 1 and posts listener.unhealthy", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    const c = f.start([], { T3LISTEN_HEARTBEAT_MS: "200" });
+    await f.waitFor(() => /watching 0 threads/.test(f.out), 8000, "first snapshot");
+    await fakeT3.sleep(1000);
+    assert.doesNotMatch(f.out, /stopped answering/, "a T3 that answers each Ping is not silent");
+    f.silence();
+    assert.equal(await c.exited, 1, "a non-zero exit, so launchd and systemd restart it");
+    assert.match(f.out, /T3 stopped answering; reconnecting[\s\S]*T3_SILENT: nothing from T3 since/);
+    const sent = f.posts.filter((p) => p.event === "listener.unhealthy");
+    assert.equal(sent.length, 1); assert.equal(sent[0].reason, "t3-silent"); assert.equal(sent[0].machine, "m");
+    assert.match(sent[0].text, /^T3 Tots listener unhealthy on m: T3 stopped answering at /);
+  } finally { await f.close(); }
+});
+
+test("restarts, live: more than 3 starts in an hour post listener.unhealthy once; status shows last alive and the starts", async () => {
+  const f = await fakeT3.startFake();
+  try {
+    for (let i = 1; i <= 5; i++) {
+      f.start(); await f.waitFor(() => f.count(/watching 0 threads/) === i, 8000, `start ${i}`);
+      if (i === 4) await f.waitFor(() => f.posts.some((p) => p.event === "listener.unhealthy"), 8000, "the unhealthy event");
+      await f.stop();
+    }
+    const sent = f.posts.filter((p) => p.event === "listener.unhealthy");
+    assert.equal(sent.length, 1, "at most one an hour");
+    assert.equal(sent[0].reason, "restarts"); assert.equal(sent[0].startsLastHour, 4);
+    assert.match(sent[0].text, /^T3 Tots listener unhealthy on m: it started 4 times in the last hour/);
+    const r = await f.cli(["status"]);
+    assert.match(r.stdout, /\nlast alive: .+ \(under a minute ago; the last message from T3\)\nstarts in the last hour: 5\n/);
+  } finally { await f.close(); }
 });

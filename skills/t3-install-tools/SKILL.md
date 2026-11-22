@@ -8,7 +8,7 @@ description: >-
   Not for updating T3 Code or dev tools (t3-update).
 ---
 
-Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.5.1` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
+Follow the t3-tots-rules skill (skills/t3-tots-rules/SKILL.md). Steps that use the box, ListMachines, routines, cards or SendToUser are Grok Bot only; other agents follow t3-tots-rules "Grok Bot only". The scripts live in the repo github.com/Deepusleepy/t3-tots (MIT). This skill pins release `v1.5.2` by sha256, so a changed repo can't change what gets installed. Any mismatch installs nothing (`HASH_MISMATCH`). The same release also carries the t3-* skills, each listed with its sha256 in that tag's `manifest.json`; "Update T3 Tots" below brings scripts and live skills to one tag with one yes.
 
 The box copy needs no approval. Writing to a user's computer needs their yes; the one setup yes in t3-getting-started covers it. If a computer's t3ctl or t3listen hashes differ from the manifest because someone updated them locally ahead of a release, report that and don't install over them until a release pins them. Never touch the `token` file, `listen.json` or the other data files in the tools folder. Skill sync only reads and writes on the box (`/workspace/t3-tots-skill-sync/`) and changes only skills whose id starts with `t3-`; every other skill is left alone.
 
@@ -49,13 +49,13 @@ Installs tools only. Live Grok Bot skills are applied by the main agent with Upd
 other agents install skills with `t3ctl skills install`. The tools folder stays flat: each file
 goes to its manifest `dest` (tools/windows/t3ctl.cmd becomes t3ctl.cmd)."""
 import difflib, hashlib, json, os, pathlib, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
-REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.1"
+REPO = "Deepusleepy/t3-tots"; PIN = "v1.5.2"
 PINNED = {
  "tools/t3q.py": ["t3q.py", "12d29e79ae4db85a25ee89385255195bc1fd3680715065c55d2a91160ba7e023"],
  "tools/thread-match.js": ["thread-match.js", "4127b89c1a4235c970e02bf450d227402ed4bf6d98b927e148463c1352918113"],
  "tools/t3ctl": ["t3ctl", "a72400871c4ed86aece4712db083d9d01406248d87d48fd9785cf9047fc0028d"],
  "tools/windows/t3ctl.cmd": ["t3ctl.cmd", "b53d3a36313f6d78c4feeba028823c836b3e64e3b42a5b33ea4a6fe73be30d6e"],
- "tools/t3listen": ["t3listen", "0f1ca1c6f0266b950a451b5bf8120a1e1d969375584c8c804e70c203c5aef2e8"],
+ "tools/t3listen": ["t3listen", "f150d360e3d89ed91b4221f5bbf23ffcf18207b3a0e06cc09b370e0da9409064"],
  "tools/windows/t3listen.cmd": ["t3listen.cmd", "2a818c7c0471268de6b065ac20e08ff849a6262d07752160ee651a29286abcf5"],
  "tools/export.js": ["export.js", "666093930cf3f2cafa270e7859635d243e81e490d4d8fee4f89da8e1c522773b"],
  "tools/survey.js": ["survey.js", "2b7626993882eb6fccfef6bca90d366c8c3a3bc54542013e99882f36890047a1"],
@@ -536,7 +536,7 @@ Some changes live on the bot side, not in the scripts or skills: a routine's pro
 | `/workspace/t3-tots-tools/VERSION` names an older release than this skill pins | `python3 /workspace/t3tots_fetch.py box`, so the box tools match the skills |
 | The **T3 Tots weekly update** routine's prompt doesn't start with the text under "Weekly update run" | Replace the prompt with that text (UpdateRoutine). Keep its schedule and whether it is on or paused |
 | First save the fetcher from "Box copy" to `/workspace/t3tots_fetch.py` if that file is missing or differs (an older one can't see placeholders). Then: `python3 /workspace/t3tots_fetch.py skills <installed tag>` lists a skill as `placeholder` (the bot template ships short copies that download the full skill from GitHub on every use) | `python3 /workspace/t3tots_fetch.py skills <installed tag> --write --placeholders`, then UpdateSkill for each entry of the `PLAN.json` in the folder it prints (`<tag>-placeholders`), in order, t3-install-tools last ("Update T3 Tots" step 3d and 3e). Then run the check again: it must list no placeholder. It needs no yes, since these are the user's own T3 Tots skills in their skill library, and a skill edited by hand is never touched. A `both` line in this pass is not handled here: it waits for the next full update check ("Skills you edited"). One line to the user: "Saved the full copies of N skills." |
-| Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v2." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: each notification now reads far less |
+| Phone answers are on (memory, or a routine named **T3 questions to chat** exists) and that routine's prompt doesn't start with "T3 Tots event routine v3." | Replace the prompt with the text under t3-phone-answers "Routine prompt" (UpdateRoutine; the webhook URL and key stay, nothing is pasted again). Do the same for any other bot's event routine you can change. Tell the user in one line: the phone answers routine is updated, and it now says when a computer's listener stops hearing from T3 |
 | A watch routine's prompt starts with "Watch " and not with "T3 Tots watch routine v2." | Replace it with the text under t3-watch "Routine prompt", keeping its target, computer, mode and check (UpdateRoutine). A run where nothing changed then reads no skill |
 | Grok Bot, with no "T3 routes" note and no "T3 Tots MCP offered" note in memory. Not during first setup: t3-getting-started makes this offer itself in section 5b, after its questions | Offer T3's own MCP once, as t3-getting-started "5b. Optional: T3's own MCP" says, and save that note. In a routine run, hand the offer to the main chat |
 | Memory has a "T3 routes" note that doesn't start with "T3 routes v2" | Rewrite it as t3-routes "The note" says, keeping its computers, levels, dates, any saved refusal choice ("use the local tools") and any thread ids still to record |
