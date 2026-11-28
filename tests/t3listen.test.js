@@ -484,8 +484,8 @@ const EXAMPLE_FILTERS = {
   "\\bWAITING\\b[^\\n]*\\b([Ww]atch|[Ww]akes?\\b|[Ww]ake-?up|[Mm]onitor|[Pp]oll)"
  ] }
 };
-test("filters: the README example is the one these tests check", () => {
-  const md = require("fs").readFileSync(path.join(__dirname, "..", "README.md"), "utf8"), sec = md.slice(md.indexOf("### Filters"));
+test("filters: the listener doc example is the one these tests check", () => {
+  const md = require("fs").readFileSync(path.join(__dirname, "..", "docs", "listener.md"), "utf8"), sec = md.slice(md.indexOf("## Filters"));
   assert.deepEqual(JSON.parse(`{${sec.match(/```json\n([\s\S]*?)```/)[1]}}`).filters, EXAMPLE_FILTERS);
 });
 test("filters: none set means every event is sent as before", () => {
@@ -527,7 +527,7 @@ test("filters: the README example stays fast on a 64 KB reply full of dashes, ma
 });
 test("docs: resolved false says the phone's question card stays open and t3ctl answer says NOT_PENDING", () => {
   const read = (...p) => require("fs").readFileSync(path.join(__dirname, "..", ...p), "utf8");
-  assert.match(read("README.md").match(/^\| `resolved` \| `false` \|.*$/m)[0], /card stays[\s\S]*NOT_PENDING/);
+  assert.match(read("docs", "listener.md").match(/^\| `resolved` \| `false` \|.*$/m)[0], /card stays[\s\S]*NOT_PENDING/);
   assert.match(read("skills", "t3-phone-answers", "SKILL.md"), /With `resolved` off,[^\n]*card can outlive its question[^\n]*NOT_PENDING/);
 });
 test("filters: false turns an event off; bad settings are named", () => {
